@@ -6,6 +6,7 @@
 //! so nothing goes through the deprecated OpenGL stack.
 
 mod camera;
+mod edit;
 mod image_out;
 mod renderer;
 mod scene;
@@ -14,7 +15,7 @@ use camera::OrbitCamera;
 use eframe::{egui, egui_wgpu};
 use glam::Vec3;
 use renderer::SceneRenderer;
-use voxel_core::Mesh;
+use voxel_core::{History, Mesh};
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -47,6 +48,13 @@ struct App {
     /// Index into the scene's model list.
     shown_model: usize,
     light_dir: Vec3,
+    history: History,
+    /// Palette index the brush paints with.
+    brush_color: u8,
+    /// Removing instead of adding.
+    erase: bool,
+    /// Set when the scene changed and the GPU mesh is stale.
+    mesh_dirty: bool,
     /// When set, the app writes one rendered frame here and exits. Used to
     /// verify the viewport without a human looking at the window, and to
     /// produce images for the README.
@@ -73,6 +81,10 @@ impl App {
             shown_model: 0,
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
             screenshot: None,
+            history: History::default(),
+            brush_color: 79,
+            erase: false,
+            mesh_dirty: false,
         };
 
         // Usage: voxferro [model.vox] [--screenshot out.bmp]
@@ -136,6 +148,78 @@ impl App {
         self.scene_renderer.set_palette(&state.queue, &loaded.palette);
     }
 
+    /// Rebuilds the GPU mesh after an edit, leaving the camera alone.
+    fn remesh(&mut self, state: &egui_wgpu::RenderState) {
+        let Some(loaded) = &self.scene else { return };
+        let mesh = Mesh::from_scene(&loaded.scene);
+        self.scene_renderer.set_mesh(&state.device, &mesh);
+        self.mesh_dirty = false;
+    }
+
+    /// Picks under the cursor and adds or removes a voxel.
+    ///
+    /// Edits target the first placed instance: a full editor would pick the
+    /// nearest hit across every instance, which needs each one's own ray test.
+    fn edit_at(&mut self, pixel: egui::Vec2, viewport: egui::Vec2, view_proj: glam::Mat4) {
+        let Some(loaded) = &mut self.scene else { return };
+        let Some(instance) = loaded.scene.instances.first().cloned() else {
+            return;
+        };
+        let Some(volume) = loaded.scene.models.get_mut(instance.model_index) else {
+            return;
+        };
+
+        let ray = edit::ray_through_pixel(
+            view_proj,
+            Vec3::new(viewport.x, viewport.y, 0.0).truncate(),
+            Vec3::new(pixel.x, pixel.y, 0.0).truncate(),
+        );
+
+        let Some(hit) = edit::pick(volume, &instance.transform, ray, 10_000.0) else {
+            return;
+        };
+
+        let (target, value) = if self.erase {
+            (hit.voxel, 0)
+        } else {
+            (hit.adjacent(), self.brush_color)
+        };
+
+        self.history.set_voxels(volume, [(target, value)]);
+        self.mesh_dirty = true;
+    }
+
+    fn undo(&mut self, state: &egui_wgpu::RenderState) {
+        if self.apply_history(|h, v| h.undo(v)) {
+            self.remesh(state);
+        }
+    }
+
+    fn redo(&mut self, state: &egui_wgpu::RenderState) {
+        if self.apply_history(|h, v| h.redo(v)) {
+            self.remesh(state);
+        }
+    }
+
+    /// Runs a history operation against the edited volume.
+    ///
+    /// A helper returning `&mut Volume` would borrow all of `self`, leaving
+    /// `self.history` unreachable. Reaching the fields directly keeps the two
+    /// borrows disjoint, and the inner scope ends them before `remesh` needs
+    /// `self` again.
+    fn apply_history(&mut self, op: impl FnOnce(&mut History, &mut voxel_core::Volume) -> bool) -> bool {
+        let Some(loaded) = self.scene.as_mut() else {
+            return false;
+        };
+        let Some(index) = loaded.scene.instances.first().map(|i| i.model_index) else {
+            return false;
+        };
+        let Some(volume) = loaded.scene.models.get_mut(index) else {
+            return false;
+        };
+        op(&mut self.history, volume)
+    }
+
     fn controls(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
         ui.heading("Voxferro");
         ui.label(&self.backend);
@@ -157,7 +241,40 @@ impl App {
         }
 
         ui.separator();
+        ui.heading("Brush");
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.erase, false, "Add");
+            ui.selectable_value(&mut self.erase, true, "Erase");
+        });
+        ui.add(egui::Slider::new(&mut self.brush_color, 1..=255).text("colour"));
+
+        // Show the colour the brush will actually paint.
+        if let Some(loaded) = &self.scene {
+            let c = loaded.palette.color(self.brush_color);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 16.0), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 2.0, egui::Color32::from_rgb(c.r, c.g, c.b));
+        }
+
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(self.history.can_undo(), egui::Button::new("Undo"))
+                .clicked()
+            {
+                self.undo(state);
+            }
+            if ui
+                .add_enabled(self.history.can_redo(), egui::Button::new("Redo"))
+                .clicked()
+            {
+                self.redo(state);
+            }
+        });
+        ui.label(format!("{} undo steps", self.history.undo_depth()));
+
+        ui.separator();
         ui.label("Drag to orbit, scroll to zoom.");
+        ui.label("Click to edit, Cmd+Z to undo.");
         ui.separator();
         ui.label("Samples");
 
@@ -188,7 +305,23 @@ impl App {
     }
 
     fn viewport(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
-        let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::drag());
+        let (rect, response) =
+            ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+
+        let ppp_early = ui.ctx().pixels_per_point();
+        let view_size = egui::vec2(rect.width(), rect.height());
+        let _ = ppp_early;
+
+        // A click edits; a drag orbits. egui separates the two, so the camera
+        // never lurches when placing a voxel.
+        if response.clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let aspect = view_size.x / view_size.y.max(1.0);
+                let vp = self.camera.view_proj(aspect);
+                let local = pos - rect.min;
+                self.edit_at(local, view_size, vp);
+            }
+        }
 
         // Orbit with a drag; the factor turns pixels into a comfortable
         // radians-per-pixel rate.
@@ -196,6 +329,10 @@ impl App {
             let d = response.drag_delta();
             self.camera.orbit(d.x * 0.01, d.y * 0.01);
         }
+        if response.drag_stopped() || response.clicked() {
+            self.history.end_gesture();
+        }
+
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
@@ -213,6 +350,10 @@ impl App {
         let view_proj = self
             .camera
             .view_proj(size[0] as f32 / size[1] as f32);
+
+        if self.mesh_dirty {
+            self.remesh(state);
+        }
 
         let mut egui_renderer = state.renderer.write();
         let texture_id = self.scene_renderer.render(
@@ -252,6 +393,22 @@ impl eframe::App for App {
         // egui 0.36 dropped SidePanel for a generic Panel with side
         // constructors, and sizes it with default_size rather than
         // default_width.
+        // Cmd+Z / Cmd+Shift+Z, matching the platform convention. egui maps
+        // `command` to Cmd on macOS and Ctrl elsewhere.
+        let (undo, redo) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::Z) && i.modifiers.command && !i.modifiers.shift,
+                (i.key_pressed(egui::Key::Z) && i.modifiers.command && i.modifiers.shift)
+                    || (i.key_pressed(egui::Key::Y) && i.modifiers.command),
+            )
+        });
+        if undo {
+            self.undo(&state);
+        }
+        if redo {
+            self.redo(&state);
+        }
+
         egui::Panel::left("controls")
             .default_size(240.0)
             .show(ui, |ui| self.controls(ui, &state));

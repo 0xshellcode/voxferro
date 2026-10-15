@@ -66,6 +66,19 @@ impl Transform {
         self.rotation * p + self.translation.as_vec3()
     }
 
+    /// Maps a world point back into the local space this transform places.
+    ///
+    /// The rotation is a permutation matrix, hence orthonormal, so its
+    /// inverse is its transpose — no general matrix inversion needed.
+    pub fn inverse_apply(&self, p: Vec3) -> Vec3 {
+        self.rotation.transpose() * (p - self.translation.as_vec3())
+    }
+
+    /// Rotates a direction back into local space.
+    pub fn inverse_rotate(&self, d: Vec3) -> Vec3 {
+        self.rotation.transpose() * d
+    }
+
     /// Composes with a parent transform: `parent` applied after `self`.
     pub fn then(&self, parent: &Transform) -> Transform {
         Transform {
@@ -107,6 +120,14 @@ mod tests {
     fn malformed_bits_fall_back_to_identity() {
         // Both rows claiming column 0 is not a permutation.
         assert_eq!(Transform::rotation_from_bits(0b0000_0000), Mat3::IDENTITY);
+    }
+
+    #[test]
+    fn inverse_apply_undoes_apply() {
+        let t = Transform::from_parts(0b0001_0110, [3, -7, 2]);
+        let p = Vec3::new(1.5, 2.5, 3.5);
+        let back = t.inverse_apply(t.apply(p));
+        assert!((back - p).length() < 1e-4);
     }
 
     #[test]
