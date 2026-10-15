@@ -7,7 +7,8 @@
 //! the reference editor does the same thing with six template instantiations of
 //! `the reference renderer<>`, one per face direction.
 
-use crate::Volume;
+use crate::{Transform, Volume};
+use glam::Vec3;
 
 /// Which way a face points. The order fixes the face index used by picking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +126,83 @@ impl Mesh {
         self.indices.len() / 3
     }
 
+    /// World-space bounding box of the mesh, or `None` when empty.
+    pub fn bounds(&self) -> Option<(Vec3, Vec3)> {
+        let first = self.vertices.first()?;
+        let mut min = Vec3::from_array(first.position);
+        let mut max = min;
+        for v in &self.vertices {
+            let p = Vec3::from_array(v.position);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        Some((min, max))
+    }
+
+    /// Appends a volume placed by `transform`.
+    ///
+    /// A model's translation positions its **centre**, not its corner, so the
+    /// half-size is subtracted before rotating. Skipping that is the classic
+    /// way to get a scene where every model is offset by half its own size.
+    pub fn append_volume(&mut self, volume: &Volume, transform: &Transform) {
+        let [sx, sy, sz] = volume.size();
+        let half = Vec3::new(sx as f32, sy as f32, sz as f32) * 0.5;
+
+        for z in 0..sz {
+            for y in 0..sy {
+                for x in 0..sx {
+                    let index = volume.get(x, y, z);
+                    if index == 0 {
+                        continue;
+                    }
+                    for face in Face::ALL {
+                        let [ox, oy, oz] = face.offset();
+                        let neighbour =
+                            volume.get_i(x as i32 + ox, y as i32 + oy, z as i32 + oz);
+                        if neighbour != 0 {
+                            continue;
+                        }
+
+                        let base = self.vertices.len() as u32;
+                        let normal = transform.rotation * Vec3::from_array(face.normal());
+                        for corner in face.corners() {
+                            let local = Vec3::new(
+                                x as f32 + corner[0],
+                                y as f32 + corner[1],
+                                z as f32 + corner[2],
+                            ) - half;
+                            let p = transform.apply(local);
+                            self.vertices.push(Vertex {
+                                position: p.to_array(),
+                                normal: normal.to_array(),
+                                palette_index: index as f32,
+                            });
+                        }
+                        self.indices.extend_from_slice(&[
+                            base,
+                            base + 1,
+                            base + 2,
+                            base,
+                            base + 2,
+                            base + 3,
+                        ]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Meshes a whole scene, placing every instance in world space.
+    pub fn from_scene(scene: &crate::Scene) -> Self {
+        let mut mesh = Self::default();
+        for instance in &scene.instances {
+            if let Some(volume) = scene.models.get(instance.model_index) {
+                mesh.append_volume(volume, &instance.transform);
+            }
+        }
+        mesh
+    }
+
     /// Emits every face of every filled voxel whose neighbour is empty.
     pub fn from_volume(volume: &Volume) -> Self {
         let [sx, sy, sz] = volume.size();
@@ -174,6 +252,31 @@ impl Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_transformed_volume_lands_where_expected() {
+        use glam::IVec3;
+        let mut v = Volume::new([2, 2, 2]);
+        v.set(0, 0, 0, 1);
+        v.set(1, 1, 1, 1);
+
+        let mut mesh = Mesh::default();
+        mesh.append_volume(
+            &v,
+            &Transform {
+                rotation: glam::Mat3::IDENTITY,
+                translation: IVec3::new(100, 0, 0),
+            },
+        );
+
+        // The volume is 2x2x2, so its centre sits at its midpoint and the
+        // mesh straddles the translation by one unit each way.
+        let xs: Vec<f32> = mesh.vertices.iter().map(|v| v.position[0]).collect();
+        let min = xs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        assert_eq!(min, 99.0);
+        assert_eq!(max, 101.0);
+    }
 
     #[test]
     fn empty_volume_makes_no_mesh() {

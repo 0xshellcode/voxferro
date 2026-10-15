@@ -34,26 +34,11 @@ impl Default for OrbitCamera {
 }
 
 impl OrbitCamera {
-    /// Frames an axis-aligned box so it fills the view.
-    ///
-    /// `min`/`max` are inclusive voxel coordinates, so the box spans
-    /// `max - min + 1` voxels on each axis.
-    pub fn frame_bounds(&mut self, min: [u32; 3], max: [u32; 3]) {
-        let lo = Vec3::new(min[0] as f32, min[1] as f32, min[2] as f32);
-        let hi = Vec3::new(max[0] as f32 + 1.0, max[1] as f32 + 1.0, max[2] as f32 + 1.0);
-        self.target = (lo + hi) * 0.5;
-        // Fit the box's bounding sphere into the vertical field of view, with
-        // a small margin so it does not touch the edges.
-        let radius = (hi - lo).length() * 0.5;
-        self.distance = (radius / (self.fov_y * 0.5).tan()) * 1.1;
-    }
-
-    /// Frames a whole volume by its declared size.
-    pub fn frame_volume(&mut self, size: [u32; 3]) {
-        if size.iter().any(|&s| s == 0) {
-            return;
-        }
-        self.frame_bounds([0, 0, 0], [size[0] - 1, size[1] - 1, size[2] - 1]);
+    /// Frames a world-space box, as produced by a meshed scene.
+    pub fn frame_world_bounds(&mut self, min: Vec3, max: Vec3) {
+        self.target = (min + max) * 0.5;
+        let radius = (max - min).length() * 0.5;
+        self.distance = (radius.max(1.0) / (self.fov_y * 0.5).tan()) * 1.1;
     }
 
     pub fn eye(&self) -> Vec3 {
@@ -98,23 +83,16 @@ mod tests {
     }
 
     #[test]
-    fn framing_centres_the_volume() {
-        let mut c = OrbitCamera::default();
-        c.frame_volume([10, 20, 30]);
-        assert_eq!(c.target, Vec3::new(5.0, 10.0, 15.0));
-        assert!(c.distance > 20.0, "should back off far enough to see it");
-    }
+    fn framing_centres_and_fits_the_box() {
+        let mut big = OrbitCamera::default();
+        big.frame_world_bounds(Vec3::ZERO, Vec3::splat(100.0));
+        let mut small = OrbitCamera::default();
+        small.frame_world_bounds(Vec3::splat(40.0), Vec3::splat(60.0));
 
-    #[test]
-    fn framing_bounds_is_tighter_than_the_whole_volume() {
-        let mut whole = OrbitCamera::default();
-        whole.frame_volume([100, 100, 100]);
-        let mut part = OrbitCamera::default();
-        part.frame_bounds([40, 40, 40], [59, 59, 59]);
+        assert_eq!(small.target, Vec3::splat(50.0));
         assert!(
-            part.distance < whole.distance,
-            "a small occupied box should pull the camera in"
+            small.distance < big.distance,
+            "a smaller box should pull the camera in"
         );
-        assert_eq!(part.target, Vec3::new(50.0, 50.0, 50.0));
     }
 }

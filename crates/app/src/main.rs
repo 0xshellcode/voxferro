@@ -96,13 +96,12 @@ impl App {
         match scene::LoadedScene::load(path) {
             Ok(loaded) => {
                 self.status = format!(
-                    "{} models, {} voxels, v{}",
-                    loaded.models.len(),
-                    loaded.total_voxels(),
+                    "{} models, {} placed, v{}",
+                    loaded.scene.models.len(),
+                    loaded.scene.instances.len(),
                     loaded.version
                 );
                 self.shown_model = 0;
-                frame_model(&mut self.camera, &loaded.models[0]);
                 self.scene = Some(loaded);
                 self.upload_current(state);
             }
@@ -110,26 +109,31 @@ impl App {
         }
     }
 
-    /// Meshes the selected model and hands it to the GPU.
+    /// Meshes the whole scene and hands it to the GPU.
+    ///
+    /// Every instance is baked into one world-space mesh. Instanced draws
+    /// would scale better for a scene that repeats one model many times, but
+    /// a single buffer keeps the draw path trivial while the geometry fits.
     fn upload_current(&mut self, state: &egui_wgpu::RenderState) {
         // Disjoint field borrows: `scene` is read while `scene_renderer` is
         // mutated, which the borrow checker allows because they are separate
         // fields accessed directly rather than through a method on `self`.
-        let Some(scene) = &self.scene else { return };
-        let Some(volume) = scene.models.get(self.shown_model) else {
-            return;
-        };
+        let Some(loaded) = &self.scene else { return };
 
-        let mesh = Mesh::from_volume(volume);
+        let mesh = Mesh::from_scene(&loaded.scene);
         eprintln!(
-            "[voxferro] model {}: {:?} voxels={} triangles={}",
-            self.shown_model,
-            volume.size(),
-            volume.filled_count(),
+            "[voxferro] {}: {} instances, {} voxels, {} triangles",
+            loaded.name,
+            loaded.scene.instances.len(),
+            loaded.scene.total_voxels(),
             mesh.triangle_count()
         );
+
+        if let Some((min, max)) = mesh.bounds() {
+            self.camera.frame_world_bounds(min, max);
+        }
         self.scene_renderer.set_mesh(&state.device, &mesh);
-        self.scene_renderer.set_palette(&state.queue, &scene.palette);
+        self.scene_renderer.set_palette(&state.queue, &loaded.palette);
     }
 
     fn controls(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
@@ -140,30 +144,16 @@ impl App {
 
         // Read everything needed up front, so no borrow of `self.scene` is
         // alive when a click calls back into `&mut self`.
-        let summary = self.scene.as_ref().map(|s| {
-            let i = self.shown_model.min(s.models.len() - 1);
-            (s.name.clone(), s.models.len(), s.models[i].size())
-        });
+        let summary = self
+            .scene
+            .as_ref()
+            .map(|s| (s.name.clone(), s.scene.instances.len(), s.scene.total_voxels()));
 
-        if let Some((name, count, size)) = summary {
+        if let Some((name, placed, voxels)) = summary {
             ui.label(name);
-            ui.label(format!("Volume {}x{}x{}", size[0], size[1], size[2]));
+            ui.label(format!("{placed} placed models"));
+            ui.label(format!("{voxels} voxels"));
             ui.label(format!("{} triangles", self.scene_renderer.triangle_count()));
-
-            if count > 1 {
-                ui.horizontal(|ui| {
-                    ui.label("Model");
-                    if ui
-                        .add(egui::Slider::new(&mut self.shown_model, 0..=count - 1))
-                        .changed()
-                    {
-                        if let Some(s) = &self.scene {
-                            frame_model(&mut self.camera, &s.models[self.shown_model]);
-                        }
-                        self.upload_current(state);
-                    }
-                });
-            }
         }
 
         ui.separator();
@@ -243,14 +233,6 @@ impl App {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
-    }
-}
-
-/// Points the camera at a model's filled voxels, not its declared box.
-fn frame_model(camera: &mut OrbitCamera, volume: &voxel_core::Volume) {
-    match volume.occupied_bounds() {
-        Some((min, max)) => camera.frame_bounds(min, max),
-        None => camera.frame_volume(volume.size()),
     }
 }
 

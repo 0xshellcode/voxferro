@@ -1,13 +1,14 @@
 //! Loading a `.vox` file into something renderable.
 
 use vox_format::{Palette, VoxFile};
-use voxel_core::Volume;
+use voxel_core::Scene;
 
-/// A loaded file: its models as dense volumes, plus the palette they share.
+/// A loaded file: its scene graph flattened into placed models, plus the
+/// palette they share.
 pub struct LoadedScene {
     pub name: String,
     pub version: u32,
-    pub models: Vec<Volume>,
+    pub scene: Scene,
     pub palette: Palette,
 }
 
@@ -20,7 +21,6 @@ impl LoadedScene {
             return Err("file contains no models".to_owned());
         }
 
-        let models = file.models.iter().map(Volume::from_model).collect();
         let name = std::path::Path::new(path)
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
@@ -29,12 +29,8 @@ impl LoadedScene {
         Ok(Self {
             name,
             version: file.version,
-            models,
+            scene: Scene::from_file(&file),
             palette: file.palette,
         })
-    }
-
-    pub fn total_voxels(&self) -> usize {
-        self.models.iter().map(|m| m.filled_count()).sum()
     }
 }
