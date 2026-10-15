@@ -1,9 +1,10 @@
 //! Everything an edit can change, in one place.
 
 use crate::{Scene, Volume};
-use vox_format::{Material, Palette};
+use vox_format::{Dict, Material, Palette};
 
-/// The editable state of an open file: placed models, colours, materials.
+/// The editable state of an open file: placed models, colours, materials
+/// and render settings.
 ///
 /// Commands act on this rather than on a single volume, which is what lets
 /// one undo stack hold voxel strokes on any model, palette changes and
@@ -14,6 +15,9 @@ pub struct Document {
     pub palette: Palette,
     /// `MATL` entries; a palette index without one is plain diffuse.
     pub materials: Vec<Material>,
+    /// `rOBJ` render settings: sun, sky, ground, film... Kept as the file's
+    /// key/value objects, so keys this editor does not model survive.
+    pub render: Vec<Dict>,
 }
 
 impl Document {

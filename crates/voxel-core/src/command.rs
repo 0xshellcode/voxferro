@@ -7,7 +7,7 @@
 
 use crate::{Document, Volume};
 use glam::IVec3;
-use vox_format::{Color, Material, SceneNode};
+use vox_format::{Color, Dict, Material, SceneNode};
 
 /// A single reversible change to a [`Document`].
 #[derive(Debug, Clone, PartialEq)]
@@ -40,6 +40,8 @@ pub enum Command {
         before: Vec<SceneNode>,
         after: Vec<SceneNode>,
     },
+    /// Replaces the render settings. Dragging a slider merges into one step.
+    SetRender { before: Vec<Dict>, after: Vec<Dict> },
     /// Appends a model to the model list; undone by removing it again.
     PushModel { volume: Volume },
     /// Several commands as one undo step, applied in order and reverted in
@@ -104,6 +106,7 @@ impl Command {
             Self::SetColor { before, after, .. } => before == after,
             Self::SetMaterial { before, after, .. } => before == after,
             Self::SetGraph { before, after } => before == after,
+            Self::SetRender { before, after } => before == after,
             Self::PushModel { .. } => false,
             Self::Batch(commands) => commands.iter().all(Command::is_empty),
         }
@@ -129,6 +132,7 @@ impl Command {
                 document.scene.nodes = after.clone();
                 document.scene.rebuild();
             }
+            Self::SetRender { after, .. } => document.render = after.clone(),
             Self::PushModel { volume } => {
                 document.scene.models.push(volume.clone());
                 document.scene.rebuild();
@@ -164,6 +168,7 @@ impl Command {
                 document.scene.nodes = before.clone();
                 document.scene.rebuild();
             }
+            Self::SetRender { before, .. } => document.render = before.clone(),
             Self::PushModel { .. } => {
                 document.scene.models.pop();
                 document.scene.rebuild();
@@ -205,6 +210,10 @@ impl Command {
                 after.clone_from(newer);
                 true
             }
+            (Self::SetRender { after, .. }, Self::SetRender { after: newer, .. }) => {
+                after.clone_from(newer);
+                true
+            }
             // Dragging an instance's position field: one step per drag.
             (Self::SetGraph { after, .. }, Self::SetGraph { after: newer, .. }) => {
                 after.clone_from(newer);
@@ -224,13 +233,13 @@ fn set_signed(volume: &mut Volume, p: IVec3, value: u8) {
 /// Undo and redo stacks.
 #[derive(Debug, Default)]
 pub struct History {
-    undo: Vec<Command>,
-    redo: Vec<Command>,
+    /// Each step with an id naming the document state it leads to.
+    undo: Vec<(u64, Command)>,
+    redo: Vec<(u64, Command)>,
     /// Commands pushed while this is true may merge into the previous one.
     coalescing: bool,
-    /// Bumped on every change, so the app can tell whether the document
-    /// differs from what was last saved.
-    revision: u64,
+    /// Source of step ids; 0 is the state before any step.
+    last_id: u64,
 }
 
 impl History {
@@ -270,19 +279,22 @@ impl History {
             return false;
         }
         command.apply(document);
-        self.revision += 1;
+        self.last_id += 1;
 
         // A new edit invalidates anything that was undone.
         self.redo.clear();
 
         if self.coalescing {
-            if let Some(previous) = self.undo.last_mut() {
+            if let Some((id, previous)) = self.undo.last_mut() {
                 if previous.absorb(&command) {
+                    // The merged step leads somewhere new: a save taken in
+                    // the middle of a drag must not still count as current.
+                    *id = self.last_id;
                     return true;
                 }
             }
         }
-        self.undo.push(command);
+        self.undo.push((self.last_id, command));
         self.coalescing = true;
         true
     }
@@ -304,10 +316,9 @@ impl History {
     pub fn undo(&mut self, document: &mut Document) -> bool {
         self.end_gesture();
         match self.undo.pop() {
-            Some(c) => {
+            Some((id, c)) => {
                 c.revert(document);
-                self.redo.push(c);
-                self.revision += 1;
+                self.redo.push((id, c));
                 true
             }
             None => false,
@@ -317,10 +328,9 @@ impl History {
     pub fn redo(&mut self, document: &mut Document) -> bool {
         self.end_gesture();
         match self.redo.pop() {
-            Some(c) => {
+            Some((id, c)) => {
                 c.apply(document);
-                self.undo.push(c);
-                self.revision += 1;
+                self.undo.push((id, c));
                 true
             }
             None => false,
@@ -344,9 +354,11 @@ impl History {
         self.undo.len()
     }
 
-    /// Changes whenever the document does, undo and redo included.
+    /// Names the current document state: the id of the step at the top of
+    /// the undo stack. Undoing back to a saved state gives that state's
+    /// revision again, so the document reads as unchanged.
     pub fn revision(&self) -> u64 {
-        self.revision
+        self.undo.last().map_or(0, |(id, _)| *id)
     }
 }
 
@@ -553,6 +565,33 @@ mod tests {
         assert_eq!((d.scene.models.len(), d.scene.instances.len()), (1, 1));
         h.redo(&mut d);
         assert_eq!(d.scene.instances.len(), 2);
+    }
+
+    #[test]
+    fn undoing_back_to_a_save_reads_as_unchanged() {
+        let mut d = doc();
+        let mut h = History::default();
+        h.set_voxels(&mut d, 0, [(IVec3::ZERO, 1)]);
+        h.end_gesture();
+        let saved = h.revision();
+        h.set_voxels(&mut d, 0, [(IVec3::X, 1)]);
+        assert_ne!(h.revision(), saved);
+        h.undo(&mut d);
+        assert_eq!(h.revision(), saved, "back where it was saved");
+        h.redo(&mut d);
+        assert_ne!(h.revision(), saved);
+    }
+
+    #[test]
+    fn a_merge_after_a_save_counts_as_a_change() {
+        let mut d = doc();
+        let mut h = History::default();
+        h.set_voxels(&mut d, 0, [(IVec3::ZERO, 1)]);
+        let saved = h.revision();
+        // Same gesture, so it merges into the saved step.
+        h.set_voxels(&mut d, 0, [(IVec3::X, 1)]);
+        assert_eq!(h.undo_depth(), 1);
+        assert_ne!(h.revision(), saved);
     }
 }
 

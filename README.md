@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–21 del [ROADMAP](ROADMAP.md) están completas, con **150 tests
+Las fases 0–22 del [ROADMAP](ROADMAP.md) están completas, con **153 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -29,6 +29,8 @@ verdes**. Funciona hoy:
 - Exportación a OBJ + MTL + textura de paleta
 - Cámara: encuadrar selección o escena, vistas por eje e isométrica,
   proyección ortográfica (también en el path tracer) y desplazamiento
+- Ajustes de render (sol, cielo uniforme / atmosférico / HDR, suelo, película)
+  editables en el panel, con deshacer y guardados en el archivo
 - Capas y consola de comandos
 - Operaciones de voxel como compute kernels en WGSL
 - Guardado atómico que conserva materiales, cámaras y ajustes del renderer

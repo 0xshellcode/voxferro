@@ -10,8 +10,6 @@ pub struct LoadedScene {
     pub version: u32,
     /// Models, palette and materials: everything the undo stack can change.
     pub doc: Document,
-    /// `rOBJ` entries: sun, sky, atmosphere, lens, film, bloom.
-    pub render_objects: Vec<vox_format::Dict>,
     /// The file as parsed.
     ///
     /// Kept so saving preserves everything this editor does not model yet --
@@ -55,8 +53,8 @@ impl LoadedScene {
                 scene: Scene::from_file(&file),
                 palette: file.palette.clone(),
                 materials: file.materials.clone(),
+                render: file.render_objects.clone(),
             },
-            render_objects: file.render_objects.clone(),
             source: file,
             path,
         }
@@ -87,6 +85,7 @@ impl LoadedScene {
         file.nodes = self.doc.scene.nodes.clone();
         file.palette = self.doc.palette.clone();
         file.materials = self.doc.materials.clone();
+        file.render_objects = self.doc.render.clone();
 
         let bytes = file.to_bytes();
 

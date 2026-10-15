@@ -14,6 +14,7 @@ mod files;
 mod image_out;
 mod palette_ui;
 mod pathtrace;
+mod render_ui;
 mod renderer;
 mod scene;
 mod scene_ui;
@@ -85,6 +86,10 @@ struct App {
     /// Render mode, mirroring the editor's Model/Render tabs.
     rendering: bool,
     environment: Environment,
+    /// The render objects `environment` was decoded from.
+    environment_source: Vec<vox_format::Dict>,
+    /// Environment map names found on disk, listed on first use.
+    env_maps: Option<Vec<String>>,
     /// Samples still to accumulate before a headless screenshot.
     pending_samples: u32,
     status: String,
@@ -157,6 +162,8 @@ impl App {
             path_tracer: PathTracer::new(&state.device),
             rendering: false,
             environment: Environment::default(),
+            env_maps: None,
+            environment_source: Vec::new(),
             pending_samples: 0,
             status: String::new(),
             selected: 0,
@@ -301,10 +308,9 @@ impl App {
         // file.
         self.history.clear();
         self.saved_revision = self.history.revision();
-        self.environment = Environment::from_render_objects(&loaded.render_objects);
         self.scene = Some(loaded);
         self.upload_current(state);
-        self.ensure_env_map(state);
+        self.sync_environment(state);
     }
 
     /// Meshes the whole scene and hands it to the GPU.
@@ -408,6 +414,10 @@ impl App {
     /// After undo or redo: the step may have touched voxels, colours or
     /// materials, so everything is refreshed.
     fn refresh_document(&mut self, state: &egui_wgpu::RenderState) {
+        // The step may have been a render setting.
+        if self.scene.as_ref().is_some_and(|s| s.doc.render != self.environment_source) {
+            self.sync_environment(state);
+        }
         // Undoing an added instance can leave the selection past the end.
         let count = self.scene.as_ref().map_or(0, |s| s.doc.scene.instances.len());
         self.selected = self.selected.min(count.saturating_sub(1));
@@ -516,31 +526,7 @@ impl App {
                 self.path_tracer.samples,
                 self.path_tracer.emitter_count()
             ));
-            let mut changed = false;
-            changed |= ui
-                .add(egui::Slider::new(&mut self.environment.bounces, 0..=8).text("bounces"))
-                .changed();
-            changed |= ui
-                .add(
-                    egui::Slider::new(&mut self.environment.exposure, 0.05..=5.0)
-                        .text("exposure"),
-                )
-                .changed();
-            changed |= ui
-                .add(
-                    egui::Slider::new(&mut self.environment.sun_intensity, 0.0..=10.0)
-                        .text("sun"),
-                )
-                .changed();
-            changed |= ui
-                .add(
-                    egui::Slider::new(&mut self.environment.sky_intensity, 0.0..=4.0)
-                        .text("sky"),
-                )
-                .changed();
-            if changed {
-                self.path_tracer.reset();
-            }
+            self.render_settings_ui(ui, state);
             ui.separator();
         }
 
@@ -863,50 +849,6 @@ impl App {
                 eprintln!("[voxferro] {e}; using the uniform sky");
                 Some(format!("{e}; using the uniform sky"))
             }
-        }
-    }
-
-    /// `env uniform` | `env ibl [map.hdr] [intensity] [rotation]`
-    fn env_command(&mut self, line: &str, state: &egui_wgpu::RenderState) -> String {
-        let args: Vec<&str> = line.split_whitespace().skip(1).collect();
-        match args.first().copied() {
-            Some("uniform") => {
-                self.environment.ibl_enabled = false;
-                self.environment.atmosphere_enabled = false;
-                self.path_tracer.reset();
-                "sky: uniform".to_owned()
-            }
-            Some("atmosphere") => {
-                self.environment.ibl_enabled = false;
-                self.environment.atmosphere_enabled = true;
-                // Optional sun elevation, degrees, to try sunsets.
-                if let Some(el) = args.get(1).and_then(|v| v.parse::<f32>().ok()) {
-                    let d = self.environment.sun_direction;
-                    let az = (-d.y).atan2(d.x);
-                    let el = el.to_radians();
-                    self.environment.sun_direction =
-                        glam::Vec3::new(el.cos() * az.cos(), -el.cos() * az.sin(), el.sin());
-                }
-                self.path_tracer.reset();
-                self.ensure_env_map(state).unwrap_or_default()
-            }
-            Some("ibl") => {
-                if let Some(name) = args.get(1) {
-                    self.environment.ibl_path = (*name).to_owned();
-                }
-                if let Some(i) = args.get(2).and_then(|v| v.parse::<f32>().ok()) {
-                    self.environment.ibl_intensity = i.max(0.0);
-                }
-                if let Some(r) = args.get(3).and_then(|v| v.parse::<f32>().ok()) {
-                    self.environment.ibl_rotation = r;
-                }
-                self.environment.ibl_enabled = true;
-                self.environment.atmosphere_enabled = false;
-                self.path_tracer.reset();
-                self.ensure_env_map(state)
-                    .unwrap_or_else(|| format!("sky: {}", self.environment.ibl_path))
-            }
-            _ => "env uniform | env atmosphere [sun elevation] | env ibl [map.hdr] [i] [rot]".to_owned(),
         }
     }
 

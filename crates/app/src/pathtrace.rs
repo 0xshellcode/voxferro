@@ -242,6 +242,103 @@ impl Environment {
     }
 }
 
+impl Environment {
+    /// Writes these settings into render objects, the inverse of
+    /// [`Environment::with_render_objects`].
+    ///
+    /// Starts from the objects the file had, so keys this editor does not
+    /// model (lens, bloom, the other bounce counts...) survive; missing
+    /// objects are added. Scale factors applied on reading are undone here:
+    /// the sun's `_i` was multiplied by 1.8 and `_expo` divided by 3.
+    pub fn write_render_objects(&self, objects: &[vox_format::Dict]) -> Vec<vox_format::Dict> {
+        let mut out = objects.to_vec();
+        let num = |v: f32| format!("{}", (v * 10_000.0).round() / 10_000.0);
+        let rgb255 = |c: Vec3| {
+            let c = (c * 255.0).round().clamp(Vec3::ZERO, Vec3::splat(255.0));
+            format!("{} {} {}", c.x, c.y, c.z)
+        };
+
+        let sun = object(&mut out, "_inf");
+        sun.set("_i", num(self.sun_intensity / 1.8));
+        sun.set("_k", rgb255(self.sun_color));
+        let d = self.sun_direction.normalize_or(Vec3::Z);
+        let azimuth = (-d.y).atan2(d.x).to_degrees().rem_euclid(360.0);
+        let elevation = d.z.clamp(-1.0, 1.0).asin().to_degrees();
+        sun.set("_angle", format!("{} {}", num(azimuth), num(elevation)));
+        sun.set("_area", num(self.sun_angular_radius));
+
+        let sky = object(&mut out, "_uni");
+        sky.set("_i", num(self.sky_intensity));
+        sky.set("_k", rgb255(self.sky_color));
+
+        let mode = if self.ibl_enabled {
+            "2"
+        } else if self.atmosphere_enabled {
+            "1"
+        } else {
+            "0"
+        };
+        object(&mut out, "_env").set("_mode", mode);
+
+        let ibl = object(&mut out, "_ibl");
+        ibl.set("_i", num(self.ibl_intensity));
+        ibl.set("_rot", num(self.ibl_rotation));
+        if ibl.get("_angle").is_some() {
+            // Version 200 also stores the turn here; keep the two agreeing.
+            ibl.set("_angle", format!("0 {}", num(self.ibl_rotation * 360.0)));
+        }
+        ibl.set("_path", self.ibl_path.clone());
+
+        let a = &self.atmosphere;
+        let atm = object(&mut out, "_atm");
+        atm.set("_ray_d", num(a.ray_density));
+        atm.set("_ray_k", rgb255(a.ray_color));
+        atm.set("_mie_d", num(a.mie_density));
+        atm.set("_mie_k", rgb255(a.mie_color));
+        atm.set("_mie_g", num(a.mie_g));
+        atm.set("_o3_d", num(a.ozone_density));
+        atm.set("_o3_k", rgb255(a.ozone_color));
+
+        let ground = object(&mut out, "_ground");
+        let g = self.ground_color;
+        ground.set(
+            "_color",
+            format!("{} {} {}", linear_to_srgb(g.x), linear_to_srgb(g.y), linear_to_srgb(g.z)),
+        );
+        ground.set("_hor", num(self.horizon_density));
+        ground.set("_enable", if self.ground_enabled { "1" } else { "0" });
+        // Version 150 switches the ground in `_setting`; when that object
+        // carries the switch it must agree, or it would win on reading.
+        if let Some(setting) = out.iter_mut().find(|o| o.get("_type") == Some("_setting")) {
+            if setting.get("_ground").is_some() {
+                setting.set("_ground", if self.ground_enabled { "1" } else { "0" });
+            }
+        }
+
+        object(&mut out, "_film").set("_expo", num(self.exposure * 3.0));
+        object(&mut out, "_bounce").set("_diffuse", self.bounces.to_string());
+        out
+    }
+}
+
+/// The render object of a `_type`, added if the file had none.
+fn object<'a>(objects: &'a mut Vec<vox_format::Dict>, kind: &str) -> &'a mut vox_format::Dict {
+    let index = match objects.iter().position(|o| o.get("_type") == Some(kind)) {
+        Some(i) => i,
+        None => {
+            objects.push(vox_format::Dict(vec![("_type".to_owned(), kind.to_owned())]));
+            objects.len() - 1
+        }
+    };
+    &mut objects[index]
+}
+
+pub fn linear_to_srgb(v: f32) -> u8 {
+    let v = v.clamp(0.0, 1.0);
+    let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    (s * 255.0).round() as u8
+}
+
 /// One palette index's material, matching the WGSL `Material`.
 ///
 /// 32 bytes: four scalars, then a vec4 that WGSL aligns to 16, which the four
@@ -273,7 +370,7 @@ pub fn effective_roughness(slider: f32) -> f32 {
     slider * 0.15
 }
 
-fn srgb_to_linear(v: u8) -> f32 {
+pub fn srgb_to_linear(v: u8) -> f32 {
     let v = v as f32 / 255.0;
     if v <= 0.04045 {
         v / 12.92
@@ -1141,4 +1238,42 @@ mod tests {
         assert!((effective_roughness(1.0) - 0.15).abs() < 1e-6);
         assert_eq!(effective_roughness(0.0), 0.0);
     }
+
+    #[test]
+    fn settings_written_back_read_the_same() {
+        let env = Environment {
+            sun_direction: Vec3::new(0.3, -0.5, 0.6).normalize(),
+            sun_intensity: 2.0,
+            sun_color: Vec3::new(1.0, 0.8, 0.6),
+            sky_intensity: 0.4,
+            atmosphere_enabled: true,
+            atmosphere: voxel_core::AtmosphereSettings { mie_g: 0.7, ..Default::default() },
+            ground_enabled: false,
+            ground_color: Vec3::splat(srgb_to_linear(120)),
+            exposure: 0.8,
+            bounces: 4,
+            ..Default::default()
+        };
+
+        // Room-like objects: a version 150 ground switch and a lens to keep.
+        let original = [
+            dict(&[("_type", "_setting"), ("_ground", "1")]),
+            dict(&[("_type", "_lens"), ("_fov", "45")]),
+        ];
+        let written = env.write_render_objects(&original);
+        let back = Environment::from_render_objects(&written);
+
+        assert!((back.sun_direction - env.sun_direction).length() < 1e-3);
+        assert!((back.sun_intensity - env.sun_intensity).abs() < 1e-3);
+        assert!((back.sun_color - env.sun_color).length() < 0.01);
+        assert!((back.sky_intensity - 0.4).abs() < 1e-6);
+        assert!(back.atmosphere_enabled && !back.ibl_enabled);
+        assert!((back.atmosphere.mie_g - 0.7).abs() < 1e-6);
+        assert!(!back.ground_enabled, "the _setting switch was updated too");
+        assert!((back.ground_color - env.ground_color).length() < 1e-3);
+        assert!((back.exposure - 0.8).abs() < 1e-4);
+        assert_eq!(back.bounces, 4);
+        assert!(written.iter().any(|o| o.get("_fov") == Some("45")), "unknown objects survive");
+    }
 }
+

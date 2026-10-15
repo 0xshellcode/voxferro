@@ -20,3 +20,11 @@ opt-level = 0
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# The voxel core does the heavy CPU work while editing -- meshing, baking the
+# traced grid, the atmosphere sky -- and unoptimized it made a sky slider
+# drag take 157 ms a frame. Optimized here even in dev builds; the app crate
+# stays at opt-level 0 so it still rebuilds quickly.
+[profile.dev.package.voxel-core]
+opt-level = 2
+
