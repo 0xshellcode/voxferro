@@ -515,9 +515,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let up = vec3<f32>(0.0, 0.0, 1.0);
             let lifted = point + up * 0.001;
 
-            // Distant ground dissolves into the sky toward the horizon.
+            // Distant ground dissolves into the sky *at the horizon*. Not
+            // the background straight along the ray: below the horizon that
+            // is the photo's ground in an HDR, or a short dark path into the
+            // planet under the atmosphere, and the editor keeps its ground
+            // grey in both.
             let fade = horizon_fade(t_ground);
-            radiance = radiance + throughput * fade * background(direction);
+            let horizon = normalize(vec3<f32>(direction.xy, 0.02 * length(direction.xy)));
+            radiance = radiance + throughput * fade * background(horizon);
             throughput = throughput * (1.0 - fade) * p.ground_color.rgb;
 
             // A diffuse surface like any other: sun, emitters, a bounce.

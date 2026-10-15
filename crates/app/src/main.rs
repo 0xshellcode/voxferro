@@ -648,6 +648,16 @@ impl App {
     /// already resident. A missing or unreadable map turns image lighting
     /// off with a message rather than rendering a black sky.
     fn ensure_env_map(&mut self, state: &egui_wgpu::RenderState) -> Option<String> {
+        if self.environment.atmosphere_enabled {
+            // Cheap enough to rebake whenever it is asked for: the sky is
+            // smooth, so a small map is plenty.
+            let started = std::time::Instant::now();
+            let map = self.environment.atmosphere_map(128, 64);
+            self.path_tracer.set_computed_sky(&state.device, "atmosphere", &map);
+            let message = format!("sky: atmosphere ({:.0?})", started.elapsed());
+            eprintln!("[voxferro] {message}");
+            return Some(message);
+        }
         if !self.environment.ibl_enabled {
             return None;
         }
@@ -681,8 +691,23 @@ impl App {
         match args.first().copied() {
             Some("uniform") => {
                 self.environment.ibl_enabled = false;
+                self.environment.atmosphere_enabled = false;
                 self.path_tracer.reset();
                 "sky: uniform".to_owned()
+            }
+            Some("atmosphere") => {
+                self.environment.ibl_enabled = false;
+                self.environment.atmosphere_enabled = true;
+                // Optional sun elevation, degrees, to try sunsets.
+                if let Some(el) = args.get(1).and_then(|v| v.parse::<f32>().ok()) {
+                    let d = self.environment.sun_direction;
+                    let az = (-d.y).atan2(d.x);
+                    let el = el.to_radians();
+                    self.environment.sun_direction =
+                        glam::Vec3::new(el.cos() * az.cos(), -el.cos() * az.sin(), el.sin());
+                }
+                self.path_tracer.reset();
+                self.ensure_env_map(state).unwrap_or_default()
             }
             Some("ibl") => {
                 if let Some(name) = args.get(1) {
@@ -695,11 +720,12 @@ impl App {
                     self.environment.ibl_rotation = r;
                 }
                 self.environment.ibl_enabled = true;
+                self.environment.atmosphere_enabled = false;
                 self.path_tracer.reset();
                 self.ensure_env_map(state)
                     .unwrap_or_else(|| format!("sky: {}", self.environment.ibl_path))
             }
-            _ => "env uniform | env ibl [map.hdr] [intensity] [rotation]".to_owned(),
+            _ => "env uniform | env atmosphere [sun elevation] | env ibl [map.hdr] [i] [rot]".to_owned(),
         }
     }
 

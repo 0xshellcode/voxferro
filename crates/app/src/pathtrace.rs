@@ -35,16 +35,19 @@ pub struct Environment {
     pub ibl_rotation: f32,
     /// `_ibl._path`: file name inside the editor's `ibl/` folder.
     pub ibl_path: String,
+    /// Physically based sky (`_env._mode` 1) instead of uniform or image.
+    pub atmosphere_enabled: bool,
+    /// `_atm` settings.
+    pub atmosphere: voxel_core::AtmosphereSettings,
 }
 
 impl Default for Environment {
     /// The editor's own defaults, not invented ones.
     ///
-    /// Its render panel opens with the sun at 50/50, area 7 and a white sky,
-    /// and those are also the most common values across the sample corpus:
-    /// `_inf` = white, `_i 0.6`, `_angle 50 50`, `_area 0.07`; `_uni` =
-    /// white, `_i 0.7`. A file without render objects should look the way the
-    /// editor would show it, so the defaults are derived from exactly that.
+    /// Taken from a file the editor itself saved with no render settings of
+    /// our own: `_inf` white, `_i 0.7`, `_angle 50 50`, `_area 0.07`; `_uni`
+    /// white, `_i 0.7`. (The sample corpus mostly saves `_i 0.6` for the sun,
+    /// but that is a saved value, not the default.)
     fn default() -> Self {
         let base = Self {
             sun_direction: Vec3::Z,
@@ -54,7 +57,8 @@ impl Default for Environment {
             sky_intensity: 1.0,
             sun_angular_radius: 0.07,
             exposure: 0.35,
-            bounces: 3,
+            // `_bounce._diffuse` in a file the editor saved with defaults.
+            bounces: 2,
             ground_enabled: true,
             // `_ground._color` is 80 80 80 in every sample file.
             ground_color: Vec3::splat(srgb_to_linear(80)),
@@ -65,12 +69,14 @@ impl Default for Environment {
             // The map most sample files name, and the one room.vox falls
             // back to: it selects image lighting without naming a file.
             ibl_path: "HDR_041_Path_Env.hdr".to_owned(),
+            atmosphere_enabled: false,
+            atmosphere: voxel_core::AtmosphereSettings::default(),
         };
         let pair = |k: &str, v: &str| (k.to_owned(), v.to_owned());
         base.with_render_objects(&[
             vox_format::Dict(vec![
                 pair("_type", "_inf"),
-                pair("_i", "0.6"),
+                pair("_i", "0.7"),
                 pair("_k", "255 255 255"),
                 pair("_angle", "50 50"),
                 pair("_area", "0.07"),
@@ -85,6 +91,30 @@ impl Default for Environment {
 }
 
 impl Environment {
+    /// The sun's colour as it reaches the ground. Under the atmosphere that
+    /// is its own colour times the air's transmittance along its direction,
+    /// which is what turns a low sun orange.
+    pub fn effective_sun_color(&self) -> Vec3 {
+        if self.atmosphere_enabled {
+            let air = voxel_core::Atmosphere::new(&self.atmosphere);
+            self.sun_color * air.transmittance(self.sun_direction)
+        } else {
+            self.sun_color
+        }
+    }
+
+    /// Bakes the sky for the current sun into an equirectangular map, in
+    /// absolute units: radiance per unit sun irradiance, times the sun.
+    pub fn atmosphere_map(&self, width: u32, height: u32) -> voxel_core::EnvMap {
+        let air = voxel_core::Atmosphere::new(&self.atmosphere);
+        let mut map = air.sky_map(self.sun_direction, width, height);
+        let sun = self.sun_color * self.sun_intensity;
+        for p in &mut map.pixels {
+            *p = (Vec3::from_array(*p) * sun).to_array();
+        }
+        map
+    }
+
     /// Reads what it can from the file's render objects.
     ///
     /// The editor stores lighting as `_inf` (sun), `_uni` (sky) and `_film`
@@ -155,10 +185,23 @@ impl Environment {
                     }
                 }
                 // The sky panel's three modes: 0 uniform, 1 atmosphere,
-                // 2 image. Atmosphere is not implemented and falls back to
-                // the uniform sky.
+                // 2 image.
                 Some("_env") => {
-                    env.ibl_enabled = object.get("_mode") == Some("2");
+                    let mode = object.get("_mode");
+                    env.ibl_enabled = mode == Some("2");
+                    env.atmosphere_enabled = mode == Some("1");
+                }
+                Some("_atm") => {
+                    let a = &mut env.atmosphere;
+                    let number = |k: &str| object.get(k).and_then(|v| v.parse::<f32>().ok());
+                    let color = |k: &str| object.get_parsed::<f32, 3>(k).map(|c| Vec3::from_array(c) / 255.0);
+                    if let Some(v) = number("_ray_d") { a.ray_density = v; }
+                    if let Some(v) = color("_ray_k") { a.ray_color = v; }
+                    if let Some(v) = number("_mie_d") { a.mie_density = v; }
+                    if let Some(v) = color("_mie_k") { a.mie_color = v; }
+                    if let Some(v) = number("_mie_g") { a.mie_g = v; }
+                    if let Some(v) = number("_o3_d") { a.ozone_density = v; }
+                    if let Some(v) = color("_o3_k") { a.ozone_color = v; }
                 }
                 Some("_ibl") => {
                     if let Some(i) = object.get("_i").and_then(|v| v.parse::<f32>().ok()) {
@@ -176,6 +219,14 @@ impl Environment {
                     }
                     if let Some(path) = object.get("_path") {
                         env.ibl_path = path.to_owned();
+                    }
+                }
+                // Bounce budget. The editor keeps separate counts per event
+                // (`_diffuse` 2, `_specular` 5, `_scatter` 5 by default);
+                // this tracer has one, so it follows the diffuse count.
+                Some("_bounce") => {
+                    if let Some(b) = object.get("_diffuse").and_then(|v| v.parse::<u32>().ok()) {
+                        env.bounces = b.clamp(1, 16);
                     }
                 }
                 Some("_film") => {
@@ -278,6 +329,9 @@ struct LoadedEnvMap {
     width: u32,
     height: u32,
     sampling: voxel_core::EnvSampling,
+    /// HDR files are normalised so their mean radiance is `_i`; a computed
+    /// atmosphere is already in absolute units and is used as-is.
+    normalized: bool,
 }
 
 struct Target {
@@ -571,6 +625,21 @@ impl PathTracer {
         name: &str,
         map: &voxel_core::EnvMap,
     ) {
+        self.upload_environment(device, name, map, true);
+    }
+
+    /// Uploads a computed sky, used in absolute units.
+    pub fn set_computed_sky(&mut self, device: &wgpu::Device, name: &str, map: &voxel_core::EnvMap) {
+        self.upload_environment(device, name, map, false);
+    }
+
+    fn upload_environment(
+        &mut self,
+        device: &wgpu::Device,
+        name: &str,
+        map: &voxel_core::EnvMap,
+        normalized: bool,
+    ) {
         let sampling = voxel_core::EnvSampling::new(map);
         let texels: Vec<[f32; 4]> = map.pixels.iter().map(|p| [p[0], p[1], p[2], 0.0]).collect();
         self.env_texels = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -588,6 +657,7 @@ impl PathTracer {
             width: map.width,
             height: map.height,
             sampling,
+            normalized,
         });
         self.reset();
     }
@@ -708,7 +778,7 @@ impl PathTracer {
             frame: self.samples,
             sample_count: self.samples + 1,
             sun_direction: environment.sun_direction.extend(0.0).to_array(),
-            sun_color: environment.sun_color.extend(0.0).to_array(),
+            sun_color: environment.effective_sun_color().extend(0.0).to_array(),
             sky_color: environment.sky_color.extend(0.0).to_array(),
             tan_half_fov: (fov_y * 0.5).tan(),
             aspect: size[0] as f32 / size[1].max(1) as f32,
@@ -730,12 +800,17 @@ impl PathTracer {
             ],
             ground_color: environment.ground_color.extend(0.0).to_array(),
             ibl: match &self.env_map {
-                Some(map) if environment.ibl_enabled => [
+                Some(map) if environment.ibl_enabled && map.normalized => [
                     1.0,
                     map.sampling.scale(environment.ibl_intensity),
                     environment.ibl_rotation,
                     map.sampling.total,
                 ],
+                // The computed sky is baked in world orientation: no
+                // rotation, no normalisation.
+                Some(map) if environment.atmosphere_enabled && !map.normalized => {
+                    [1.0, 1.0, 0.0, map.sampling.total]
+                }
                 _ => [0.0; 4],
             },
             ibl_size: match &self.env_map {
@@ -1025,6 +1100,19 @@ mod tests {
 
         let uniform = Environment::from_render_objects(&[dict(&[("_type", "_env"), ("_mode", "0")])]);
         assert!(!uniform.ibl_enabled);
+    }
+
+    #[test]
+    fn atmosphere_settings_parse_and_redden_a_low_sun() {
+        let env = Environment::from_render_objects(&[
+            dict(&[("_type", "_env"), ("_mode", "1")]),
+            dict(&[("_type", "_atm"), ("_ray_d", "0.9"), ("_mie_g", "0.7")]),
+            dict(&[("_type", "_inf"), ("_angle", "50 3"), ("_k", "255 255 255")]),
+        ]);
+        assert!(env.atmosphere_enabled && !env.ibl_enabled);
+        assert!((env.atmosphere.ray_density - 0.9).abs() < 1e-6);
+        let sun = env.effective_sun_color();
+        assert!(sun.x > sun.z, "a sun 3 degrees up should come through orange: {sun:?}");
     }
 
     #[test]
