@@ -38,18 +38,26 @@ impl App {
             }
             None => "no wgpu render state (eframe fell back to glow?)".to_owned(),
         };
+        // Also logged, so the backend can be confirmed without reading the
+        // window -- handy in CI and when checking a build over a shell.
+        eprintln!("[voxferro] graphics backend: {backend}");
+
         Self { backend }
     }
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Voxferro");
-            ui.label("Phase 0: scaffolding in place.");
-            ui.separator();
-            ui.label(format!("Graphics backend: {}", self.backend));
-            ui.label("Next: phase 1, the .vox parser.");
-        });
+    /// Draws one frame.
+    ///
+    /// Note the signature: as of eframe 0.36 the `App` trait takes a `&mut Ui`
+    /// and eframe owns the central panel, replacing the older
+    /// `update(&mut self, ctx: &Context, ..)` that built its own panel. Most
+    /// tutorials online still show the old shape.
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        ui.heading("Voxferro");
+        ui.label("Phase 0: scaffolding in place.");
+        ui.separator();
+        ui.label(format!("Graphics backend: {}", self.backend));
+        ui.label("Next: phase 1, the .vox parser.");
     }
 }
