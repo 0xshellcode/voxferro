@@ -46,3 +46,74 @@ pub fn write_bmp(path: &str, width: u32, height: u32, rgba: &[u8]) -> std::io::R
     }
     out.flush()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type Pixel = (u8, u8, u8);
+    type Decoded = (u32, u32, Vec<Vec<Pixel>>);
+
+    /// Reads a 24-bit BMP back as (width, height, rows of RGB).
+    fn read_bmp(path: &str) -> Decoded {
+        let d = std::fs::read(path).unwrap();
+        let offset = u32::from_le_bytes(d[10..14].try_into().unwrap()) as usize;
+        let width = i32::from_le_bytes(d[18..22].try_into().unwrap()) as u32;
+        let height = i32::from_le_bytes(d[22..26].try_into().unwrap()) as u32;
+        let stride = ((width * 3).div_ceil(4) * 4) as usize;
+
+        let mut rows = Vec::new();
+        // Stored bottom-up, so read back to front to get top-down order.
+        for y in (0..height as usize).rev() {
+            let start = offset + y * stride;
+            let mut row = Vec::new();
+            for x in 0..width as usize {
+                let p = start + x * 3;
+                row.push((d[p + 2], d[p + 1], d[p]));
+            }
+            rows.push(row);
+        }
+        (width, height, rows)
+    }
+
+    #[test]
+    fn writes_pixels_in_the_right_place_and_order() {
+        // A 2x2 image with four distinct colours pins down both the row order
+        // (BMP is bottom-up) and the channel order (BMP is BGR). Getting
+        // either wrong is invisible in a solid-colour test.
+        let rgba: Vec<u8> = vec![
+            255, 0, 0, 255, // top-left: red
+            0, 255, 0, 255, // top-right: green
+            0, 0, 255, 255, // bottom-left: blue
+            255, 255, 0, 255, // bottom-right: yellow
+        ];
+
+        let path = std::env::temp_dir().join("mvr_bmp_test.bmp");
+        let path = path.to_str().unwrap();
+        write_bmp(path, 2, 2, &rgba).unwrap();
+
+        let (w, h, rows) = read_bmp(path);
+        assert_eq!((w, h), (2, 2));
+        assert_eq!(rows[0][0], (255, 0, 0), "top-left should stay red");
+        assert_eq!(rows[0][1], (0, 255, 0), "top-right should stay green");
+        assert_eq!(rows[1][0], (0, 0, 255), "bottom-left should stay blue");
+        assert_eq!(rows[1][1], (255, 255, 0), "bottom-right should stay yellow");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn pads_rows_to_a_multiple_of_four_bytes() {
+        // A 3-pixel row is 9 bytes and must be padded to 12, or every row
+        // after the first lands shifted.
+        let rgba = vec![128u8; 3 * 2 * 4];
+        let path = std::env::temp_dir().join("mvr_bmp_pad.bmp");
+        let path = path.to_str().unwrap();
+        write_bmp(path, 3, 2, &rgba).unwrap();
+
+        let (w, h, rows) = read_bmp(path);
+        assert_eq!((w, h), (3, 2));
+        assert!(rows.iter().all(|r| r.iter().all(|&p| p == (128, 128, 128))));
+        let _ = std::fs::remove_file(path);
+    }
+}

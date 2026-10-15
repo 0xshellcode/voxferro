@@ -10,6 +10,7 @@ mod compute;
 mod console;
 mod edit;
 mod image_out;
+mod pathtrace;
 mod renderer;
 mod scene;
 
@@ -17,6 +18,8 @@ use camera::OrbitCamera;
 use eframe::{egui, egui_wgpu};
 use glam::Vec3;
 use renderer::SceneRenderer;
+use glam::Mat3;
+use pathtrace::{Environment, PathTracer};
 use voxel_core::{History, Mesh};
 
 fn main() -> eframe::Result {
@@ -47,6 +50,12 @@ struct App {
     /// texture), and both cannot be borrowed out of the same map at once.
     scene_renderer: SceneRenderer,
     voxel_compute: compute::VoxelCompute,
+    path_tracer: PathTracer,
+    /// Render mode, mirroring the editor's Model/Render tabs.
+    rendering: bool,
+    environment: Environment,
+    /// Samples still to accumulate before a headless screenshot.
+    pending_samples: u32,
     status: String,
     /// Index into the scene's model list.
     shown_model: usize,
@@ -86,6 +95,10 @@ impl App {
             scene: None,
             scene_renderer: SceneRenderer::new(&state.device, state.target_format),
             voxel_compute: compute::VoxelCompute::new(&state.device),
+            path_tracer: PathTracer::new(&state.device),
+            rendering: false,
+            environment: Environment::default(),
+            pending_samples: 0,
             status: String::new(),
             shown_model: 0,
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
@@ -107,6 +120,14 @@ impl App {
             .iter()
             .position(|a| a == "--screenshot")
             .and_then(|i| args.get(i + 1).cloned());
+
+        // --render N switches to the path tracer and accumulates N samples
+        // before the screenshot is taken.
+        let render_samples = args
+            .iter()
+            .position(|a| a == "--render")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse::<u32>().ok());
         let path = args
             .iter()
             .find(|a| a.ends_with(".vox"))
@@ -137,6 +158,11 @@ impl App {
                 eprintln!("[voxferro] {line}");
             }
         }
+
+        if let Some(samples) = render_samples {
+            app.rendering = true;
+            app.pending_samples = samples;
+        }
         app
     }
 
@@ -150,6 +176,7 @@ impl App {
                     loaded.version
                 );
                 self.shown_model = 0;
+                self.environment = Environment::from_render_objects(&loaded.render_objects);
                 self.scene = Some(loaded);
                 self.upload_current(state);
             }
@@ -183,6 +210,13 @@ impl App {
         }
         self.scene_renderer.set_mesh(&state.device, &mesh);
         self.scene_renderer.set_palette(&state.queue, &loaded.palette);
+
+        // The tracer walks the volume directly, so it needs the voxels rather
+        // than the mesh.
+        if let Some(volume) = loaded.scene.models.first() {
+            self.path_tracer.set_volume(&state.device, &state.queue, volume);
+        }
+        self.path_tracer.set_palette(&state.queue, &loaded.palette);
     }
 
     /// Rebuilds the GPU mesh after an edit, leaving the camera alone.
@@ -191,6 +225,9 @@ impl App {
         let hidden = self.hidden_layers;
         let mesh = Mesh::from_scene_where(&loaded.scene, |i| !is_hidden(&hidden, i.layer));
         self.scene_renderer.set_mesh(&state.device, &mesh);
+        if let Some(volume) = loaded.scene.models.first() {
+            self.path_tracer.set_volume(&state.device, &state.queue, volume);
+        }
         self.mesh_dirty = false;
     }
 
@@ -245,6 +282,26 @@ impl App {
     /// `self.history` unreachable. Reaching the fields directly keeps the two
     /// borrows disjoint, and the inner scope ends them before `remesh` needs
     /// `self` again.
+    /// Shift from world space into the traced volume's voxel space.
+    ///
+    /// The mesher places a model centred on its transform, so a world point
+    /// maps to `local = world + half_size - translation`. Without this the
+    /// traced image sits half a model away from the framed one.
+    fn volume_offset(&self) -> Vec3 {
+        let Some(loaded) = &self.scene else {
+            return Vec3::ZERO;
+        };
+        let Some(instance) = loaded.scene.instances.first() else {
+            return Vec3::ZERO;
+        };
+        let Some(volume) = loaded.scene.models.get(instance.model_index) else {
+            return Vec3::ZERO;
+        };
+        let [sx, sy, sz] = volume.size();
+        let half = Vec3::new(sx as f32, sy as f32, sz as f32) * 0.5;
+        half - instance.transform.translation.as_vec3()
+    }
+
     fn apply_history(&mut self, op: impl FnOnce(&mut History, &mut voxel_core::Volume) -> bool) -> bool {
         let Some(loaded) = self.scene.as_mut() else {
             return false;
@@ -279,6 +336,46 @@ impl App {
         }
 
         ui.separator();
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!self.rendering, "Model").clicked() {
+                self.rendering = false;
+            }
+            if ui.selectable_label(self.rendering, "Render").clicked() {
+                self.rendering = true;
+                self.path_tracer.reset();
+            }
+        });
+
+        if self.rendering {
+            ui.label(format!("{} samples", self.path_tracer.samples));
+            let mut changed = false;
+            changed |= ui
+                .add(egui::Slider::new(&mut self.environment.bounces, 0..=8).text("bounces"))
+                .changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut self.environment.exposure, 0.05..=5.0)
+                        .text("exposure"),
+                )
+                .changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut self.environment.sun_intensity, 0.0..=10.0)
+                        .text("sun"),
+                )
+                .changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut self.environment.sky_intensity, 0.0..=4.0)
+                        .text("sky"),
+                )
+                .changed();
+            if changed {
+                self.path_tracer.reset();
+            }
+            ui.separator();
+        }
+
         self.palette_grid(ui);
 
         ui.separator();
@@ -609,6 +706,7 @@ impl App {
         if response.dragged() {
             let d = response.drag_delta();
             self.camera.orbit(d.x * 0.01, d.y * 0.01);
+            self.path_tracer.reset();
         }
         if response.drag_stopped() || response.clicked() {
             self.history.end_gesture();
@@ -618,6 +716,7 @@ impl App {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 self.camera.zoom(1.0 - scroll * 0.002);
+                self.path_tracer.reset();
             }
         }
 
@@ -634,6 +733,36 @@ impl App {
 
         if self.mesh_dirty {
             self.remesh(state);
+        }
+
+        if self.rendering {
+            let basis = camera_basis(&self.camera);
+            let offset = self.volume_offset();
+            let mut egui_renderer = state.renderer.write();
+            let id = self.path_tracer.render(
+                &state.device,
+                &state.queue,
+                &mut egui_renderer,
+                size,
+                self.camera.eye(),
+                basis,
+                self.camera.fov_y,
+                &self.environment,
+                offset,
+            );
+            drop(egui_renderer);
+
+            if let Some(id) = id {
+                ui.painter().image(
+                    id,
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+                // Keep sampling: the image refines frame by frame.
+                ui.ctx().request_repaint();
+            }
+            return;
         }
 
         let mut egui_renderer = state.renderer.write();
@@ -656,6 +785,15 @@ impl App {
             egui::Color32::WHITE,
         );
     }
+}
+
+/// Camera basis as right/up/forward columns, which is what the tracer wants
+/// instead of a view-projection matrix: it builds rays, not clip coordinates.
+fn camera_basis(camera: &OrbitCamera) -> Mat3 {
+    let forward = (camera.target - camera.eye()).normalize_or(Vec3::Y);
+    let right = forward.cross(Vec3::Z).normalize_or(Vec3::X);
+    let up = right.cross(forward);
+    Mat3::from_cols(right, up, forward)
 }
 
 /// Layer -1 means "no layer assigned", which is always visible.
@@ -711,8 +849,23 @@ impl eframe::App for App {
         // would also capture the panels, but this eframe/wgpu backend never
         // delivers the resulting event here, so the viewport is what we can
         // verify automatically.
+        // In --render mode, wait for the sample budget before capturing.
+        if self.pending_samples > 0 {
+            if self.path_tracer.samples < self.pending_samples {
+                ui.ctx().request_repaint();
+                return;
+            }
+            eprintln!("[voxferro] path traced {} samples", self.path_tracer.samples);
+            self.pending_samples = 0;
+        }
+
         if let Some(path) = self.screenshot.take() {
-            match self.scene_renderer.read_frame(&state.device, &state.queue) {
+            let frame = if self.rendering {
+                self.path_tracer.read_frame(&state.device, &state.queue)
+            } else {
+                self.scene_renderer.read_frame(&state.device, &state.queue)
+            };
+            match frame {
                 Some((w, h, rgba)) => match image_out::write_bmp(&path, w, h, &rgba) {
                     Ok(()) => eprintln!("[voxferro] wrote {path} ({w}x{h})"),
                     Err(e) => eprintln!("[voxferro] could not write {path}: {e}"),

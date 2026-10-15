@@ -370,6 +370,10 @@ impl SceneRenderer {
     ///
     /// Row-by-row because a GPU copy pads each row to 256 bytes, so the
     /// buffer is wider than the image unless the width happens to align.
+    ///
+    /// The channel order is not assumed: this target uses egui's own surface
+    /// format, which is BGRA on macOS, and reading those bytes as RGBA swaps
+    /// red and blue -- invisible on screen, wrong in every saved image.
     pub fn read_frame(
         &self,
         device: &wgpu::Device,
@@ -422,6 +426,15 @@ impl SceneRenderer {
         }
         drop(mapped);
         buffer.unmap();
+
+        if matches!(
+            self.color_format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for pixel in out.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+        }
 
         Some((width, height, out))
     }
