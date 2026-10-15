@@ -114,7 +114,8 @@ impl App {
             ],
         };
 
-        // Usage: voxferro [model.vox] [--run "<command>"] [--screenshot out.bmp]
+        // Usage: voxferro [model.vox] [--run "<command>"]... [--render-mode]
+        //           [--render N] [--screenshot out.bmp]
         let args: Vec<String> = std::env::args().skip(1).collect();
         let screenshot = args
             .iter()
@@ -157,6 +158,11 @@ impl App {
             for line in &app.console_log {
                 eprintln!("[voxferro] {line}");
             }
+        }
+
+        // --render-mode opens straight into the path tracer, interactively.
+        if args.iter().any(|a| a == "--render-mode") {
+            app.rendering = true;
         }
 
         if let Some(samples) = render_samples {
@@ -690,9 +696,14 @@ impl App {
         let view_size = egui::vec2(rect.width(), rect.height());
         let _ = ppp_early;
 
+        // Headless runs (--screenshot, --render) must not react to the mouse:
+        // a stray scroll over the window during a long render zooms the
+        // camera, and the tracer then faithfully renders the wrong view.
+        let headless = self.screenshot.is_some() || self.pending_samples > 0;
+
         // A click edits; a drag orbits. egui separates the two, so the camera
         // never lurches when placing a voxel.
-        if response.clicked() {
+        if !headless && response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let aspect = view_size.x / view_size.y.max(1.0);
                 let vp = self.camera.view_proj(aspect);
@@ -703,7 +714,7 @@ impl App {
 
         // Orbit with a drag; the factor turns pixels into a comfortable
         // radians-per-pixel rate.
-        if response.dragged() {
+        if !headless && response.dragged() {
             let d = response.drag_delta();
             self.camera.orbit(d.x * 0.01, d.y * 0.01);
             self.path_tracer.reset();
@@ -712,7 +723,7 @@ impl App {
             self.history.end_gesture();
         }
 
-        if response.hovered() {
+        if !headless && response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 self.camera.zoom(1.0 - scroll * 0.002);
@@ -865,14 +876,31 @@ impl eframe::App for App {
             } else {
                 self.scene_renderer.read_frame(&state.device, &state.queue)
             };
-            match frame {
+            let ok = match frame {
                 Some((w, h, rgba)) => match image_out::write_bmp(&path, w, h, &rgba) {
-                    Ok(()) => eprintln!("[voxferro] wrote {path} ({w}x{h})"),
-                    Err(e) => eprintln!("[voxferro] could not write {path}: {e}"),
+                    Ok(()) => {
+                        eprintln!("[voxferro] wrote {path} ({w}x{h})");
+                        true
+                    }
+                    Err(e) => {
+                        eprintln!("[voxferro] could not write {path}: {e}");
+                        false
+                    }
                 },
-                None => eprintln!("[voxferro] nothing rendered yet; no screenshot"),
-            }
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                None => {
+                    eprintln!("[voxferro] nothing rendered yet; no screenshot");
+                    false
+                }
+            };
+
+            // Exit directly rather than asking the window to close. In
+            // --render mode a repaint is always in flight, and AppKit tearing
+            // down the winit view mid display-cycle throws an NSRangeException
+            // (a Touch Bar KVO observer on `nextResponder`) and aborts -- after
+            // the image is already written, so it looked like success here
+            // and like a crash dialog to the user. Headless runs have nothing
+            // left to save, so skipping the teardown loses nothing.
+            std::process::exit(if ok { 0 } else { 1 });
         }
     }
 }

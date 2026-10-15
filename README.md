@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las ocho fases del [ROADMAP](ROADMAP.md) están completas, con **58 tests
+Las nueve fases del [ROADMAP](ROADMAP.md) están completas, con **60 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -21,6 +21,7 @@ verdes**. Funciona hoy:
 - Paleta de 256 colores, capas y consola de comandos
 - Operaciones de voxel como compute kernels en WGSL
 - Guardado atómico que conserva materiales, cámaras y ajustes del renderer
+- Path tracer progresivo (GI, sombras, ACES) con la iluminación del archivo
 
 Nativo arm64 sobre Metal: `[voxferro] graphics backend: Metal on Apple M2`.
 
@@ -30,6 +31,8 @@ Nativo arm64 sobre Metal: `[voxferro] graphics backend: Metal on Apple M2`.
 cargo run -p voxferro                                  # abre monu1.vox
 cargo run -p voxferro -- assets/vox/castle.vox         # abre otro modelo
 cargo run -p voxferro -- --run "gpu torus 166 40 14 replace" --run "save out.vox"
+cargo run -p voxferro -- assets/vox/monu1.vox --render-mode           # abre en modo Render
+cargo run -p voxferro -- assets/vox/monu1.vox --render 200 --screenshot out.bmp
 ```
 
 En la consola del panel izquierdo: `help`, `fill <c>`, `box …`, `sphere <c>`,
