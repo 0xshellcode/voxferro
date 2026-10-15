@@ -7,7 +7,7 @@
 
 use crate::{Document, Volume};
 use glam::IVec3;
-use vox_format::{Color, Material};
+use vox_format::{Color, Material, SceneNode};
 
 /// A single reversible change to a [`Document`].
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +35,17 @@ pub enum Command {
         before: Option<Material>,
         after: Option<Material>,
     },
+    /// Swaps the scene graph: moving, turning, adding or removing instances.
+    SetGraph {
+        before: Vec<SceneNode>,
+        after: Vec<SceneNode>,
+    },
+    /// Appends a model to the model list; undone by removing it again.
+    PushModel { volume: Volume },
+    /// Several commands as one undo step, applied in order and reverted in
+    /// reverse: a new model and the instance placing it, or a crop and the
+    /// move that keeps the voxels where they were.
+    Batch(Vec<Command>),
 }
 
 impl Command {
@@ -92,6 +103,9 @@ impl Command {
             Self::ReplaceModel { before, after, .. } => before == after,
             Self::SetColor { before, after, .. } => before == after,
             Self::SetMaterial { before, after, .. } => before == after,
+            Self::SetGraph { before, after } => before == after,
+            Self::PushModel { .. } => false,
+            Self::Batch(commands) => commands.iter().all(Command::is_empty),
         }
     }
 
@@ -111,6 +125,19 @@ impl Command {
             }
             Self::SetColor { index, after, .. } => document.palette.set_color(*index, *after),
             Self::SetMaterial { index, after, .. } => document.put_material(*index, after.clone()),
+            Self::SetGraph { after, .. } => {
+                document.scene.nodes = after.clone();
+                document.scene.rebuild();
+            }
+            Self::PushModel { volume } => {
+                document.scene.models.push(volume.clone());
+                document.scene.rebuild();
+            }
+            Self::Batch(commands) => {
+                for c in commands {
+                    c.apply(document);
+                }
+            }
         }
     }
 
@@ -132,6 +159,19 @@ impl Command {
             Self::SetColor { index, before, .. } => document.palette.set_color(*index, *before),
             Self::SetMaterial { index, before, .. } => {
                 document.put_material(*index, before.clone())
+            }
+            Self::SetGraph { before, .. } => {
+                document.scene.nodes = before.clone();
+                document.scene.rebuild();
+            }
+            Self::PushModel { .. } => {
+                document.scene.models.pop();
+                document.scene.rebuild();
+            }
+            Self::Batch(commands) => {
+                for c in commands.iter().rev() {
+                    c.revert(document);
+                }
             }
         }
     }
@@ -162,6 +202,11 @@ impl Command {
                 Self::SetMaterial { index, after, .. },
                 Self::SetMaterial { index: other, after: newer, .. },
             ) if index == other => {
+                after.clone_from(newer);
+                true
+            }
+            // Dragging an instance's position field: one step per drag.
+            (Self::SetGraph { after, .. }, Self::SetGraph { after: newer, .. }) => {
                 after.clone_from(newer);
                 true
             }
@@ -318,7 +363,9 @@ mod tests {
                     model_index: 0,
                     transform: Transform::default(),
                     layer: -1,
+                    ..Default::default()
                 }],
+                nodes: Vec::new(),
             },
             ..Default::default()
         }
@@ -484,4 +531,28 @@ mod tests {
         h.undo(&mut d);
         assert!(r1 != r0 && h.revision() != r1);
     }
+
+    #[test]
+    fn a_new_model_and_its_instance_undo_as_one_step() {
+        let file = vox_format::VoxFile::new_single([4, 4, 4]);
+        let mut d = Document { scene: Scene::from_file(&file), ..Default::default() };
+        let mut h = History::default();
+        let mut with_model = d.scene.clone();
+        with_model.models.push(Volume::new([2, 2, 2]));
+        let nodes = with_model.with_new_instance(1, Transform::default()).unwrap();
+        let before = d.scene.nodes.clone();
+        h.exec_alone(
+            &mut d,
+            Command::Batch(vec![
+                Command::PushModel { volume: Volume::new([2, 2, 2]) },
+                Command::SetGraph { before, after: nodes },
+            ]),
+        );
+        assert_eq!((d.scene.models.len(), d.scene.instances.len()), (2, 2));
+        h.undo(&mut d);
+        assert_eq!((d.scene.models.len(), d.scene.instances.len()), (1, 1));
+        h.redo(&mut d);
+        assert_eq!(d.scene.instances.len(), 2);
+    }
 }
+

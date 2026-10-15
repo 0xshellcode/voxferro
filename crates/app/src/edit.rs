@@ -87,7 +87,9 @@ mod tests {
                     model_index: 0,
                     transform: Transform::default(),
                     layer: -1,
+                    ..Default::default()
                 }],
+                nodes: Vec::new(),
             },
             ..Default::default()
         };

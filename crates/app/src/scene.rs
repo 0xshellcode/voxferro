@@ -83,6 +83,8 @@ impl LoadedScene {
                 None => file.models.push(volume.to_model()),
             }
         }
+        // The graph as edited: moved, added and removed instances.
+        file.nodes = self.doc.scene.nodes.clone();
         file.palette = self.doc.palette.clone();
         file.materials = self.doc.materials.clone();
 

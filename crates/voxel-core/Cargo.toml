@@ -9,3 +9,7 @@ rust-version.workspace = true
 bytemuck.workspace = true
 glam.workspace = true
 vox-format = { path = "../vox-format" }
+
+[dev-dependencies]
+# An independent reader, to check that edited scene graphs read the same.
+dot_vox = "5"

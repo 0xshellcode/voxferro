@@ -15,6 +15,7 @@ mod palette_ui;
 mod pathtrace;
 mod renderer;
 mod scene;
+mod scene_ui;
 mod select;
 mod tools;
 
@@ -407,6 +408,9 @@ impl App {
     /// After undo or redo: the step may have touched voxels, colours or
     /// materials, so everything is refreshed.
     fn refresh_document(&mut self, state: &egui_wgpu::RenderState) {
+        // Undoing an added instance can leave the selection past the end.
+        let count = self.scene.as_ref().map_or(0, |s| s.doc.scene.instances.len());
+        self.selected = self.selected.min(count.saturating_sub(1));
         self.revalidate_selection();
         self.refresh_colors(state);
         self.remesh(state);
@@ -574,6 +578,9 @@ impl App {
         }
 
         ui.separator();
+        ui.heading("Scene");
+        self.scene_ui(ui);
+        ui.separator();
         self.selection_ui(ui);
         ui.separator();
 
@@ -737,6 +744,15 @@ impl App {
             self.console_log.push(message);
             if self.mesh_dirty {
                 self.revalidate_selection();
+                self.refresh_document(state);
+            }
+            return;
+        }
+
+        if line.split_whitespace().next() == Some("instance") {
+            let message = self.instance_command(line);
+            self.console_log.push(message);
+            if self.mesh_dirty {
                 self.refresh_document(state);
             }
             return;

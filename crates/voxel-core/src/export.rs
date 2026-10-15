@@ -162,7 +162,13 @@ mod tests {
         }
         Scene {
             models: vec![v],
-            instances: vec![Instance { model_index: 0, transform: Transform::from_parts(0b0000_0100, [0, 0, 1]), layer: -1 }],
+            instances: vec![Instance {
+                model_index: 0,
+                transform: Transform::from_parts(0b0000_0100, [0, 0, 1]),
+                layer: -1,
+                ..Default::default()
+            }],
+            nodes: Vec::new(),
         }
     }
 

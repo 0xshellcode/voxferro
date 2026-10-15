@@ -54,6 +54,38 @@ impl Transform {
         m
     }
 
+    /// Encodes an axis-aligned rotation back into the `_r` byte: the
+    /// inverse of [`Transform::rotation_from_bits`].
+    pub fn rotation_to_bits(m: Mat3) -> u8 {
+        let mut bits = 0u8;
+        for row in 0..3 {
+            let Some(col) = (0..3).find(|&c| m.col(c)[row].abs() > 0.5) else {
+                return 0b0000_0100;
+            };
+            if row < 2 {
+                bits |= (col as u8) << (2 * row);
+            }
+            if m.col(col)[row] < 0.0 {
+                bits |= 1 << (4 + row);
+            }
+        }
+        bits
+    }
+
+    pub fn rotation_bits(&self) -> u8 {
+        Self::rotation_to_bits(self.rotation)
+    }
+
+    /// The transform that undoes this one. Exact: the rotation is a signed
+    /// permutation and the translation an integer vector.
+    pub fn inverse(&self) -> Transform {
+        let rotation = self.rotation.transpose();
+        Transform {
+            rotation,
+            translation: -(rotation * self.translation.as_vec3()).round().as_ivec3(),
+        }
+    }
+
     pub fn from_parts(rotation_bits: u8, translation: [i32; 3]) -> Self {
         Self {
             rotation: Self::rotation_from_bits(rotation_bits),
@@ -140,4 +172,21 @@ mod tests {
         let stepwise = parent.apply(child.apply(p));
         assert!((combined.apply(p) - stepwise).length() < 1e-4);
     }
+
+    #[test]
+    fn every_rotation_byte_round_trips() {
+        for bits in 0u8..128 {
+            let m = Transform::rotation_from_bits(bits);
+            let again = Transform::rotation_from_bits(Transform::rotation_to_bits(m));
+            assert_eq!(m, again, "bits {bits:#010b}");
+        }
+    }
+
+    #[test]
+    fn inverse_composes_to_identity() {
+        let t = Transform::from_parts(0b0010_0001, [5, -3, 8]);
+        let id = t.then(&t.inverse());
+        assert_eq!(id, Transform::default());
+    }
 }
+

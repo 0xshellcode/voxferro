@@ -128,7 +128,7 @@ impl Default for Palette {
 }
 
 /// `nTRN`: places its single child, optionally per animation frame.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TransformNode {
     pub id: i32,
     pub attributes: Dict,
@@ -147,6 +147,22 @@ impl TransformNode {
             .unwrap_or([0, 0, 0])
     }
 
+    /// Sets the first frame's placement, creating the frame if the node had
+    /// none. Other keys of the frame (such as `_f`) are kept. `_r` is left
+    /// out for the identity, as the editor writes it.
+    pub fn set_placement(&mut self, translation: [i32; 3], rotation_bits: u8) {
+        if self.frames.is_empty() {
+            self.frames.push(Dict::default());
+        }
+        let frame = &mut self.frames[0];
+        frame.set("_t", format!("{} {} {}", translation[0], translation[1], translation[2]));
+        if rotation_bits == 0b0000_0100 {
+            frame.remove("_r");
+        } else {
+            frame.set("_r", rotation_bits.to_string());
+        }
+    }
+
     /// Packed rotation byte of a frame, from its `_r` key.
     ///
     /// Decoding lives in `voxel-core`, which owns the matrix types; keeping the
@@ -161,7 +177,7 @@ impl TransformNode {
 }
 
 /// `nGRP`: groups any number of children.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct GroupNode {
     pub id: i32,
     pub attributes: Dict,
@@ -169,22 +185,64 @@ pub struct GroupNode {
 }
 
 /// A model reference inside a shape node.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ShapeModel {
     pub model_id: i32,
     pub attributes: Dict,
 }
 
 /// `nSHP`: a leaf that points at one or more models.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ShapeNode {
     pub id: i32,
     pub attributes: Dict,
     pub models: Vec<ShapeModel>,
 }
 
+/// The smallest graph that places every model: a root transform, a group,
+/// then a transform and shape per model -- the arrangement the editor writes
+/// for a new scene. Ids: 0 root, 1 group, then pairs from 2.
+///
+/// Each model sits on the ground the way the editor places it: every model in
+/// the sample corpus has `_t.z == size.z / 2`. Centred on the origin instead,
+/// half of it would be under the render view's ground plane.
+pub fn minimal_graph(models: &[Model]) -> Vec<SceneNode> {
+    let count = models.len().max(1);
+    let mut nodes = vec![
+        SceneNode::Transform(TransformNode {
+            id: 0,
+            attributes: Dict::default(),
+            child: 1,
+            layer: -1,
+            frames: vec![Dict::default()],
+        }),
+        SceneNode::Group(GroupNode {
+            id: 1,
+            attributes: Dict::default(),
+            children: (0..count).map(|i| 2 + i as i32 * 2).collect(),
+        }),
+    ];
+    for i in 0..count {
+        let transform_id = 2 + i as i32 * 2;
+        let lift = models.get(i).map_or(0, |m| m.size[2] / 2);
+        nodes.push(SceneNode::Transform(TransformNode {
+            id: transform_id,
+            attributes: Dict::default(),
+            child: transform_id + 1,
+            layer: 0,
+            frames: vec![Dict(vec![("_t".to_owned(), format!("0 0 {lift}"))])],
+        }));
+        nodes.push(SceneNode::Shape(ShapeNode {
+            id: transform_id + 1,
+            attributes: Dict::default(),
+            models: vec![ShapeModel { model_id: i as i32, attributes: Dict::default() }],
+        }));
+    }
+    nodes
+}
+
 /// A node of the scene graph, as stored in the file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SceneNode {
     Transform(TransformNode),
     Group(GroupNode),

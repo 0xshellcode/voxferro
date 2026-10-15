@@ -12,6 +12,14 @@ use voxel_core::{Combine, Command, Selection, ops};
 /// this marker is what makes Cmd+V reach us.
 const CLIPBOARD_MARKER: &str = "Voxferro voxels";
 
+/// What a model operation keeps fixed in the world.
+enum Anchor {
+    /// Voxels keep their place; the new box's cell 0 was this old cell.
+    Cell(IVec3),
+    /// The box's centre: for operations that turn or flip the contents.
+    Centre,
+}
+
 /// A selection gesture in progress.
 pub struct SelectDrag {
     /// Where the press landed, in screen points, for the marquee.
@@ -172,13 +180,42 @@ impl App {
     }
 
     /// Swaps the selected model for `op` of it, as one undo step.
-    fn replace_model(&mut self, what: &str, op: impl FnOnce(&voxel_core::Volume) -> Option<voxel_core::Volume>) -> String {
+    /// Swaps the selected model for `op` of it, as one undo step, and
+    /// moves its instances so the voxels stay where they were in the world.
+    ///
+    /// A model is placed by its pivot, `floor(size / 2)`, so any change of
+    /// size moves it unless the placement compensates. `anchor` says which
+    /// point must not move.
+    fn replace_model(
+        &mut self,
+        what: &str,
+        anchor: Anchor,
+        op: impl FnOnce(&voxel_core::Volume) -> Option<voxel_core::Volume>,
+    ) -> String {
         let Some(model) = self.selected_model() else { return "no model selected".to_owned() };
         let Some(loaded) = self.scene.as_mut() else { return "no model selected".to_owned() };
         let before = loaded.doc.scene.models[model].clone();
         let Some(after) = op(&before) else { return format!("{what}: nothing to do") };
         let [x, y, z] = after.size();
-        if !self.history.exec_alone(&mut loaded.doc, Command::ReplaceModel { model, before, after }) {
+
+        let (p0, p1) = (before.pivot(), after.pivot());
+        let size = |v: &voxel_core::Volume| Vec3::from_array(v.size().map(|s| s as f32));
+        // The shift, in the model's own axes, that keeps the anchor fixed.
+        let delta = match anchor {
+            // New cell 0 was old cell `origin`: t' = t + R (origin + p1 - p0).
+            Anchor::Cell(origin) => origin.as_vec3() + p1 - p0,
+            // The box centre stays: t' = t + R (c0 - c1).
+            Anchor::Centre => (size(&before) * 0.5 - p0) - (size(&after) * 0.5 - p1),
+        }
+        .round()
+        .as_ivec3();
+
+        let mut commands = vec![Command::ReplaceModel { model, before, after }];
+        if delta != IVec3::ZERO {
+            let nodes = loaded.doc.scene.with_model_shifted(model, delta);
+            commands.push(Command::SetGraph { before: loaded.doc.scene.nodes.clone(), after: nodes });
+        }
+        if !self.history.exec_alone(&mut loaded.doc, Command::Batch(commands)) {
             return format!("{what}: nothing changed");
         }
         // Coordinates mean something else in the new shape.
@@ -272,17 +309,23 @@ impl App {
                 self.move_selection(IVec3::new(dx, dy, dz))
             }
             ["rotate", a] => match axis(Some(a)) {
-                Some(axis) => self.replace_model("rotate", |v| Some(ops::rotate(v, axis))),
+                Some(axis) => self.replace_model("rotate", Anchor::Centre, |v| Some(ops::rotate(v, axis))),
                 None => "rotate x|y|z".to_owned(),
             },
             ["mirror", a] => match axis(Some(a)) {
-                Some(axis) => self.replace_model("mirror", |v| Some(ops::mirror(v, axis))),
+                Some(axis) => self.replace_model("mirror", Anchor::Centre, |v| Some(ops::mirror(v, axis))),
                 None => "mirror x|y|z".to_owned(),
             },
-            ["crop"] => self.replace_model("crop", ops::crop),
+            ["crop"] => {
+                let lo = self
+                    .selected_model()
+                    .and_then(|m| self.scene.as_ref()?.doc.scene.models.get(m)?.occupied_bounds())
+                    .map_or(IVec3::ZERO, |(lo, _)| IVec3::new(lo[0] as i32, lo[1] as i32, lo[2] as i32));
+                self.replace_model("crop", Anchor::Cell(lo), ops::crop)
+            }
             ["resize", x, y, z] => match (x.parse::<u32>(), y.parse::<u32>(), z.parse::<u32>()) {
                 (Ok(x), Ok(y), Ok(z)) if [x, y, z].iter().all(|s| (1..=256).contains(s)) => {
-                    self.replace_model("resize", |v| Some(ops::resize(v, [x, y, z])))
+                    self.replace_model("resize", Anchor::Cell(IVec3::ZERO), |v| Some(ops::resize(v, [x, y, z])))
                 }
                 _ => "resize <x> <y> <z>, each 1 to 256".to_owned(),
             },

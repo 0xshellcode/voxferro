@@ -12,22 +12,34 @@ use vox_format::{SceneNode, VoxFile};
 pub struct NodeId(pub u32);
 
 /// One placed model: which model, where, and on which layer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Instance {
     pub model_index: usize,
+    /// World transform: the whole chain of transform nodes above it.
     pub transform: Transform,
     pub layer: i32,
+    /// The `nTRN` directly above the shape, the one that moves this
+    /// instance alone. `None` when the shape hangs straight off a group, or
+    /// when there is no graph.
+    pub node: Option<i32>,
+    /// The world transform of that node's parent, so a new world placement
+    /// can be turned back into the node's own local one.
+    pub parent: Transform,
 }
 
-/// A scene flattened into the list of model placements it describes.
+/// The scene graph as stored, plus the list of model placements it
+/// describes.
 ///
-/// The file stores nodes as a flat list referring to each other by id. Rather
-/// than rebuilding a pointer tree, we walk it once with an explicit stack and
-/// keep the result: nothing downstream needs the intermediate shape.
+/// The file stores nodes as a flat list referring to each other by id. The
+/// nodes stay the source of truth -- edits change them and saving writes them
+/// back, groups, names and animation frames included -- and `instances` is
+/// their flattened form, rebuilt after every change with an explicit-stack
+/// walk rather than a pointer tree.
 #[derive(Debug, Clone, Default)]
 pub struct Scene {
     pub instances: Vec<Instance>,
     pub models: Vec<Volume>,
+    pub nodes: Vec<SceneNode>,
 }
 
 impl Scene {
@@ -44,78 +56,20 @@ impl Scene {
     /// itself.
     pub fn from_file_at_frame(file: &VoxFile, frame: u32) -> Self {
         let models: Vec<Volume> = file.models.iter().map(Volume::from_model).collect();
+        // A file without a graph gets the one a save would write, so the two
+        // agree on where its models sit and edits have nodes to change.
+        let nodes = if file.nodes.is_empty() {
+            vox_format::minimal_graph(&file.models)
+        } else {
+            file.nodes.clone()
+        };
+        let instances = flatten(&nodes, models.len(), frame);
+        Self { instances, models, nodes }
+    }
 
-        // Index nodes by id so children resolve in constant time.
-        let mut by_id = std::collections::HashMap::new();
-        for node in &file.nodes {
-            by_id.insert(node.id(), node);
-        }
-
-        let mut instances = Vec::new();
-        // Walk from the root transform, carrying the accumulated transform.
-        // An explicit stack rather than recursion: a malformed file could
-        // nest arbitrarily deep, and a stack overflow is not a nice failure.
-        let root = file.nodes.first().map(|n| n.id()).unwrap_or(0);
-        let mut stack = vec![(root, Transform::default(), -1i32, 0u32)];
-        const MAX_DEPTH: u32 = 1024;
-
-        while let Some((id, parent_transform, layer, depth)) = stack.pop() {
-            if depth > MAX_DEPTH {
-                continue;
-            }
-            let Some(node) = by_id.get(&id) else { continue };
-
-            match node {
-                SceneNode::Transform(t) => {
-                    // Frame 0 only: animation playback would pick another.
-                    let local = Transform::from_parts(t.rotation_bits(0), t.translation(0));
-                    let combined = local.then(&parent_transform);
-                    let layer = if t.layer >= 0 { t.layer } else { layer };
-                    stack.push((t.child, combined, layer, depth + 1));
-                }
-                SceneNode::Group(g) => {
-                    for child in &g.children {
-                        stack.push((*child, parent_transform, layer, depth + 1));
-                    }
-                }
-                SceneNode::Shape(s) => {
-                    // Pick the entry for this frame; fall back to the first
-                    // when the shape is not animated.
-                    let chosen = s
-                        .models
-                        .iter()
-                        .find(|m| {
-                            m.attributes
-                                .get("_f")
-                                .and_then(|v| v.parse::<u32>().ok())
-                                .is_some_and(|f| f == frame)
-                        })
-                        .or_else(|| s.models.first());
-
-                    if let Some(m) = chosen {
-                        let index = m.model_id as usize;
-                        if index < models.len() {
-                            instances.push(Instance {
-                                model_index: index,
-                                transform: parent_transform,
-                                layer,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        // A file with voxels but no usable graph still deserves to render.
-        if instances.is_empty() && !models.is_empty() {
-            instances.push(Instance {
-                model_index: 0,
-                transform: Transform::default(),
-                layer: -1,
-            });
-        }
-
-        Self { instances, models }
+    /// Recomputes `instances` after the nodes or the model list changed.
+    pub fn rebuild(&mut self) {
+        self.instances = flatten(&self.nodes, self.models.len(), 0);
     }
 
     /// How many animation frames the file declares, from the largest shape.
@@ -249,6 +203,98 @@ impl Scene {
     }
 }
 
+/// Walks the graph from the root, carrying the accumulated transform.
+///
+/// A shape node with several models is not several models placed at once: it
+/// is one model keyed by animation frame, each entry tagged with `_f`.
+/// Drawing them all would stack every frame of the animation on top of
+/// itself.
+fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance> {
+    // Index nodes by id so children resolve in constant time.
+    let by_id: std::collections::HashMap<i32, &SceneNode> = nodes.iter().map(|n| (n.id(), n)).collect();
+
+    let mut instances = Vec::new();
+    // An explicit stack rather than recursion: a malformed file could nest
+    // arbitrarily deep, and a stack overflow is not a nice failure. Each
+    // entry carries the nearest transform node and its parent's transform.
+    struct Step {
+        id: i32,
+        transform: Transform,
+        layer: i32,
+        owner: Option<(i32, Transform)>,
+        depth: u32,
+    }
+    let root = nodes.first().map(|n| n.id()).unwrap_or(0);
+    let mut stack = vec![Step { id: root, transform: Transform::default(), layer: -1, owner: None, depth: 0 }];
+    const MAX_DEPTH: u32 = 1024;
+
+    while let Some(step) = stack.pop() {
+        if step.depth > MAX_DEPTH {
+            continue;
+        }
+        let Some(node) = by_id.get(&step.id) else { continue };
+
+        match node {
+            SceneNode::Transform(t) => {
+                // Frame 0 only: animation playback would pick another.
+                let local = Transform::from_parts(t.rotation_bits(0), t.translation(0));
+                stack.push(Step {
+                    id: t.child,
+                    transform: local.then(&step.transform),
+                    layer: if t.layer >= 0 { t.layer } else { step.layer },
+                    owner: Some((t.id, step.transform)),
+                    depth: step.depth + 1,
+                });
+            }
+            SceneNode::Group(g) => {
+                // Pushed in reverse so they pop, and list, in file order.
+                for child in g.children.iter().rev() {
+                    stack.push(Step {
+                        id: *child,
+                        transform: step.transform,
+                        layer: step.layer,
+                        owner: None,
+                        depth: step.depth + 1,
+                    });
+                }
+            }
+            SceneNode::Shape(s) => {
+                // Pick the entry for this frame; fall back to the first when
+                // the shape is not animated.
+                let chosen = s
+                    .models
+                    .iter()
+                    .find(|m| {
+                        m.attributes
+                            .get("_f")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .is_some_and(|f| f == frame)
+                    })
+                    .or_else(|| s.models.first());
+
+                if let Some(m) = chosen {
+                    let index = m.model_id as usize;
+                    if index < model_count {
+                        instances.push(Instance {
+                            model_index: index,
+                            transform: step.transform,
+                            layer: step.layer,
+                            node: step.owner.map(|(id, _)| id),
+                            parent: step.owner.map(|(_, p)| p).unwrap_or_default(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // A file with voxels but no usable graph still deserves to render.
+    if instances.is_empty() && model_count > 0 {
+        instances.push(Instance { model_index: 0, layer: -1, ..Default::default() });
+    }
+    instances
+}
+
 /// A model voxel's world cell under a transform.
 ///
 /// The voxel centre relative to the pivot always has .5 fractions, and an
@@ -330,8 +376,10 @@ mod tests {
                     model_index: 0,
                     transform: Transform::from_parts(bits, t),
                     layer: -1,
+                    ..Default::default()
                 })
                 .collect(),
+            nodes: Vec::new(),
         }
     }
 

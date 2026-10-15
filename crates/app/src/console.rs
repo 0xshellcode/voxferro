@@ -37,6 +37,7 @@ pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut Histo
                       brush [attach|erase|paint|select] [voxel|box|line|face|fill] | color <n>; \
                       select all|none|invert|color [n] | delete | paint | copy | cut | paste | \
                       move dx dy dz; palette <i> r g b | material <i> <kind> [k=v]; \
+                      instance list|select i|move|place|turn|dup|delete|new; \
                       open | new | save | export <file.obj>; env …; undo | redo"
                 .to_owned(),
             changed: false,
@@ -174,7 +175,7 @@ mod tests {
         let mut v = Volume::new([8, 8, 8]);
         v.set(1, 1, 1, 3);
         let doc = Document {
-            scene: voxel_core::Scene { models: vec![v], instances: Vec::new() },
+            scene: voxel_core::Scene { models: vec![v], ..Default::default() },
             ..Default::default()
         };
         (doc, History::default())

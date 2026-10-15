@@ -7,6 +7,7 @@ mod atmosphere;
 pub mod brush;
 mod command;
 mod document;
+pub mod graph;
 mod env_map;
 pub mod export;
 pub mod greedy;

@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–19 del [ROADMAP](ROADMAP.md) están completas, con **134 tests
+Las fases 0–20 del [ROADMAP](ROADMAP.md) están completas, con **146 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -23,6 +23,8 @@ verdes**. Funciona hoy:
   relleno, con vista previa y undo/redo de un paso por trazo
 - Selección (marco, cara, color), copiar/cortar/pegar, mover; rotar, espejo,
   recortar y cambiar tamaño del modelo
+- Escena editable: mover, girar, duplicar, añadir y quitar modelos, guardado
+  en el grafo de escena del archivo
 - Paleta y materiales editables desde la interfaz, con undo
 - Exportación a OBJ + MTL + textura de paleta
 - Capas y consola de comandos
@@ -61,6 +63,7 @@ Cmd+A, Esc, Supr, Cmd+C/X/V, flechas y Re Pág/Av Pág para moverla.
 | Pincel | `brush [attach\|erase\|paint\|select] [voxel\|box\|line\|face\|fill]`, `color <n>` |
 | Selección | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz` |
 | Modelo | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
+| Escena | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
 | Paleta | `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [clave=valor]…` |
 | Render | `env uniform\|atmosphere [elev]\|ibl <mapa> [i] [rot]` |
 

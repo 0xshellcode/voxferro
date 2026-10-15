@@ -86,12 +86,15 @@ impl VoxFile {
 
         // The scene graph. A file with none still needs one, or the editor
         // opens it with nothing placed.
-        if self.nodes.is_empty() {
-            write_minimal_graph(&mut children, &self.models);
+        let minimal;
+        let nodes = if self.nodes.is_empty() {
+            minimal = crate::minimal_graph(&self.models);
+            &minimal
         } else {
-            for node in &self.nodes {
-                write_node(&mut children, node);
-            }
+            &self.nodes
+        };
+        for node in nodes {
+            write_node(&mut children, node);
         }
 
         for layer in &self.layers {
@@ -201,64 +204,6 @@ fn write_node(children: &mut Writer, node: &SceneNode) {
             }
             children.chunk(b"nSHP", &w.out);
         }
-    }
-}
-
-/// Writes the smallest graph that places every model at the origin.
-///
-/// Shape: a root transform, a group, then a transform and shape per model —
-/// the same arrangement the editor writes for a single-model scene.
-fn write_minimal_graph(children: &mut Writer, models: &[crate::Model]) {
-    let count = models.len().max(1);
-
-    // Ids: 0 root transform, 1 group, then pairs from 2.
-    let mut root = Writer::new();
-    root.i32(0);
-    root.dict(&Dict::default());
-    root.i32(1); // child: the group
-    root.i32(-1);
-    root.i32(-1); // no layer
-    root.u32(1);
-    root.dict(&Dict::default());
-    children.chunk(b"nTRN", &root.out);
-
-    let mut group = Writer::new();
-    group.i32(1);
-    group.dict(&Dict::default());
-    group.u32(count as u32);
-    for i in 0..count {
-        group.i32(2 + (i as i32) * 2);
-    }
-    children.chunk(b"nGRP", &group.out);
-
-    for i in 0..count {
-        let transform_id = 2 + (i as i32) * 2;
-        let shape_id = transform_id + 1;
-
-        // Sit the model on the ground the way the editor does: every model in
-        // the sample corpus has `_t.z == size.z / 2`. Without it the model is
-        // centred on the origin, half of it under the render ground plane --
-        // fine in the editor's Model view, invisible in its Render view.
-        let lift = models.get(i).map_or(0, |m| m.size[2] / 2);
-        let frame = Dict(vec![("_t".to_owned(), format!("0 0 {lift}"))]);
-
-        let mut t = Writer::new();
-        t.i32(transform_id);
-        t.dict(&Dict::default());
-        t.i32(shape_id);
-        t.i32(-1);
-        t.i32(0); // layer 0
-        t.u32(1);
-        t.dict(&frame);
-        children.chunk(b"nTRN", &t.out);
-
-        let mut s = Writer::new();
-        s.i32(shape_id);
-        s.dict(&Dict::default());
-        s.u32(1);
-        s.i32(i as i32);
-        s.dict(&Dict::default());
-        children.chunk(b"nSHP", &s.out);
     }
 }
 
