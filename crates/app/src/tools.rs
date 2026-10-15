@@ -195,7 +195,8 @@ impl App {
         Some(corners)
     }
 
-    /// `brush [attach|erase|paint] [voxel|box|line|face|fill]`, `color <n>`.
+    /// `brush [attach|erase|paint|select] [voxel|box|line|face|fill]`,
+    /// `color <n>`.
     pub fn brush_command(&mut self, line: &str) -> String {
         let mut words = line.split_whitespace();
         match words.next() {
@@ -208,15 +209,19 @@ impl App {
             },
             _ => {
                 for word in words {
-                    if let Some(mode) = BrushMode::parse(word) {
+                    if word == "select" {
+                        self.selecting = true;
+                    } else if let Some(mode) = BrushMode::parse(word) {
                         self.brush_mode = mode;
+                        self.selecting = false;
                     } else if let Some(shape) = BrushShape::parse(word) {
                         self.brush_shape = shape;
                     } else {
                         return format!("unknown brush '{word}': attach, erase, paint; voxel, box, line, face, fill");
                     }
                 }
-                format!("brush {} {}", self.brush_mode.name(), self.brush_shape.name())
+                let mode = if self.selecting { "select" } else { self.brush_mode.name() };
+                format!("brush {mode} {}", self.brush_shape.name())
             }
         }
     }

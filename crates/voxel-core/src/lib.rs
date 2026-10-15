@@ -9,8 +9,10 @@ mod command;
 mod document;
 mod env_map;
 mod mesh;
+pub mod ops;
 mod raycast;
 mod scene;
+mod selection;
 mod transform;
 mod volume;
 
@@ -22,5 +24,6 @@ pub use env_map::{EnvMap, EnvSampling, HdrError};
 pub use mesh::{Face, Mesh, Vertex};
 pub use raycast::{raycast, Hit};
 pub use scene::{BakeError, Baked, Instance, NodeId, Scene, ScenePick, local_cell, world_cell};
+pub use selection::{Clipboard, Combine, Selection};
 pub use transform::Transform;
 pub use volume::Volume;

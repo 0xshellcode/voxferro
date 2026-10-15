@@ -14,6 +14,7 @@ mod image_out;
 mod pathtrace;
 mod renderer;
 mod scene;
+mod select;
 mod tools;
 
 use camera::OrbitCamera;
@@ -101,6 +102,14 @@ struct App {
     stroke: Option<tools::Stroke>,
     /// A press on empty space turns the drag into an orbit.
     orbiting: bool,
+    /// The Select tool is active instead of a brush.
+    selecting: bool,
+    selection: Option<voxel_core::Selection>,
+    select_drag: Option<select::SelectDrag>,
+    clipboard: voxel_core::Clipboard,
+    /// The Resize fields, and which model and size they were filled from.
+    resize_to: [u32; 3],
+    resize_for: Option<(usize, [u32; 3])>,
     /// Set when the scene changed and the GPU mesh is stale.
     mesh_dirty: bool,
     /// Per-layer visibility; the format defines eight.
@@ -163,6 +172,12 @@ impl App {
             brush_shape: voxel_core::BrushShape::Voxel,
             stroke: None,
             orbiting: false,
+            selecting: false,
+            selection: None,
+            select_drag: None,
+            clipboard: voxel_core::Clipboard::default(),
+            resize_to: [32; 3],
+            resize_for: None,
             mesh_dirty: false,
             hidden_layers: [false; 8],
             console_input: String::new(),
@@ -279,6 +294,7 @@ impl App {
             loaded.version
         );
         self.selected = 0;
+        self.selection = None;
         // Undo steps name models by index: they mean nothing in another
         // file.
         self.history.clear();
@@ -295,13 +311,11 @@ impl App {
     /// would scale better for a scene that repeats one model many times, but
     /// a single buffer keeps the draw path trivial while the geometry fits.
     fn upload_current(&mut self, state: &egui_wgpu::RenderState) {
+        let mesh = self.build_mesh();
         // Disjoint field borrows: `scene` is read while `scene_renderer` is
         // mutated, which the borrow checker allows because they are separate
         // fields accessed directly rather than through a method on `self`.
         let Some(loaded) = &self.scene else { return };
-
-        let hidden = self.hidden_layers;
-        let mesh = Mesh::from_scene_where(&loaded.doc.scene, |i| !is_hidden(&hidden, i.layer));
         eprintln!(
             "[voxferro] {}: {} instances, {} voxels, {} triangles",
             loaded.name,
@@ -320,12 +334,25 @@ impl App {
 
     /// Rebuilds the GPU mesh after an edit, leaving the camera alone.
     fn remesh(&mut self, state: &egui_wgpu::RenderState) {
-        let Some(loaded) = &self.scene else { return };
-        let hidden = self.hidden_layers;
-        let mesh = Mesh::from_scene_where(&loaded.doc.scene, |i| !is_hidden(&hidden, i.layer));
+        if self.scene.is_none() {
+            return;
+        }
+        let mesh = self.build_mesh();
         self.scene_renderer.set_mesh(&state.device, &mesh);
         self.upload_trace_volume(state);
         self.mesh_dirty = false;
+    }
+
+    /// The viewport mesh: visible layers only, selected voxels flagged.
+    fn build_mesh(&self) -> Mesh {
+        let Some(loaded) = &self.scene else { return Mesh::default() };
+        let hidden = self.hidden_layers;
+        let selection = self.selection.as_ref();
+        Mesh::from_scene_marked(
+            &loaded.doc.scene,
+            |i| !is_hidden(&hidden, i.layer),
+            |model, p| selection.is_some_and(|s| s.model == model && s.contains(p)),
+        )
     }
 
     /// Hands the palette and materials to both renderers. Cheap: two small
@@ -379,6 +406,7 @@ impl App {
     /// After undo or redo: the step may have touched voxels, colours or
     /// materials, so everything is refreshed.
     fn refresh_document(&mut self, state: &egui_wgpu::RenderState) {
+        self.revalidate_selection();
         self.refresh_colors(state);
         self.remesh(state);
     }
@@ -505,7 +533,18 @@ impl App {
         ui.heading("Brush");
         ui.horizontal(|ui| {
             for (mode, name) in voxel_core::BrushMode::ALL {
-                ui.selectable_value(&mut self.brush_mode, mode, capitalised(name));
+                let on = !self.selecting && self.brush_mode == mode;
+                if ui.selectable_label(on, capitalised(name)).clicked() {
+                    self.brush_mode = mode;
+                    self.selecting = false;
+                }
+            }
+            if ui
+                .selectable_label(self.selecting, "Select")
+                .on_hover_text("Shift adds, Option subtracts. Box drags a marquee.")
+                .clicked()
+            {
+                self.selecting = true;
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -522,6 +561,10 @@ impl App {
             ui.painter()
                 .rect_filled(rect, 2.0, egui::Color32::from_rgb(c.r, c.g, c.b));
         }
+
+        ui.separator();
+        self.selection_ui(ui);
+        ui.separator();
 
         ui.horizontal(|ui| {
             if ui
@@ -669,6 +712,22 @@ impl App {
         if line.split_whitespace().next() == Some("env") {
             let message = self.env_command(line, state);
             self.console_log.push(message);
+            return;
+        }
+
+        if matches!(
+            line.split_whitespace().next(),
+            Some(
+                "select" | "delete" | "paint" | "copy" | "cut" | "paste" | "move" | "rotate"
+                    | "mirror" | "crop" | "resize"
+            )
+        ) {
+            let message = self.select_command(line, ctx);
+            self.console_log.push(message);
+            if self.mesh_dirty {
+                self.revalidate_selection();
+                self.refresh_document(state);
+            }
             return;
         }
 
@@ -907,7 +966,13 @@ impl App {
         if !self.scripted_strokes.is_empty() {
             for (from, to) in std::mem::take(&mut self.scripted_strokes) {
                 let at = |f: egui::Vec2| rect.min + f * view_size;
-                if self.begin_stroke(ray_at(&self.camera, at(from))) {
+                if self.selecting {
+                    let mods = egui::Modifiers::default();
+                    if self.begin_select(ray_at(&self.camera, at(from)), at(from), mods) {
+                        self.update_select(ray_at(&self.camera, at(to)), at(to));
+                        self.finish_select(self.camera.view_proj(aspect), rect);
+                    }
+                } else if self.begin_stroke(ray_at(&self.camera, at(from))) {
                     self.update_stroke(ray_at(&self.camera, at(to)));
                     self.finish_stroke();
                 }
@@ -922,7 +987,7 @@ impl App {
         // The primary button edits when it goes down on a voxel and orbits
         // when it goes down on empty space; the secondary and middle buttons
         // always orbit. In Render mode every drag orbits.
-        let (pressed, down, released, delta, secondary) = ui.input(|i| {
+        let (pressed, down, released, delta, secondary, modifiers) = ui.input(|i| {
             let p = &i.pointer;
             (
                 p.primary_pressed(),
@@ -930,18 +995,31 @@ impl App {
                 p.primary_released(),
                 p.delta(),
                 p.secondary_down() || p.middle_down(),
+                i.modifiers,
             )
         });
         let pointer = response.hover_pos();
         if !headless {
             if pressed && response.hovered() {
                 let hit = !self.rendering
-                    && pointer.is_some_and(|pos| self.begin_stroke(ray_at(&self.camera, pos)));
+                    && pointer.is_some_and(|pos| {
+                        let ray = ray_at(&self.camera, pos);
+                        if self.selecting {
+                            self.begin_select(ray, pos, modifiers)
+                        } else {
+                            self.begin_stroke(ray)
+                        }
+                    });
                 self.orbiting = !hit;
             }
-            if down && self.stroke.is_some() {
+            if down && (self.stroke.is_some() || self.select_drag.is_some()) {
                 if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                    self.update_stroke(ray_at(&self.camera, pos));
+                    let ray = ray_at(&self.camera, pos);
+                    if self.select_drag.is_some() {
+                        self.update_select(ray, pos);
+                    } else {
+                        self.update_stroke(ray);
+                    }
                 }
             }
             // The factor turns pixels into a comfortable radians-per-pixel
@@ -952,6 +1030,7 @@ impl App {
             }
             if released {
                 self.finish_stroke();
+                self.finish_select(self.camera.view_proj(aspect), rect);
                 self.orbiting = false;
             }
         }
@@ -1010,7 +1089,7 @@ impl App {
         }
 
         // Outline the cell the brush would act on.
-        let hover = if headless || self.stroke.is_some() || self.orbiting {
+        let hover = if headless || self.stroke.is_some() || self.orbiting || self.selecting {
             None
         } else {
             pointer.and_then(|pos| self.hover_cell(ray_at(&self.camera, pos)))
@@ -1035,6 +1114,18 @@ impl App {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
+
+        if let Some(drag) = &self.select_drag {
+            if self.brush_shape == voxel_core::BrushShape::Box {
+                let marquee = egui::Rect::from_two_pos(drag.from, drag.to);
+                ui.painter().rect_stroke(
+                    marquee,
+                    0.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 180, 255)),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
 
         if let Some(corners) = hover {
             let vp = self.camera.view_proj(aspect);
@@ -1128,6 +1219,7 @@ impl eframe::App for App {
 
         let ctx = ui.ctx().clone();
         self.file_input(&ctx, &state);
+        self.selection_input(&ctx);
         self.confirm_ui(&ctx, &state);
         let title = self.title();
         if title != self.window_title {

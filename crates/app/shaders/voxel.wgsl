@@ -38,8 +38,16 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
     // Round before indexing: the index arrives as a float through the vertex
     // attribute, and truncation would pick the wrong colour at the boundary.
-    let index = u32(in.palette_index + 0.5);
-    out.color = palette.colors[index].rgb;
+    // Indices from 256 up are selected voxels: the mesher adds 256 as a
+    // flag. Tint them toward a light blue so the selection reads on any
+    // colour while the colour itself stays recognisable.
+    let raw = u32(in.palette_index + 0.5);
+    let color = palette.colors[raw & 255u].rgb;
+    if (raw >= 256u) {
+        out.color = mix(color, vec3<f32>(0.35, 0.65, 1.0), 0.55);
+    } else {
+        out.color = color;
+    }
     return out;
 }
 

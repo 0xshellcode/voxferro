@@ -146,6 +146,20 @@ impl Mesh {
     /// rotating. Skipping that is the classic way to get a scene where every
     /// model is offset by half its own size.
     pub fn append_volume(&mut self, volume: &Volume, transform: &Transform) {
+        self.append_volume_marked(volume, transform, |_| false);
+    }
+
+    /// Like [`Mesh::append_volume`], flagging the voxels `marked` accepts.
+    ///
+    /// The flag rides in the palette index as `+ 256`, which no real index
+    /// reaches; the viewport shader reads it to highlight a selection
+    /// without a second draw pass.
+    pub fn append_volume_marked(
+        &mut self,
+        volume: &Volume,
+        transform: &Transform,
+        marked: impl Fn(glam::IVec3) -> bool,
+    ) {
         let [sx, sy, sz] = volume.size();
         let half = volume.pivot();
 
@@ -166,6 +180,11 @@ impl Mesh {
 
                         let base = self.vertices.len() as u32;
                         let normal = transform.rotation * Vec3::from_array(face.normal());
+                        let flag = if marked(glam::IVec3::new(x as i32, y as i32, z as i32)) {
+                            256.0
+                        } else {
+                            0.0
+                        };
                         for corner in face.corners() {
                             let local = Vec3::new(
                                 x as f32 + corner[0],
@@ -176,7 +195,7 @@ impl Mesh {
                             self.vertices.push(Vertex {
                                 position: p.to_array(),
                                 normal: normal.to_array(),
-                                palette_index: index as f32,
+                                palette_index: index as f32 + flag,
                             });
                         }
                         self.indices.extend_from_slice(&[
@@ -203,13 +222,24 @@ impl Mesh {
         scene: &crate::Scene,
         keep: impl Fn(&crate::Instance) -> bool,
     ) -> Self {
+        Self::from_scene_marked(scene, keep, |_, _| false)
+    }
+
+    /// Meshes the instances `keep` accepts, flagging the voxels `marked`
+    /// accepts, given a model index and a cell in that model.
+    pub fn from_scene_marked(
+        scene: &crate::Scene,
+        keep: impl Fn(&crate::Instance) -> bool,
+        marked: impl Fn(usize, glam::IVec3) -> bool,
+    ) -> Self {
         let mut mesh = Self::default();
         for instance in &scene.instances {
             if !keep(instance) {
                 continue;
             }
             if let Some(volume) = scene.models.get(instance.model_index) {
-                mesh.append_volume(volume, &instance.transform);
+                let model = instance.model_index;
+                mesh.append_volume_marked(volume, &instance.transform, |p| marked(model, p));
             }
         }
         mesh
