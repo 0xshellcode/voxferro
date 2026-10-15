@@ -1,7 +1,7 @@
 //! Camera tools: framing, fixed views, projection, and their shortcuts.
 
 use crate::camera::View;
-use crate::{App, is_hidden};
+use crate::App;
 use eframe::egui;
 use glam::Vec3;
 
@@ -9,9 +9,9 @@ impl App {
     /// World bounds of every visible voxel.
     fn bounds_all(&self) -> Option<(Vec3, Vec3)> {
         let loaded = self.scene.as_ref()?;
-        let hidden = self.hidden_layers;
+        let visible = self.visibility();
         let mut bounds = None;
-        for instance in loaded.doc.scene.instances.iter().filter(|i| !is_hidden(&hidden, i.layer)) {
+        for instance in loaded.doc.scene.instances.iter().filter(|i| visible.shows(i)) {
             let volume = loaded.doc.scene.models.get(instance.model_index)?;
             if let Some((lo, hi)) = volume.occupied_bounds() {
                 let cells = [lo, hi].map(|c| glam::IVec3::new(c[0] as i32, c[1] as i32, c[2] as i32));

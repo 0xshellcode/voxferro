@@ -54,6 +54,7 @@ impl LoadedScene {
                 palette: file.palette.clone(),
                 materials: file.materials.clone(),
                 render: file.render_objects.clone(),
+                layers: layers_for(&file),
             },
             source: file,
             path,
@@ -86,6 +87,7 @@ impl LoadedScene {
         file.palette = self.doc.palette.clone();
         file.materials = self.doc.materials.clone();
         file.render_objects = self.doc.render.clone();
+        file.layers = self.doc.layers.clone();
 
         let bytes = file.to_bytes();
 
@@ -101,3 +103,22 @@ impl LoadedScene {
         Ok(bytes.len())
     }
 }
+
+/// The file's layers, plus any the scene graph uses without describing:
+/// the editor writes the full table, and a new file has none at all.
+fn layers_for(file: &VoxFile) -> Vec<vox_format::Layer> {
+    let mut layers = file.layers.clone();
+    let used = file.nodes.iter().filter_map(|n| match n {
+        vox_format::SceneNode::Transform(t) if t.layer >= 0 => Some(t.layer),
+        _ => None,
+    });
+    // At least the editor's own eight, so there are layers to move to.
+    for id in (0..8).chain(used) {
+        if !layers.iter().any(|l| l.id == id) {
+            layers.push(vox_format::Layer { id, attributes: vox_format::Dict::default() });
+        }
+    }
+    layers.sort_by_key(|l| l.id);
+    layers
+}
+

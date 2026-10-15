@@ -3,7 +3,6 @@
 //! saved back as it is.
 
 use crate::App;
-use eframe::egui;
 use glam::IVec3;
 use voxel_core::graph::GraphError;
 use voxel_core::{Command, Transform, Volume};
@@ -12,7 +11,7 @@ use vox_format::SceneNode;
 impl App {
     /// Records a new graph as one undo step. `merge` lets successive edits
     /// of one drag (a position field) collapse into a single step.
-    fn exec_graph(&mut self, nodes: Result<Vec<SceneNode>, GraphError>, merge: bool) -> Result<(), String> {
+    pub(crate) fn exec_graph(&mut self, nodes: Result<Vec<SceneNode>, GraphError>, merge: bool) -> Result<(), String> {
         let nodes = nodes.map_err(|e| e.to_string())?;
         let Some(loaded) = self.scene.as_mut() else { return Err("nothing open".to_owned()) };
         let command = Command::SetGraph { before: loaded.doc.scene.nodes.clone(), after: nodes };
@@ -25,7 +24,7 @@ impl App {
         Ok(())
     }
 
-    fn after_graph_change(&mut self) {
+    pub(crate) fn after_graph_change(&mut self) {
         let count = self.scene.as_ref().map_or(0, |s| s.doc.scene.instances.len());
         self.selected = self.selected.min(count.saturating_sub(1));
         self.mesh_dirty = true;
@@ -102,7 +101,7 @@ impl App {
     }
 
     /// Far enough along x for a copy of instance `i` to sit beside it.
-    fn side_offset(&self, i: usize) -> IVec3 {
+    pub(crate) fn side_offset(&self, i: usize) -> IVec3 {
         let Some(loaded) = &self.scene else { return IVec3::X };
         let Some(inst) = loaded.doc.scene.instances.get(i) else { return IVec3::X };
         let Some(volume) = loaded.doc.scene.models.get(inst.model_index) else { return IVec3::X };
@@ -135,67 +134,5 @@ impl App {
         self.selected = count - 1;
         self.after_graph_change();
         format!("new model {}x{}x{}, instance {}", size[0], size[1], size[2], count - 1)
-    }
-
-    pub fn scene_ui(&mut self, ui: &mut egui::Ui) {
-        let Some(loaded) = &self.scene else { return };
-        let rows: Vec<(usize, IVec3, bool)> = loaded
-            .doc
-            .scene
-            .instances
-            .iter()
-            .map(|i| (i.model_index, i.transform.translation, i.node.is_some()))
-            .collect();
-
-        let mut pick = None;
-        egui::ScrollArea::vertical().max_height(110.0).id_salt("instances").show(ui, |ui| {
-            for (n, (model, t, _)) in rows.iter().enumerate() {
-                let label = format!("{n}: model {model}  ({}, {}, {})", t.x, t.y, t.z);
-                if ui.selectable_label(n == self.selected, label).clicked() {
-                    pick = Some(n);
-                }
-            }
-        });
-        if let Some(n) = pick {
-            self.selected = n;
-        }
-
-        let Some(&(_, translation, placeable)) = rows.get(self.selected) else { return };
-        let log = |app: &mut App, message: String| app.console_log.push(message);
-
-        ui.add_enabled_ui(placeable, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Position");
-                let mut p = translation;
-                let mut changed = false;
-                for v in [&mut p.x, &mut p.y, &mut p.z] {
-                    changed |= ui.add(egui::DragValue::new(v).speed(0.2)).changed();
-                }
-                if changed {
-                    let nodes = self.scene.as_ref().and_then(|s| {
-                        let inst = s.doc.scene.instances.get(self.selected)?;
-                        Some(s.doc.scene.with_instance_placed(self.selected, Transform { translation: p, ..inst.transform }))
-                    });
-                    if let Some(nodes) = nodes {
-                        // Merged until the drag ends, like a brush stroke.
-                        if let Err(e) = self.exec_graph(nodes, true) {
-                            log(self, format!("error: {e}"));
-                        }
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                for (label, line) in [("Turn", "instance turn"), ("Duplicate", "instance dup"), ("Delete", "instance delete")] {
-                    if ui.small_button(label).clicked() {
-                        let message = self.instance_command(line);
-                        log(self, message);
-                    }
-                }
-            });
-        });
-        if ui.small_button("New model").on_hover_text("An empty 16³ model beside the scene").clicked() {
-            let message = self.instance_command("instance new");
-            log(self, message);
-        }
     }
 }

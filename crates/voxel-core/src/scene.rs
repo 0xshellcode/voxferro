@@ -25,6 +25,8 @@ pub struct Instance {
     /// The world transform of that node's parent, so a new world placement
     /// can be turned back into the node's own local one.
     pub parent: Transform,
+    /// Hidden by `_hidden` on its own transform or on any group above it.
+    pub hidden: bool,
 }
 
 /// The scene graph as stored, plus the list of model placements it
@@ -222,10 +224,19 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
         transform: Transform,
         layer: i32,
         owner: Option<(i32, Transform)>,
+        hidden: bool,
         depth: u32,
     }
+    let hides = |d: &vox_format::Dict| d.get("_hidden") == Some("1");
     let root = nodes.first().map(|n| n.id()).unwrap_or(0);
-    let mut stack = vec![Step { id: root, transform: Transform::default(), layer: -1, owner: None, depth: 0 }];
+    let mut stack = vec![Step {
+        id: root,
+        transform: Transform::default(),
+        layer: -1,
+        owner: None,
+        hidden: false,
+        depth: 0,
+    }];
     const MAX_DEPTH: u32 = 1024;
 
     while let Some(step) = stack.pop() {
@@ -243,6 +254,7 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
                     transform: local.then(&step.transform),
                     layer: if t.layer >= 0 { t.layer } else { step.layer },
                     owner: Some((t.id, step.transform)),
+                    hidden: step.hidden || hides(&t.attributes),
                     depth: step.depth + 1,
                 });
             }
@@ -254,6 +266,7 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
                         transform: step.transform,
                         layer: step.layer,
                         owner: None,
+                        hidden: step.hidden || hides(&g.attributes),
                         depth: step.depth + 1,
                     });
                 }
@@ -281,6 +294,7 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
                             layer: step.layer,
                             node: step.owner.map(|(id, _)| id),
                             parent: step.owner.map(|(_, p)| p).unwrap_or_default(),
+                            hidden: step.hidden,
                         });
                     }
                 }

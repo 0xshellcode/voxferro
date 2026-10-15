@@ -7,7 +7,7 @@
 
 use crate::{Document, Volume};
 use glam::IVec3;
-use vox_format::{Color, Dict, Material, SceneNode};
+use vox_format::{Color, Dict, Layer, Material, SceneNode};
 
 /// A single reversible change to a [`Document`].
 #[derive(Debug, Clone, PartialEq)]
@@ -42,6 +42,8 @@ pub enum Command {
     },
     /// Replaces the render settings. Dragging a slider merges into one step.
     SetRender { before: Vec<Dict>, after: Vec<Dict> },
+    /// Replaces the layer table: names, colours, visibility, new layers.
+    SetLayers { before: Vec<Layer>, after: Vec<Layer> },
     /// Appends a model to the model list; undone by removing it again.
     PushModel { volume: Volume },
     /// Several commands as one undo step, applied in order and reverted in
@@ -107,6 +109,7 @@ impl Command {
             Self::SetMaterial { before, after, .. } => before == after,
             Self::SetGraph { before, after } => before == after,
             Self::SetRender { before, after } => before == after,
+            Self::SetLayers { before, after } => before == after,
             Self::PushModel { .. } => false,
             Self::Batch(commands) => commands.iter().all(Command::is_empty),
         }
@@ -133,6 +136,7 @@ impl Command {
                 document.scene.rebuild();
             }
             Self::SetRender { after, .. } => document.render = after.clone(),
+            Self::SetLayers { after, .. } => document.layers = after.clone(),
             Self::PushModel { volume } => {
                 document.scene.models.push(volume.clone());
                 document.scene.rebuild();
@@ -169,6 +173,7 @@ impl Command {
                 document.scene.rebuild();
             }
             Self::SetRender { before, .. } => document.render = before.clone(),
+            Self::SetLayers { before, .. } => document.layers = before.clone(),
             Self::PushModel { .. } => {
                 document.scene.models.pop();
                 document.scene.rebuild();
@@ -211,6 +216,11 @@ impl Command {
                 true
             }
             (Self::SetRender { after, .. }, Self::SetRender { after: newer, .. }) => {
+                after.clone_from(newer);
+                true
+            }
+            // Typing a layer name: one step per word, not per letter.
+            (Self::SetLayers { after, .. }, Self::SetLayers { after: newer, .. }) => {
                 after.clone_from(newer);
                 true
             }

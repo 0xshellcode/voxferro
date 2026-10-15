@@ -1,7 +1,7 @@
 //! The Select tool, selection edits, copy and paste, and whole-model
 //! operations.
 
-use crate::{App, edit::Ray, is_hidden};
+use crate::{App, edit::Ray};
 use eframe::egui;
 use glam::{IVec3, Mat4, Vec3};
 use voxel_core::brush::{self, BrushShape};
@@ -149,11 +149,11 @@ impl App {
 
     fn pick_any(&self, ray: Ray) -> Option<(usize, voxel_core::Hit)> {
         let loaded = self.scene.as_ref()?;
-        let hidden = self.hidden_layers;
+        let visible = self.visibility();
         let pick = loaded
             .doc
             .scene
-            .pick(ray.origin, ray.direction, 10_000.0, |i| !is_hidden(&hidden, i.layer))?;
+            .pick(ray.origin, ray.direction, 10_000.0, |i| visible.shows(i))?;
         Some((pick.instance, pick.hit))
     }
 

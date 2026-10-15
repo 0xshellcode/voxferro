@@ -6,7 +6,7 @@
 //! outside the history, and swapped each time the cursor moves to a new cell;
 //! on release it is replaced by one real, undoable command.
 
-use crate::{App, edit::Ray, is_hidden};
+use crate::{App, edit::Ray};
 use glam::{IVec3, Vec3};
 use voxel_core::brush::{self, BrushMode, BrushShape};
 use voxel_core::{Command, Hit};
@@ -26,12 +26,12 @@ impl App {
     /// Starts a stroke if the ray hits a voxel. Returns whether it did, so
     /// a press on empty space can orbit the camera instead.
     pub fn begin_stroke(&mut self, ray: Ray) -> bool {
+        let visible = self.visibility();
         let Some(loaded) = &mut self.scene else { return false };
-        let hidden = self.hidden_layers;
         let Some(pick) = loaded
             .doc
             .scene
-            .pick(ray.origin, ray.direction, 10_000.0, |i| !is_hidden(&hidden, i.layer))
+            .pick(ray.origin, ray.direction, 10_000.0, |i| visible.shows(i))
         else {
             return false;
         };
@@ -171,11 +171,11 @@ impl App {
 
     fn pick_visible(&self, ray: Ray) -> Option<(usize, Hit)> {
         let loaded = self.scene.as_ref()?;
-        let hidden = self.hidden_layers;
+        let visible = self.visibility();
         let pick = loaded
             .doc
             .scene
-            .pick(ray.origin, ray.direction, 10_000.0, |i| !is_hidden(&hidden, i.layer))?;
+            .pick(ray.origin, ray.direction, 10_000.0, |i| visible.shows(i))?;
         Some((pick.instance, pick.hit))
     }
 

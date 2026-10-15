@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–22 del [ROADMAP](ROADMAP.md) están completas, con **153 tests
+Las fases 0–23 del [ROADMAP](ROADMAP.md) están completas, con **158 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -23,15 +23,16 @@ verdes**. Funciona hoy:
   relleno, con vista previa y undo/redo de un paso por trazo
 - Selección (marco, cara, color), copiar/cortar/pegar, mover; rotar, espejo,
   recortar y cambiar tamaño del modelo
-- Escena editable: mover, girar, duplicar, añadir y quitar modelos, guardado
-  en el grafo de escena del archivo
+- Escena editable: mover, girar, duplicar, añadir y quitar modelos; grupos
+  (crear, mover, ocultar, disolver) y capas con nombre y visibilidad, todo
+  guardado en el archivo
 - Paleta y materiales editables desde la interfaz, con undo
 - Exportación a OBJ + MTL + textura de paleta
 - Cámara: encuadrar selección o escena, vistas por eje e isométrica,
   proyección ortográfica (también en el path tracer) y desplazamiento
 - Ajustes de render (sol, cielo uniforme / atmosférico / HDR, suelo, película)
   editables en el panel, con deshacer y guardados en el archivo
-- Capas y consola de comandos
+- Consola de comandos
 - Operaciones de voxel como compute kernels en WGSL
 - Guardado atómico que conserva materiales, cámaras y ajustes del renderer
 - Path tracer progresivo (GI, sombras, ACES) con la iluminación del archivo
@@ -71,6 +72,7 @@ Cmd+A, Esc, Supr, Cmd+C/X/V, flechas y Re Pág/Av Pág para moverla.
 | Modelo | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
 | Escena | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
 | Paleta | `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [clave=valor]…` |
+| Grupos y capas | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move`, `layer list\|new\|hide\|show\|name\|assign` |
 | Cámara | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|frame [all\|selection\|instance]` |
 | Render | `env uniform\|atmosphere [elev]\|ibl <mapa> [i] [rot]` |
 

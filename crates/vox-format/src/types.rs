@@ -259,8 +259,9 @@ impl SceneNode {
     }
 }
 
-/// `LAYR`: one of the eight layers, carrying its name and visibility.
-#[derive(Debug, Clone, Default)]
+/// `LAYR`: a layer, carrying its name, colour and visibility. Version 150
+/// files have eight, version 200 files thirty-two.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Layer {
     pub id: i32,
     pub attributes: Dict,

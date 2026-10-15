@@ -1,7 +1,7 @@
 //! Everything an edit can change, in one place.
 
 use crate::{Scene, Volume};
-use vox_format::{Dict, Material, Palette};
+use vox_format::{Dict, Layer, Material, Palette};
 
 /// The editable state of an open file: placed models, colours, materials
 /// and render settings.
@@ -18,11 +18,19 @@ pub struct Document {
     /// `rOBJ` render settings: sun, sky, ground, film... Kept as the file's
     /// key/value objects, so keys this editor does not model survive.
     pub render: Vec<Dict>,
+    /// `LAYR` entries: name, colour and visibility of each layer.
+    pub layers: Vec<Layer>,
 }
 
 impl Document {
     pub fn model_mut(&mut self, index: usize) -> Option<&mut Volume> {
         self.scene.models.get_mut(index)
+    }
+
+    /// Whether a layer is switched off. A layer the file does not describe
+    /// is visible, and so is "no layer" (-1).
+    pub fn layer_hidden(&self, id: i32) -> bool {
+        self.layers.iter().any(|l| l.id == id && l.is_hidden())
     }
 
     /// The material of a palette index, if it has one.

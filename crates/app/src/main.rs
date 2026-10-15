@@ -13,6 +13,7 @@ mod edit;
 mod files;
 mod image_out;
 mod palette_ui;
+mod outline;
 mod pathtrace;
 mod render_ui;
 mod renderer;
@@ -96,6 +97,10 @@ struct App {
     /// The placed instance edits, kernels and console commands act on: the
     /// one last clicked.
     selected: usize,
+    /// Instances picked together in the outline (Cmd+click), for grouping.
+    picked: std::collections::BTreeSet<usize>,
+    /// A group selected in the outline, by its transform node.
+    selected_group: Option<i32>,
     /// World cell of the traced grid's corner. The tracer walks one grid
     /// holding every visible instance; this maps the camera into it.
     trace_origin: glam::IVec3,
@@ -119,8 +124,6 @@ struct App {
     resize_for: Option<(usize, [u32; 3])>,
     /// Set when the scene changed and the GPU mesh is stale.
     mesh_dirty: bool,
-    /// Per-layer visibility; the format defines eight.
-    hidden_layers: [bool; 8],
     console_input: String,
     console_log: Vec<String>,
     /// When set, the app writes one frame of the whole window here and exits.
@@ -167,6 +170,8 @@ impl App {
             pending_samples: 0,
             status: String::new(),
             selected: 0,
+            picked: Default::default(),
+            selected_group: None,
             trace_origin: glam::IVec3::ZERO,
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
             screenshot: None,
@@ -188,7 +193,6 @@ impl App {
             resize_to: [32; 3],
             resize_for: None,
             mesh_dirty: false,
-            hidden_layers: [false; 8],
             console_input: String::new(),
             console_log: vec![
                 "type 'help', or 'gpu sphere' to run a compute kernel".to_owned(),
@@ -304,6 +308,7 @@ impl App {
         );
         self.selected = 0;
         self.selection = None;
+        self.forget_picks();
         // Undo steps name models by index: they mean nothing in another
         // file.
         self.history.clear();
@@ -354,11 +359,11 @@ impl App {
     /// The viewport mesh: visible layers only, selected voxels flagged.
     fn build_mesh(&self) -> Mesh {
         let Some(loaded) = &self.scene else { return Mesh::default() };
-        let hidden = self.hidden_layers;
+        let visible = self.visibility();
         let selection = self.selection.as_ref();
         Mesh::from_scene_marked(
             &loaded.doc.scene,
-            |i| !is_hidden(&hidden, i.layer),
+            |i| visible.shows(i),
             |model, p| selection.is_some_and(|s| s.model == model && s.contains(p)),
         )
     }
@@ -380,14 +385,14 @@ impl App {
     /// scene, and so does a material change that turns a colour emissive.
     fn upload_trace_volume(&mut self, state: &egui_wgpu::RenderState) {
         let Some(loaded) = &self.scene else { return };
-        let hidden = self.hidden_layers;
+        let visible = self.visibility();
         // A 3D texture is capped at 2048 per side on Metal; the cell budget
         // keeps a scene of far-apart models from allocating gigabytes.
         let max_side = state.device.limits().max_texture_dimension_3d;
         let baked = loaded
             .doc
             .scene
-            .bake(|i| !is_hidden(&hidden, i.layer), 256 * 1024 * 1024)
+            .bake(|i| visible.shows(i), 256 * 1024 * 1024)
             .map_err(|e| e.to_string())
             .and_then(|b| {
                 if b.volume.size().iter().any(|&s| s > max_side) {
@@ -436,6 +441,9 @@ impl App {
     fn undo(&mut self, state: &egui_wgpu::RenderState) {
         let Some(loaded) = self.scene.as_mut() else { return };
         if self.history.undo(&mut loaded.doc) {
+            // Undoing a grouping renumbers nodes: a selected group id would
+            // now name some other node.
+            self.forget_picks();
             self.refresh_document(state);
         }
     }
@@ -443,6 +451,7 @@ impl App {
     fn redo(&mut self, state: &egui_wgpu::RenderState) {
         let Some(loaded) = self.scene.as_mut() else { return };
         if self.history.redo(&mut loaded.doc) {
+            self.forget_picks();
             self.refresh_document(state);
         }
     }
@@ -570,6 +579,9 @@ impl App {
         ui.heading("Scene");
         self.scene_ui(ui);
         ui.separator();
+        ui.heading("Layers");
+        self.layers_ui(ui);
+        ui.separator();
         self.selection_ui(ui);
         ui.separator();
 
@@ -590,21 +602,6 @@ impl App {
         ui.label(format!("{} undo steps", self.history.undo_depth()));
 
 
-        ui.separator();
-        ui.heading("Layers");
-        let mut toggled = false;
-        ui.horizontal_wrapped(|ui| {
-            for (i, hidden) in self.hidden_layers.iter_mut().enumerate() {
-                let mut visible = !*hidden;
-                if ui.checkbox(&mut visible, format!("{i}")).changed() {
-                    *hidden = !visible;
-                    toggled = true;
-                }
-            }
-        });
-        if toggled {
-            self.mesh_dirty = true;
-        }
 
         ui.separator();
         self.console_ui(ui, state);
@@ -734,6 +731,39 @@ impl App {
             self.console_log.push(message);
             if self.mesh_dirty {
                 self.revalidate_selection();
+                self.refresh_document(state);
+            }
+            return;
+        }
+
+        // Through the app, not the console's own history calls, so the
+        // outline selection is dropped as it is for Cmd+Z.
+        if matches!(line.trim(), "undo" | "redo") {
+            let before = self.history.undo_depth();
+            if line.trim() == "undo" {
+                self.undo(state);
+            } else {
+                self.redo(state);
+            }
+            let moved = self.history.undo_depth() != before;
+            let message = match (line.trim(), moved) {
+                ("undo", true) => "undone",
+                ("undo", false) => "nothing to undo",
+                (_, true) => "redone",
+                _ => "nothing to redo",
+            };
+            self.console_log.push(message.to_owned());
+            return;
+        }
+
+        if matches!(line.split_whitespace().next(), Some("group" | "ungroup" | "node" | "layer")) {
+            let message = if line.starts_with("layer") {
+                self.layer_command(line)
+            } else {
+                self.group_command(line)
+            };
+            self.console_log.push(message);
+            if self.mesh_dirty {
                 self.refresh_document(state);
             }
             return;
@@ -1173,9 +1203,27 @@ fn capitalised(name: &str) -> String {
     chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
-/// Layer -1 means "no layer assigned", which is always visible.
-fn is_hidden(hidden: &[bool; 8], layer: i32) -> bool {
-    usize::try_from(layer).ok().and_then(|i| hidden.get(i)).copied().unwrap_or(false)
+/// What is drawn, traced, picked and exported: a snapshot taken before
+/// borrowing the scene, so filters can run while the scene is borrowed.
+pub struct Visibility {
+    hidden_layers: Vec<i32>,
+}
+
+impl Visibility {
+    pub fn shows(&self, instance: &voxel_core::Instance) -> bool {
+        !instance.hidden && !self.hidden_layers.contains(&instance.layer)
+    }
+}
+
+impl App {
+    pub fn visibility(&self) -> Visibility {
+        let hidden_layers = self
+            .scene
+            .as_ref()
+            .map(|s| s.doc.layers.iter().filter(|l| l.is_hidden()).map(|l| l.id).collect())
+            .unwrap_or_default();
+        Visibility { hidden_layers }
+    }
 }
 
 impl eframe::App for App {

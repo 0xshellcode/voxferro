@@ -111,11 +111,11 @@ impl App {
         };
         let path = path.with_extension("obj");
         let stem = path.file_stem()?.to_string_lossy().into_owned();
-        let hidden = self.hidden_layers;
+        let visible = self.visibility();
         let export = voxel_core::export::export_obj(
             &loaded.doc.scene,
             &loaded.doc.palette,
-            |i| !crate::is_hidden(&hidden, i.layer),
+            |i| visible.shows(i),
             &stem,
         );
         let written = std::fs::write(&path, &export.obj)
