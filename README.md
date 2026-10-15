@@ -10,15 +10,22 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–13 del [ROADMAP](ROADMAP.md) están completas, con **92 tests
-verdes**; las 14–19 (editor) están planificadas. Funciona hoy:
+Las fases 0–19 del [ROADMAP](ROADMAP.md) están completas, con **134 tests
+verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
   corpus real y contra `dot_vox`
-- Visor con mallado por oclusión de caras, paleta y cámara orbital
-- Grafo de escena con transformaciones y frames de animación
-- Edición con el ratón, con undo/redo que colapsa cada trazo en un paso
-- Paleta de 256 colores, capas y consola de comandos
+- Visor con mallado voraz (caras coplanares fusionadas), paleta y cámara orbital
+- Grafo de escena con transformaciones y frames de animación; edición y render
+  de escenas con varios modelos, rotados incluidos
+- Abrir, nuevo, guardar como, y aviso de cambios sin guardar
+- Pinceles añadir / borrar / pintar con formas voxel, caja, línea, cara y
+  relleno, con vista previa y undo/redo de un paso por trazo
+- Selección (marco, cara, color), copiar/cortar/pegar, mover; rotar, espejo,
+  recortar y cambiar tamaño del modelo
+- Paleta y materiales editables desde la interfaz, con undo
+- Exportación a OBJ + MTL + textura de paleta
+- Capas y consola de comandos
 - Operaciones de voxel como compute kernels en WGSL
 - Guardado atómico que conserva materiales, cámaras y ajustes del renderer
 - Path tracer progresivo (GI, sombras, ACES) con la iluminación del archivo
@@ -37,10 +44,28 @@ cargo run -p voxferro -- assets/vox/castle.vox         # abre otro modelo
 cargo run -p voxferro -- --run "gpu torus 166 40 14 replace" --run "save out.vox"
 cargo run -p voxferro -- assets/vox/monu1.vox --render-mode           # abre en modo Render
 cargo run -p voxferro -- assets/vox/monu1.vox --render 200 --screenshot out.bmp
+cargo run -p voxferro -- --run "new 16" --run "brush attach box" --drag 0.3 0.7 0.6 0.8 --screenshot out.bmp
 ```
 
-En la consola del panel izquierdo: `help`, `fill <c>`, `box …`, `sphere <c>`,
-`gpu sphere|torus|box|shell`, `env uniform|atmosphere [elev]|ibl <mapa>`, `save [ruta]`, `undo`, `redo`. También Cmd+S.
+**Ratón:** pulsar sobre el modelo edita con el pincel; pulsar en el vacío (o
+arrastrar con el botón derecho) orbita; la rueda acerca.
+
+**Teclado:** Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z; con selección,
+Cmd+A, Esc, Supr, Cmd+C/X/V, flechas y Re Pág/Av Pág para moverla.
+
+**Consola** (panel izquierdo; `help` para los comandos de modelo):
+
+| Grupo | Comandos |
+|---|---|
+| Archivos | `open [ruta]`, `new [n \| x y z]`, `save [ruta]`, `export <ruta.obj>` |
+| Pincel | `brush [attach\|erase\|paint\|select] [voxel\|box\|line\|face\|fill]`, `color <n>` |
+| Selección | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz` |
+| Modelo | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
+| Paleta | `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [clave=valor]…` |
+| Render | `env uniform\|atmosphere [elev]\|ibl <mapa> [i] [rot]` |
+
+Para pruebas sin ratón: `--click fx fy` y `--drag fx0 fy0 fx1 fy1`, en
+fracciones del visor.
 
 ## Stack
 
@@ -50,6 +75,7 @@ En la consola del panel izquierdo: `help`, `fill <c>`, `box …`, `sphere <c>`,
 | Gráficos | `wgpu` 30 | Emite **Metal nativo** en Apple Silicon |
 | Matemáticas | `glam` 0.34 | SIMD, estándar del ecosistema |
 | GPU bytes | `bytemuck` 1 | `#[derive(Pod)]` para los buffers |
+| Diálogos | `rfd` 0.17 | Paneles nativos de abrir y guardar |
 
 `eframe` y `wgpu` resuelven a una **única** `wgpu v30.0.1` en el grafo. Si
 aparecen dos versiones, los tipos dejan de ser asignables entre sí y los
@@ -61,7 +87,8 @@ antes de tocar esas versiones.
 ```
 crates/
 ├── vox-format/   parser .vox          — sin dependencias gráficas
-├── voxel-core/   volumen, grafo, undo — sin dependencias gráficas
+├── voxel-core/   volumen, grafo, undo, pinceles, selección, mallado, OBJ
+│                 — sin dependencias gráficas
 └── app/          eframe + egui + wgpu
 ```
 

@@ -8,6 +8,8 @@ pub mod brush;
 mod command;
 mod document;
 mod env_map;
+pub mod export;
+pub mod greedy;
 mod mesh;
 pub mod ops;
 mod raycast;

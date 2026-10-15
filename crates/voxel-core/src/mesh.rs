@@ -212,6 +212,35 @@ impl Mesh {
         }
     }
 
+    /// Like [`Mesh::append_volume_marked`], with coplanar faces of one
+    /// colour merged into rectangles (see [`crate::greedy`]): the same
+    /// surface in far fewer triangles.
+    pub fn append_volume_greedy(
+        &mut self,
+        volume: &Volume,
+        transform: &Transform,
+        marked: impl Fn(glam::IVec3) -> bool,
+    ) {
+        let half = volume.pivot();
+        let value = |x: u32, y: u32, z: u32| {
+            let flag = if marked(glam::IVec3::new(x as i32, y as i32, z as i32)) { 256 } else { 0 };
+            volume.get(x, y, z) as u16 + flag
+        };
+        for quad in crate::greedy::greedy_quads(volume, value) {
+            let base = self.vertices.len() as u32;
+            let normal = transform.rotation * Vec3::from_array(quad.face.normal());
+            for corner in quad.corners {
+                self.vertices.push(Vertex {
+                    position: transform.apply(corner - half).to_array(),
+                    normal: normal.to_array(),
+                    palette_index: quad.value as f32,
+                });
+            }
+            self.indices
+                .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+
     /// Meshes a whole scene, placing every instance in world space.
     pub fn from_scene(scene: &crate::Scene) -> Self {
         Self::from_scene_where(scene, |_| true)
@@ -226,7 +255,8 @@ impl Mesh {
     }
 
     /// Meshes the instances `keep` accepts, flagging the voxels `marked`
-    /// accepts, given a model index and a cell in that model.
+    /// accepts, given a model index and a cell in that model. Faces are
+    /// merged greedily.
     pub fn from_scene_marked(
         scene: &crate::Scene,
         keep: impl Fn(&crate::Instance) -> bool,
@@ -239,7 +269,7 @@ impl Mesh {
             }
             if let Some(volume) = scene.models.get(instance.model_index) {
                 let model = instance.model_index;
-                mesh.append_volume_marked(volume, &instance.transform, |p| marked(model, p));
+                mesh.append_volume_greedy(volume, &instance.transform, |p| marked(model, p));
             }
         }
         mesh

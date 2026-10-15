@@ -90,6 +90,43 @@ impl App {
         }
     }
 
+    /// Writes `stem.obj`, `stem.mtl` and `stem.png` next to each other.
+    /// With no path, asks for one.
+    pub fn export_obj(&mut self, path: Option<&str>) -> Option<String> {
+        let loaded = self.scene.as_ref()?;
+        let path = match path {
+            Some(p) => std::path::PathBuf::from(p),
+            None => {
+                let stem = std::path::Path::new(&loaded.name)
+                    .file_stem()
+                    .map_or("model".to_owned(), |s| s.to_string_lossy().into_owned());
+                let mut dialog = rfd::FileDialog::new()
+                    .add_filter("Wavefront OBJ", &["obj"])
+                    .set_file_name(format!("{stem}.obj"));
+                if let Some(dir) = self.current_dir() {
+                    dialog = dialog.set_directory(dir);
+                }
+                dialog.save_file()?
+            }
+        };
+        let path = path.with_extension("obj");
+        let stem = path.file_stem()?.to_string_lossy().into_owned();
+        let hidden = self.hidden_layers;
+        let export = voxel_core::export::export_obj(
+            &loaded.doc.scene,
+            &loaded.doc.palette,
+            |i| !crate::is_hidden(&hidden, i.layer),
+            &stem,
+        );
+        let written = std::fs::write(&path, &export.obj)
+            .and_then(|()| std::fs::write(path.with_extension("mtl"), &export.mtl))
+            .and_then(|()| std::fs::write(path.with_extension("png"), &export.png));
+        Some(match written {
+            Ok(()) => format!("exported {} ({} quads, with .mtl and .png)", path.display(), export.quads),
+            Err(e) => format!("error: could not export {}: {e}", path.display()),
+        })
+    }
+
     fn open_panel(&self) -> Option<String> {
         let mut dialog = rfd::FileDialog::new().add_filter("the reference editor model", &["vox"]);
         if let Some(dir) = self.current_dir() {

@@ -466,6 +466,15 @@ impl App {
                     self.console_log.push(m);
                 }
             }
+            if ui
+                .add_enabled(has_doc, egui::Button::new("Export OBJ…"))
+                .on_hover_text("Merged faces, Y up, with a palette texture")
+                .clicked()
+            {
+                if let Some(m) = self.export_obj(None) {
+                    self.console_log.push(m);
+                }
+            }
         });
         ui.label(&self.status);
 
@@ -730,6 +739,13 @@ impl App {
                 self.revalidate_selection();
                 self.refresh_document(state);
             }
+            return;
+        }
+
+        if line.split_whitespace().next() == Some("export") {
+            let path = line.split_whitespace().nth(1);
+            let message = self.export_obj(path).unwrap_or_else(|| "export cancelled".to_owned());
+            self.console_log.push(message);
             return;
         }
 
