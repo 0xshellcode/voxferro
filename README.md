@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las siete fases del [ROADMAP](ROADMAP.md) están completas, con **57 tests
+Las siete fases del [ROADMAP](ROADMAP.md) están completas, con **58 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
