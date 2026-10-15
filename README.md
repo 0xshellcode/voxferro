@@ -10,8 +10,29 @@ idiomática de Rust.
 
 ## Estado
 
-Fase 0 completada: workspace, dependencias verificadas y andamiaje.
-Ver [ROADMAP.md](ROADMAP.md).
+Las siete fases del [ROADMAP](ROADMAP.md) están completas, con **51 tests
+verdes**. Funciona hoy:
+
+- Lectura completa de `.vox` (versiones 150 y 200), validada contra el corpus
+  real y contra `dot_vox`
+- Visor con mallado por oclusión de caras, paleta y cámara orbital
+- Grafo de escena con transformaciones y frames de animación
+- Edición con el ratón, con undo/redo que colapsa cada trazo en un paso
+- Paleta de 256 colores, capas y consola de comandos
+- Operaciones de voxel como compute kernels en WGSL
+
+Nativo arm64 sobre Metal: `[voxferro] graphics backend: Metal on Apple M2`.
+
+## Uso
+
+```bash
+cargo run -p voxferro                                  # abre monu1.vox
+cargo run -p voxferro -- assets/vox/castle.vox         # abre otro modelo
+cargo run -p voxferro -- --run "gpu torus 166 40 14 replace" --screenshot out.bmp
+```
+
+En la consola del panel izquierdo: `help`, `fill <c>`, `box …`, `sphere <c>`,
+`gpu sphere|torus|box|shell`, `undo`, `redo`.
 
 ## Stack
 
@@ -39,11 +60,11 @@ crates/
 Los dos primeros crates no dependen de wgpu a propósito: `cargo test -p
 vox-format` corre en un segundo en lugar de recompilar el stack gráfico.
 
-## Uso
+### Tests
 
 ```bash
-cargo test              # tests del parser y del core (rápido)
-cargo run -p voxferro        # abre la ventana
+cargo test -p vox-format -p voxel-core   # rápido: no compila wgpu
+cargo test                               # todo
 ```
 
 ## Licencia y alcance
