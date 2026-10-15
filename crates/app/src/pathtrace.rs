@@ -20,20 +20,53 @@ pub struct Environment {
     pub sun_angular_radius: f32,
     pub exposure: f32,
     pub bounces: u32,
+    /// Infinite ground plane at world z = 0, as the editor's render view
+    /// draws it. On by default, which is also the editor's default.
+    pub ground_enabled: bool,
+    /// Ground albedo, linear.
+    pub ground_color: Vec3,
+    /// `_hor`: how quickly the ground fades into the sky with distance.
+    pub horizon_density: f32,
 }
 
 impl Default for Environment {
+    /// The editor's own defaults, not invented ones.
+    ///
+    /// Its render panel opens with the sun at 50/50, area 7 and a white sky,
+    /// and those are also the most common values across the sample corpus:
+    /// `_inf` = white, `_i 0.6`, `_angle 50 50`, `_area 0.07`; `_uni` =
+    /// white, `_i 0.7`. A file without render objects should look the way the
+    /// editor would show it, so the defaults are derived from exactly that.
     fn default() -> Self {
-        Self {
-            sun_direction: Vec3::new(0.4, 0.3, 1.0).normalize(),
-            sun_color: Vec3::new(1.0, 0.95, 0.85),
-            sun_intensity: 1.8,
-            sky_color: Vec3::new(0.45, 0.6, 0.9),
-            sky_intensity: 0.4,
-            sun_angular_radius: 0.08,
+        let base = Self {
+            sun_direction: Vec3::Z,
+            sun_color: Vec3::ONE,
+            sun_intensity: 1.0,
+            sky_color: Vec3::ONE,
+            sky_intensity: 1.0,
+            sun_angular_radius: 0.07,
             exposure: 0.35,
             bounces: 3,
-        }
+            ground_enabled: true,
+            // `_ground._color` is 80 80 80 in every sample file.
+            ground_color: Vec3::splat(srgb_to_linear(80)),
+            horizon_density: 0.1,
+        };
+        let pair = |k: &str, v: &str| (k.to_owned(), v.to_owned());
+        base.with_render_objects(&[
+            vox_format::Dict(vec![
+                pair("_type", "_inf"),
+                pair("_i", "0.6"),
+                pair("_k", "255 255 255"),
+                pair("_angle", "50 50"),
+                pair("_area", "0.07"),
+            ]),
+            vox_format::Dict(vec![
+                pair("_type", "_uni"),
+                pair("_i", "0.7"),
+                pair("_k", "255 255 255"),
+            ]),
+        ])
     }
 }
 
@@ -44,7 +77,12 @@ impl Environment {
     /// (exposure), all as string key/values. Anything absent keeps its
     /// default rather than rendering black.
     pub fn from_render_objects(objects: &[vox_format::Dict]) -> Self {
-        let mut env = Self::default();
+        Self::default().with_render_objects(objects)
+    }
+
+    /// Applies render objects on top of `self`, keeping anything they omit.
+    pub fn with_render_objects(self, objects: &[vox_format::Dict]) -> Self {
+        let mut env = self;
 
         for object in objects {
             match object.get("_type") {
@@ -74,6 +112,28 @@ impl Environment {
                     }
                     if let Some(i) = object.get("_i").and_then(|v| v.parse::<f32>().ok()) {
                         env.sky_intensity = i.max(0.0);
+                    }
+                }
+                Some("_ground") => {
+                    if let Some(k) = object.get_parsed::<u8, 3>("_color") {
+                        env.ground_color = Vec3::new(
+                            srgb_to_linear(k[0]),
+                            srgb_to_linear(k[1]),
+                            srgb_to_linear(k[2]),
+                        );
+                    }
+                    // Version 200 switches the ground here...
+                    if let Some(on) = object.get("_enable") {
+                        env.ground_enabled = on != "0";
+                    }
+                    if let Some(h) = object.get("_hor").and_then(|v| v.parse::<f32>().ok()) {
+                        env.horizon_density = h.max(0.0);
+                    }
+                }
+                // ...version 150 in the general settings object.
+                Some("_setting") => {
+                    if let Some(on) = object.get("_ground") {
+                        env.ground_enabled = on != "0";
                     }
                 }
                 Some("_film") => {
@@ -160,6 +220,10 @@ struct Params {
     volume_offset: [f32; 4],
 
     emitter_info: [u32; 4],
+
+    /// x: plane height in voxel space, y: enabled, z: horizon density.
+    ground: [f32; 4],
+    ground_color: [f32; 4],
 }
 
 struct Target {
@@ -559,6 +623,15 @@ impl PathTracer {
             reset: reset as u32,
             volume_offset: volume_offset.extend(0.0).to_array(),
             emitter_info: [self.emitter_count, 0, 0, 0],
+            // World z = 0, moved into the traced volume's voxel space by the
+            // same offset that moves the camera there.
+            ground: [
+                volume_offset.z,
+                environment.ground_enabled as u32 as f32,
+                environment.horizon_density,
+                0.0,
+            ],
+            ground_color: environment.ground_color.extend(0.0).to_array(),
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
 
@@ -771,6 +844,40 @@ mod tests {
         // Each flux step is a factor of ten, not two.
         let ratio = (emission_strength(1.0, 2.0) - 1.0) / (emission_strength(1.0, 1.0) - 1.0);
         assert!((ratio - 10.0).abs() < 1e-3);
+    }
+
+    fn dict(pairs: &[(&str, &str)]) -> vox_format::Dict {
+        vox_format::Dict(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
+    }
+
+    #[test]
+    fn ground_settings_read_both_conventions() {
+        let v200 = Environment::from_render_objects(&[dict(&[
+            ("_type", "_ground"),
+            ("_color", "255 0 0"),
+            ("_enable", "0"),
+        ])]);
+        assert!(!v200.ground_enabled);
+        assert!((v200.ground_color.x - 1.0).abs() < 1e-6 && v200.ground_color.y == 0.0);
+
+        // room.vox: version 150, ground switched off in _setting.
+        let v150 = Environment::from_render_objects(&[
+            dict(&[("_type", "_ground"), ("_color", "80 80 80"), ("_hor", "0.1")]),
+            dict(&[("_type", "_setting"), ("_ground", "0")]),
+        ]);
+        assert!(!v150.ground_enabled);
+        assert!((v150.horizon_density - 0.1).abs() < 1e-6);
+
+        assert!(Environment::from_render_objects(&[]).ground_enabled, "on by default");
+    }
+
+    #[test]
+    fn defaults_match_the_editor() {
+        let d = Environment::default();
+        assert_eq!(d.sky_color, Vec3::ONE, "white sky, as the editor opens");
+        assert!((d.sky_intensity - 0.7).abs() < 1e-6);
+        // _angle 50 50: azimuth 50, elevation 50 degrees.
+        assert!((d.sun_direction.z - 50f32.to_radians().sin()).abs() < 1e-5);
     }
 
     #[test]

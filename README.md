@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las diez fases del [ROADMAP](ROADMAP.md) están completas, con **76 tests
+Las once fases del [ROADMAP](ROADMAP.md) están completas, con **78 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -23,6 +23,7 @@ verdes**. Funciona hoy:
 - Guardado atómico que conserva materiales, cámaras y ajustes del renderer
 - Path tracer progresivo (GI, sombras, ACES) con la iluminación del archivo
 - Materiales metal, vidrio y emisivos, con las fórmulas de the reference editor
+- Plano de suelo infinito con fusión en el horizonte
 
 Nativo arm64 sobre Metal: `[voxferro] graphics backend: Metal on Apple M2`.
 

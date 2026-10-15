@@ -44,6 +44,11 @@ struct Params {
 
     // x: number of entries in `emitters`.
     emitter_info: vec4<u32>,
+
+    // x: plane height in voxel space (world z = 0), y: enabled, z: horizon
+    // density (`_hor`).
+    ground: vec4<f32>,
+    ground_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -294,6 +299,26 @@ fn sample_emitters(point: vec3<f32>, normal: vec3<f32>, state: ptr<function, u32
     return total * f32(count);
 }
 
+// Distance along the ray to the ground plane, or -1 when it is off, behind,
+// or the ray runs parallel to it. The plane is infinite, so it is solved
+// analytically rather than walked by the DDA, which stops at the grid edge.
+fn ground_distance(origin: vec3<f32>, direction: vec3<f32>) -> f32 {
+    if (p.ground.y < 0.5 || direction.z >= -1e-6 || origin.z <= p.ground.x) {
+        return -1.0;
+    }
+    return (p.ground.x - origin.z) / direction.z;
+}
+
+// How much of the ground at `distance` has dissolved into the sky.
+//
+// The editor stores `_hor` as `m_hor_density` and blends the ground into the
+// horizon with it. The exact curve lives in its runtime-generated shader,
+// which the binary does not carry as text, so this exponential fog is an
+// approximation of the effect, not a transcription of it.
+fn horizon_fade(distance: f32) -> f32 {
+    return 1.0 - exp(-p.ground.z * distance * 0.01);
+}
+
 fn random_in_sphere(state: ptr<function, u32>) -> vec3<f32> {
     // Rejection sampling: simple, unbiased, and converges in ~2 tries.
     for (var i = 0; i < 8; i = i + 1) {
@@ -358,6 +383,34 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     for (var bounce = 0u; bounce <= p.bounces; bounce = bounce + 1u) {
         let hit = trace(origin, direction, far, 0u);
+
+        // The ground wins when it is nearer than any voxel, or when the ray
+        // left the grid without hitting one.
+        let t_ground = ground_distance(origin, direction);
+        if (t_ground > 0.0 && (!hit.hit || t_ground < hit.distance)) {
+            let point = origin + direction * t_ground;
+            let up = vec3<f32>(0.0, 0.0, 1.0);
+            let lifted = point + up * 0.001;
+
+            // Distant ground dissolves into the sky toward the horizon.
+            let fade = horizon_fade(t_ground);
+            radiance = radiance + throughput * fade * sky(direction, false);
+            throughput = throughput * (1.0 - fade) * p.ground_color.rgb;
+
+            // A diffuse surface like any other: sun, emitters, a bounce.
+            let to_sun = normalize(p.sun_direction.xyz);
+            if (to_sun.z > 0.0) {
+                let visible = shadow(lifted, to_sun, 1e5);
+                radiance = radiance + throughput * visible * p.sun_color.rgb * p.sun_intensity * to_sun.z;
+            }
+            radiance = radiance + throughput * sample_emitters(lifted, up, &rng);
+
+            direction = sample_hemisphere(up, &rng);
+            origin = lifted;
+            specular = false;
+            continue;
+        }
+
         if (!hit.hit) {
             radiance = radiance + throughput * sky(direction, specular);
             break;
