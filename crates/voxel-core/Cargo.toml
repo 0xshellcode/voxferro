@@ -6,5 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bytemuck.workspace = true
 glam.workspace = true
 vox-format = { path = "../vox-format" }
