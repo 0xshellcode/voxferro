@@ -68,6 +68,31 @@ impl Volume {
         self.get(x, y, z) == 0
     }
 
+    /// Converts back to the sparse list a `.vox` file stores.
+    ///
+    /// Coordinates are `u8` in the format, so a volume may not exceed 256 on
+    /// any axis — which is also the editor's own limit.
+    pub fn to_model(&self) -> vox_format::Model {
+        let [sx, sy, sz] = self.size;
+        let mut voxels = Vec::with_capacity(self.filled_count());
+        for z in 0..sz.min(256) {
+            for y in 0..sy.min(256) {
+                for x in 0..sx.min(256) {
+                    let index = self.get(x, y, z);
+                    if index != 0 {
+                        voxels.push(vox_format::Voxel {
+                            x: x as u8,
+                            y: y as u8,
+                            z: z as u8,
+                            index,
+                        });
+                    }
+                }
+            }
+        }
+        vox_format::Model { size: self.size, voxels }
+    }
+
     /// Inclusive bounding box of the non-empty voxels, or `None` if empty.
     ///
     /// A model rarely fills its declared volume, so framing the declared size
@@ -114,6 +139,22 @@ mod tests {
         v.set(1, 1, 1, 42);
         assert_eq!(v.get(1, 1, 1), 42);
         assert_eq!(v.filled_count(), 1);
+    }
+
+    #[test]
+    fn model_round_trips_through_a_volume() {
+        let mut v = Volume::new([4, 5, 6]);
+        v.set(1, 2, 3, 9);
+        v.set(0, 0, 0, 1);
+
+        let model = v.to_model();
+        assert_eq!(model.size, [4, 5, 6]);
+        assert_eq!(model.voxels.len(), 2);
+
+        let back = Volume::from_model(&model);
+        assert_eq!(back.get(1, 2, 3), 9);
+        assert_eq!(back.get(0, 0, 0), 1);
+        assert_eq!(back.filled_count(), 2);
     }
 
     #[test]

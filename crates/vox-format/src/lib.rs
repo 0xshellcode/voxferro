@@ -20,6 +20,7 @@ mod dict;
 mod parse;
 mod reader;
 mod types;
+mod write;
 
 pub use dict::Dict;
 pub use parse::{UnknownChunk, VoxFile};

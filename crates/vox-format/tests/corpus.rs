@@ -276,3 +276,108 @@ fn reads_the_optional_index_map() {
     let unique: std::collections::BTreeSet<u8> = map.iter().copied().collect();
     assert_eq!(unique.len(), 256, "IMAP should be a permutation");
 }
+
+#[test]
+fn every_sample_survives_a_round_trip() {
+    let files = corpus_files();
+    skip_if_no_corpus!(files);
+
+    for path in &files {
+        let bytes = std::fs::read(path).unwrap();
+        let original = vox_format::VoxFile::parse(&bytes).unwrap();
+
+        let written = original.to_bytes();
+        let reparsed = vox_format::VoxFile::parse(&written)
+            .unwrap_or_else(|e| panic!("{}: our own output failed to parse: {e}", path.display()));
+
+        assert_eq!(reparsed.version, original.version, "{}", path.display());
+        assert_eq!(
+            reparsed.models.len(),
+            original.models.len(),
+            "{}: model count",
+            path.display()
+        );
+        assert_eq!(
+            reparsed.nodes.len(),
+            original.nodes.len(),
+            "{}: scene node count",
+            path.display()
+        );
+        assert_eq!(
+            reparsed.layers.len(),
+            original.layers.len(),
+            "{}: layer count",
+            path.display()
+        );
+        assert_eq!(
+            reparsed.materials.len(),
+            original.materials.len(),
+            "{}: material count",
+            path.display()
+        );
+        assert_eq!(
+            reparsed.cameras.len(),
+            original.cameras.len(),
+            "{}: camera count",
+            path.display()
+        );
+        assert_eq!(
+            reparsed.index_map.is_some(),
+            original.index_map.is_some(),
+            "{}: IMAP presence",
+            path.display()
+        );
+
+        for (i, (a, b)) in original.models.iter().zip(&reparsed.models).enumerate() {
+            assert_eq!(a.size, b.size, "{}: model {i} size", path.display());
+            assert_eq!(
+                a.voxels, b.voxels,
+                "{}: model {i} voxels differ",
+                path.display()
+            );
+        }
+
+        // Palette must come back identical, shift and all.
+        for i in 0..=255u8 {
+            assert_eq!(
+                original.palette.color(i),
+                reparsed.palette.color(i),
+                "{}: palette index {i}",
+                path.display()
+            );
+        }
+    }
+
+    eprintln!("round-tripped {} files", files.len());
+}
+
+#[test]
+fn dot_vox_can_read_what_we_write() {
+    // An independent reader accepting our output is the real check: a
+    // round trip through our own parser could agree on a shared mistake.
+    let files = corpus_files();
+    skip_if_no_corpus!(files);
+
+    for path in &files {
+        let bytes = std::fs::read(path).unwrap();
+        let written = vox_format::VoxFile::parse(&bytes).unwrap().to_bytes();
+
+        let theirs = dot_vox::load_bytes(&written).unwrap_or_else(|e| {
+            panic!("{}: dot_vox rejected our output: {e}", path.display())
+        });
+        let ours = vox_format::VoxFile::parse(&bytes).unwrap();
+
+        assert_eq!(theirs.models.len(), ours.models.len(), "{}", path.display());
+        for (i, (a, b)) in ours.models.iter().zip(&theirs.models).enumerate() {
+            assert_eq!(
+                a.size,
+                [b.size.x, b.size.y, b.size.z],
+                "{}: model {i}",
+                path.display()
+            );
+            assert_eq!(a.voxels.len(), b.voxels.len(), "{}: model {i}", path.display());
+        }
+    }
+
+    eprintln!("dot_vox accepted our output for {} files", files.len());
+}

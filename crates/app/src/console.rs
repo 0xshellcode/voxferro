@@ -29,7 +29,8 @@ pub fn execute(line: &str, volume: &mut Volume, history: &mut History) -> Outcom
     // Keep verbs aligned with the editor's own vocabulary where they overlap.
     match verb {
         "help" => Outcome::Ok {
-            message: "fill <c> | clear | box <x0 y0 z0 x1 y1 z1 c> | sphere <c> | undo | redo"
+            message: "fill <c> | clear | box <x0..z1 c> | sphere <c> | undo | redo | \
+                      save [path] | gpu <sphere|torus|box|shell>"
                 .to_owned(),
             changed: false,
         },

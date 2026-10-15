@@ -10,16 +10,17 @@ idiomática de Rust.
 
 ## Estado
 
-Las siete fases del [ROADMAP](ROADMAP.md) están completas, con **51 tests
+Las siete fases del [ROADMAP](ROADMAP.md) están completas, con **57 tests
 verdes**. Funciona hoy:
 
-- Lectura completa de `.vox` (versiones 150 y 200), validada contra el corpus
-  real y contra `dot_vox`
+- Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
+  corpus real y contra `dot_vox`
 - Visor con mallado por oclusión de caras, paleta y cámara orbital
 - Grafo de escena con transformaciones y frames de animación
 - Edición con el ratón, con undo/redo que colapsa cada trazo en un paso
 - Paleta de 256 colores, capas y consola de comandos
 - Operaciones de voxel como compute kernels en WGSL
+- Guardado atómico que conserva materiales, cámaras y ajustes del renderer
 
 Nativo arm64 sobre Metal: `[voxferro] graphics backend: Metal on Apple M2`.
 
@@ -28,11 +29,11 @@ Nativo arm64 sobre Metal: `[voxferro] graphics backend: Metal on Apple M2`.
 ```bash
 cargo run -p voxferro                                  # abre monu1.vox
 cargo run -p voxferro -- assets/vox/castle.vox         # abre otro modelo
-cargo run -p voxferro -- --run "gpu torus 166 40 14 replace" --screenshot out.bmp
+cargo run -p voxferro -- --run "gpu torus 166 40 14 replace" --run "save out.vox"
 ```
 
 En la consola del panel izquierdo: `help`, `fill <c>`, `box …`, `sphere <c>`,
-`gpu sphere|torus|box|shell`, `undo`, `redo`.
+`gpu sphere|torus|box|shell`, `save [ruta]`, `undo`, `redo`. También Cmd+S.
 
 ## Stack
 

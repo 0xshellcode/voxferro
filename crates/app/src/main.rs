@@ -113,20 +113,26 @@ impl App {
             .cloned()
             .unwrap_or_else(|| format!("{ASSET_DIR}/monu1.vox"));
 
-        let startup_command = args
+        // Several --run flags may be given; they execute in order, which is
+        // how a kernel and a save fit into one headless session.
+        let startup_commands: Vec<String> = args
             .iter()
-            .position(|a| a == "--run")
-            .and_then(|i| args.get(i + 1).cloned());
+            .enumerate()
+            .filter(|(_, a)| a.as_str() == "--run")
+            .filter_map(|(i, _)| args.get(i + 1).cloned())
+            .collect();
 
         app.screenshot = screenshot;
         app.load(state, &path);
 
-        // Runs before the first frame, so --screenshot captures its result.
-        if let Some(command) = startup_command {
-            app.run_command(&command, state);
+        // Run before the first frame, so --screenshot captures the result.
+        for command in &startup_commands {
+            app.run_command(command, state);
             if app.mesh_dirty {
                 app.remesh(state);
             }
+        }
+        if !startup_commands.is_empty() {
             for line in &app.console_log {
                 eprintln!("[voxferro] {line}");
             }
@@ -307,6 +313,14 @@ impl App {
         });
         ui.label(format!("{} undo steps", self.history.undo_depth()));
 
+        if ui
+            .add_enabled(self.scene.is_some(), egui::Button::new("Save (Cmd+S)"))
+            .clicked()
+        {
+            let message = self.save_command("save");
+            self.console_log.push(message);
+        }
+
         ui.separator();
         ui.heading("Layers");
         let mut toggled = false;
@@ -432,6 +446,12 @@ impl App {
         }
         self.console_log.push(format!("> {line}"));
 
+        if line.split_whitespace().next() == Some("save") {
+            let message = self.save_command(line);
+            self.console_log.push(message);
+            return;
+        }
+
         if line.split_whitespace().next() == Some("gpu") {
             let message = self.run_gpu_command(line, state);
             self.console_log.push(message);
@@ -461,6 +481,23 @@ impl App {
         }
         if changed {
             self.remesh(state);
+        }
+    }
+
+    /// `save [path]` — defaults to the file that was opened.
+    fn save_command(&mut self, line: &str) -> String {
+        let Some(loaded) = &self.scene else {
+            return "nothing to save".to_owned();
+        };
+        let target = line
+            .split_whitespace()
+            .nth(1)
+            .map(str::to_owned)
+            .unwrap_or_else(|| loaded.path.clone());
+
+        match loaded.save(&target) {
+            Ok(bytes) => format!("saved {target} ({bytes} bytes)"),
+            Err(e) => format!("error: could not save: {e}"),
         }
     }
 
@@ -656,6 +693,12 @@ impl eframe::App for App {
         }
         if redo {
             self.redo(&state);
+        }
+
+        let save = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command);
+        if save {
+            let message = self.save_command("save");
+            self.console_log.push(message);
         }
 
         egui::Panel::left("controls")

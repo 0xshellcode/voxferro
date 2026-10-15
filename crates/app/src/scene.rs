@@ -1,4 +1,4 @@
-//! Loading a `.vox` file into something renderable.
+//! Loading and saving a `.vox` file.
 
 use vox_format::{Palette, VoxFile};
 use voxel_core::Scene;
@@ -10,6 +10,14 @@ pub struct LoadedScene {
     pub version: u32,
     pub scene: Scene,
     pub palette: Palette,
+    /// The file as parsed.
+    ///
+    /// Kept so saving preserves everything this editor does not model yet --
+    /// materials, render settings, cameras, palette notes. Writing from the
+    /// scene alone would silently drop all of it.
+    source: VoxFile,
+    /// Where it came from, for a save with no path.
+    pub path: String,
 }
 
 impl LoadedScene {
@@ -30,7 +38,38 @@ impl LoadedScene {
             name,
             version: file.version,
             scene: Scene::from_file(&file),
-            palette: file.palette,
+            palette: file.palette.clone(),
+            source: file,
+            path: path.to_owned(),
         })
+    }
+
+    /// Writes the current state to `path`.
+    ///
+    /// The edited volumes replace the models of the original file, so every
+    /// chunk the editor does not touch travels through untouched.
+    pub fn save(&self, path: &str) -> Result<usize, String> {
+        let mut file = self.source.clone();
+
+        for (i, volume) in self.scene.models.iter().enumerate() {
+            match file.models.get_mut(i) {
+                Some(slot) => *slot = volume.to_model(),
+                None => file.models.push(volume.to_model()),
+            }
+        }
+        file.palette = self.palette.clone();
+
+        let bytes = file.to_bytes();
+
+        // Write to a temporary file and rename over the target, so an
+        // interrupted save cannot leave a half-written model behind.
+        let temporary = format!("{path}.tmp");
+        std::fs::write(&temporary, &bytes).map_err(|e| e.to_string())?;
+        std::fs::rename(&temporary, path).map_err(|e| {
+            let _ = std::fs::remove_file(&temporary);
+            e.to_string()
+        })?;
+
+        Ok(bytes.len())
     }
 }
