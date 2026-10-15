@@ -87,7 +87,7 @@ impl VoxFile {
         // The scene graph. A file with none still needs one, or the editor
         // opens it with nothing placed.
         if self.nodes.is_empty() {
-            write_minimal_graph(&mut children, self.models.len());
+            write_minimal_graph(&mut children, &self.models);
         } else {
             for node in &self.nodes {
                 write_node(&mut children, node);
@@ -208,8 +208,8 @@ fn write_node(children: &mut Writer, node: &SceneNode) {
 ///
 /// Shape: a root transform, a group, then a transform and shape per model —
 /// the same arrangement the editor writes for a single-model scene.
-fn write_minimal_graph(children: &mut Writer, model_count: usize) {
-    let count = model_count.max(1);
+fn write_minimal_graph(children: &mut Writer, models: &[crate::Model]) {
+    let count = models.len().max(1);
 
     // Ids: 0 root transform, 1 group, then pairs from 2.
     let mut root = Writer::new();
@@ -235,6 +235,13 @@ fn write_minimal_graph(children: &mut Writer, model_count: usize) {
         let transform_id = 2 + (i as i32) * 2;
         let shape_id = transform_id + 1;
 
+        // Sit the model on the ground the way the editor does: every model in
+        // the sample corpus has `_t.z == size.z / 2`. Without it the model is
+        // centred on the origin, half of it under the render ground plane --
+        // fine in the editor's Model view, invisible in its Render view.
+        let lift = models.get(i).map_or(0, |m| m.size[2] / 2);
+        let frame = Dict(vec![("_t".to_owned(), format!("0 0 {lift}"))]);
+
         let mut t = Writer::new();
         t.i32(transform_id);
         t.dict(&Dict::default());
@@ -242,7 +249,7 @@ fn write_minimal_graph(children: &mut Writer, model_count: usize) {
         t.i32(-1);
         t.i32(0); // layer 0
         t.u32(1);
-        t.dict(&Dict::default());
+        t.dict(&frame);
         children.chunk(b"nTRN", &t.out);
 
         let mut s = Writer::new();
@@ -314,6 +321,17 @@ mod tests {
         assert_eq!(reparsed.nodes.len(), 4);
         assert!(matches!(reparsed.nodes[0], SceneNode::Transform(_)));
         assert!(matches!(reparsed.nodes[1], SceneNode::Group(_)));
+    }
+
+    #[test]
+    fn the_minimal_graph_sits_models_on_the_ground() {
+        let reparsed = VoxFile::parse(&sample().to_bytes()).unwrap();
+        // sample() is 4 high, so the editor's convention puts it at z = 2.
+        let lifted = reparsed.nodes.iter().any(|n| match n {
+            SceneNode::Transform(t) => t.translation(0) == [0, 0, 2],
+            _ => false,
+        });
+        assert!(lifted, "model transform should carry _t = 0 0 2");
     }
 
     #[test]

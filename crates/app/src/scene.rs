@@ -10,6 +10,8 @@ pub struct LoadedScene {
     pub version: u32,
     pub scene: Scene,
     pub palette: Palette,
+    /// `MATL` entries, one per palette index that has one.
+    pub materials: Vec<vox_format::Material>,
     /// `rOBJ` entries: sun, sky, atmosphere, lens, film, bloom.
     pub render_objects: Vec<vox_format::Dict>,
     /// The file as parsed.
@@ -41,6 +43,7 @@ impl LoadedScene {
             version: file.version,
             scene: Scene::from_file(&file),
             palette: file.palette.clone(),
+            materials: file.materials.clone(),
             render_objects: file.render_objects.clone(),
             source: file,
             path: path.to_owned(),

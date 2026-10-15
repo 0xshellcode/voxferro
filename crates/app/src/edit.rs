@@ -37,14 +37,10 @@ pub fn ray_through_pixel(view_proj: Mat4, viewport: Vec2, pixel: Vec2) -> Ray {
 
 /// Casts a world ray at one placed volume, in that volume's local space.
 ///
-/// The mesher places a model centred on its transform, so the half-size shift
-/// has to be undone here too, or picking lands half a model away from the
-/// geometry on screen.
+/// The mesher places a model's pivot on its transform, so that shift has to
+/// be undone here too, or picking lands away from the geometry on screen.
 pub fn pick(volume: &Volume, transform: &Transform, ray: Ray, max_distance: f32) -> Option<Hit> {
-    let [sx, sy, sz] = volume.size();
-    let half = Vec3::new(sx as f32, sy as f32, sz as f32) * 0.5;
-
-    let local_origin = transform.inverse_apply(ray.origin) + half;
+    let local_origin = transform.inverse_apply(ray.origin) + volume.pivot();
     let local_dir = transform.inverse_rotate(ray.direction);
 
     raycast(volume, local_origin, local_dir, max_distance)

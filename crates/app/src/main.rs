@@ -223,6 +223,12 @@ impl App {
             self.path_tracer.set_volume(&state.device, &state.queue, volume);
         }
         self.path_tracer.set_palette(&state.queue, &loaded.palette);
+        self.path_tracer
+            .set_materials(&state.queue, &loaded.palette, &loaded.materials);
+        if let Some(volume) = loaded.scene.models.first() {
+            self.path_tracer
+                .set_emitters(&state.device, volume, &loaded.materials);
+        }
     }
 
     /// Rebuilds the GPU mesh after an edit, leaving the camera alone.
@@ -233,6 +239,8 @@ impl App {
         self.scene_renderer.set_mesh(&state.device, &mesh);
         if let Some(volume) = loaded.scene.models.first() {
             self.path_tracer.set_volume(&state.device, &state.queue, volume);
+            self.path_tracer
+                .set_emitters(&state.device, volume, &loaded.materials);
         }
         self.mesh_dirty = false;
     }
@@ -290,9 +298,9 @@ impl App {
     /// `self` again.
     /// Shift from world space into the traced volume's voxel space.
     ///
-    /// The mesher places a model centred on its transform, so a world point
-    /// maps to `local = world + half_size - translation`. Without this the
-    /// traced image sits half a model away from the framed one.
+    /// The mesher places a model's pivot on its transform, so a world point
+    /// maps to `local = world + pivot - translation`. Without this the traced
+    /// image sits half a model away from the framed one.
     fn volume_offset(&self) -> Vec3 {
         let Some(loaded) = &self.scene else {
             return Vec3::ZERO;
@@ -303,9 +311,7 @@ impl App {
         let Some(volume) = loaded.scene.models.get(instance.model_index) else {
             return Vec3::ZERO;
         };
-        let [sx, sy, sz] = volume.size();
-        let half = Vec3::new(sx as f32, sy as f32, sz as f32) * 0.5;
-        half - instance.transform.translation.as_vec3()
+        volume.pivot() - instance.transform.translation.as_vec3()
     }
 
     fn apply_history(&mut self, op: impl FnOnce(&mut History, &mut voxel_core::Volume) -> bool) -> bool {
@@ -353,7 +359,11 @@ impl App {
         });
 
         if self.rendering {
-            ui.label(format!("{} samples", self.path_tracer.samples));
+            ui.label(format!(
+                "{} samples, {} emissive voxels",
+                self.path_tracer.samples,
+                self.path_tracer.emitter_count()
+            ));
             let mut changed = false;
             changed |= ui
                 .add(egui::Slider::new(&mut self.environment.bounces, 0..=8).text("bounces"))

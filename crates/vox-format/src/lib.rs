@@ -26,8 +26,8 @@ pub use dict::Dict;
 pub use parse::{UnknownChunk, VoxFile};
 pub use reader::Reader;
 pub use types::{
-    Camera, Color, GroupNode, Layer, Material, Model, Palette, SceneNode, ShapeModel, ShapeNode,
-    TransformNode, Voxel,
+    Camera, Color, GroupNode, Layer, Material, MaterialKind, Model, Palette, SceneNode, ShapeModel, ShapeNode,
+    ResolvedMaterial, TransformNode, Voxel,
 };
 
 use thiserror::Error;

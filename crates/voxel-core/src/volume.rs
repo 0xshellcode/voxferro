@@ -35,6 +35,20 @@ impl Volume {
         self.size
     }
 
+    /// The point a model's transform places, in voxel coordinates.
+    ///
+    /// Integer division, not `size / 2.0`: every model in the sample corpus
+    /// is written with `_t.z == size.z / 2` (a 3-high model at z = 1), which
+    /// only sits it on the ground with an integer pivot. A fractional pivot
+    /// would push every odd-sized model half a voxel off the world grid.
+    pub fn pivot(&self) -> glam::Vec3 {
+        glam::Vec3::new(
+            (self.size[0] / 2) as f32,
+            (self.size[1] / 2) as f32,
+            (self.size[2] / 2) as f32,
+        )
+    }
+
     fn index(&self, x: u32, y: u32, z: u32) -> Option<usize> {
         if x >= self.size[0] || y >= self.size[1] || z >= self.size[2] {
             return None;
@@ -155,6 +169,12 @@ mod tests {
         assert_eq!(back.get(1, 2, 3), 9);
         assert_eq!(back.get(0, 0, 0), 1);
         assert_eq!(back.filled_count(), 2);
+    }
+
+    #[test]
+    fn pivot_uses_integer_division() {
+        assert_eq!(Volume::new([3, 3, 3]).pivot(), glam::Vec3::new(1.0, 1.0, 1.0));
+        assert_eq!(Volume::new([15, 34, 13]).pivot(), glam::Vec3::new(7.0, 17.0, 6.0));
     }
 
     #[test]

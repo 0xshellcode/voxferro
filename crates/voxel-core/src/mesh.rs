@@ -141,12 +141,13 @@ impl Mesh {
 
     /// Appends a volume placed by `transform`.
     ///
-    /// A model's translation positions its **centre**, not its corner, so the
-    /// half-size is subtracted before rotating. Skipping that is the classic
-    /// way to get a scene where every model is offset by half its own size.
+    /// A model's translation positions its pivot -- `Volume::pivot`, the
+    /// integer centre -- not its corner, so the pivot is subtracted before
+    /// rotating. Skipping that is the classic way to get a scene where every
+    /// model is offset by half its own size.
     pub fn append_volume(&mut self, volume: &Volume, transform: &Transform) {
         let [sx, sy, sz] = volume.size();
-        let half = Vec3::new(sx as f32, sy as f32, sz as f32) * 0.5;
+        let half = volume.pivot();
 
         for z in 0..sz {
             for y in 0..sy {
@@ -280,13 +281,32 @@ mod tests {
             },
         );
 
-        // The volume is 2x2x2, so its centre sits at its midpoint and the
-        // mesh straddles the translation by one unit each way.
+        // The volume is 2x2x2, so its pivot is (1,1,1) and the mesh
+        // straddles the translation by one unit each way.
         let xs: Vec<f32> = mesh.vertices.iter().map(|v| v.position[0]).collect();
         let min = xs.iter().cloned().fold(f32::INFINITY, f32::min);
         let max = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         assert_eq!(min, 99.0);
         assert_eq!(max, 101.0);
+    }
+
+    #[test]
+    fn an_odd_model_placed_like_the_editor_sits_on_the_ground() {
+        use glam::IVec3;
+        // 3x3x3.vox: size 3, written with _t = 0 0 1.
+        let mut v = Volume::new([3, 3, 3]);
+        v.set(1, 1, 0, 1);
+        let mut mesh = Mesh::default();
+        mesh.append_volume(
+            &v,
+            &Transform {
+                rotation: glam::Mat3::IDENTITY,
+                translation: IVec3::new(0, 0, 1),
+            },
+        );
+        let (min, _) = mesh.bounds().unwrap();
+        assert_eq!(min.z, 0.0, "bottom face should rest exactly on z = 0");
+        assert_eq!(min.x, 0.0, "and stay on the integer grid");
     }
 
     #[test]

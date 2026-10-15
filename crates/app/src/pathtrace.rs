@@ -89,6 +89,46 @@ impl Environment {
     }
 }
 
+/// One palette index's material, matching the WGSL `Material`.
+///
+/// 32 bytes: four scalars, then a vec4 that WGSL aligns to 16, which the four
+/// scalars already reach -- no hidden padding to get wrong.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuMaterial {
+    kind: u32,
+    roughness: f32,
+    ior: f32,
+    amount: f32,
+    emission: [f32; 4],
+}
+
+/// Converts an emitter's `_emit` and `_flux` into a radiance multiplier.
+///
+/// Taken from the editor itself, not guessed: `the reference renderer`
+/// computes `1 + 3 * emit * powf(10, flux)` (the constants 3.0, 10.0 and 1.0
+/// read straight out of the binary). So `_flux` counts powers of ten, and the
+/// `+ 1` means an emitter at `_emit = 0` still glows with its own colour.
+pub fn emission_strength(emission: f32, flux: f32) -> f32 {
+    1.0 + 3.0 * emission * 10f32.powf(flux)
+}
+
+/// The editor's roughness slider is far gentler than a raw GGX alpha:
+/// `CalcMaterialProp` scales it by 0.15 before use. Without this, every
+/// "slightly rough" metal from a real file renders visibly blurred.
+pub fn effective_roughness(slider: f32) -> f32 {
+    slider * 0.15
+}
+
+fn srgb_to_linear(v: u8) -> f32 {
+    let v = v as f32 / 255.0;
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
 /// Must match the WGSL `Params` exactly, padding included.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -118,6 +158,8 @@ struct Params {
     reset: u32,
 
     volume_offset: [f32; 4],
+
+    emitter_info: [u32; 4],
 }
 
 struct Target {
@@ -133,6 +175,9 @@ pub struct PathTracer {
     layout: wgpu::BindGroupLayout,
     params: wgpu::Buffer,
     palette: wgpu::Buffer,
+    materials: wgpu::Buffer,
+    emitters: wgpu::Buffer,
+    emitter_count: u32,
     volume: Option<(wgpu::TextureView, [u32; 3])>,
     target: Option<Target>,
     /// Frames accumulated since the last reset.
@@ -194,6 +239,8 @@ impl PathTracer {
                     },
                     count: None,
                 },
+                storage(5, true),
+                storage(6, true),
             ],
         });
 
@@ -226,11 +273,29 @@ impl PathTracer {
             mapped_at_creation: false,
         });
 
+        // Every slot starts as plain diffuse, so a file without MATL chunks
+        // renders exactly as before.
+        let defaults = [GpuMaterial {
+            kind: 0,
+            roughness: 0.1,
+            ior: 1.3,
+            amount: 0.0,
+            emission: [0.0; 4],
+        }; 256];
+        let materials = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("path tracer materials"),
+            contents: bytemuck::cast_slice(&defaults),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
         Self {
             pipeline,
             layout,
             params,
             palette,
+            materials,
+            emitters: empty_emitter_buffer(device),
+            emitter_count: 0,
             volume: None,
             target: None,
             samples: 0,
@@ -289,20 +354,98 @@ impl PathTracer {
         self.reset();
     }
 
+    /// Uploads one material per palette index.
+    ///
+    /// Emission is baked into radiance here, from the palette colour, so the
+    /// shader adds it without knowing about amounts or flux.
+    pub fn set_materials(
+        &mut self,
+        queue: &wgpu::Queue,
+        palette: &Palette,
+        materials: &[vox_format::Material],
+    ) {
+        let mut table = [GpuMaterial {
+            kind: 0,
+            roughness: 0.1,
+            ior: 1.3,
+            amount: 0.0,
+            emission: [0.0; 4],
+        }; 256];
+
+        for material in materials {
+            // MATL ids are palette indices; anything outside 1..=255 cannot
+            // be referenced by a voxel.
+            let Ok(index) = u8::try_from(material.id) else { continue };
+            if index == 0 {
+                continue;
+            }
+            let r = material.resolve();
+            let c = palette.color(index);
+            let strength = if r.kind == vox_format::MaterialKind::Emissive {
+                emission_strength(r.emission, r.flux)
+            } else {
+                0.0
+            };
+
+            table[index as usize] = GpuMaterial {
+                kind: r.kind as u32,
+                roughness: effective_roughness(r.roughness),
+                ior: r.ior,
+                amount: match r.kind {
+                    vox_format::MaterialKind::Metal => r.metalness,
+                    vox_format::MaterialKind::Glass => r.transparency,
+                    _ => 0.0,
+                },
+                // w carries the absorption density; the vec4 had a free lane.
+                emission: [
+                    srgb_to_linear(c.r) * strength,
+                    srgb_to_linear(c.g) * strength,
+                    srgb_to_linear(c.b) * strength,
+                    r.density,
+                ],
+            };
+        }
+
+        queue.write_buffer(&self.materials, 0, bytemuck::cast_slice(&table));
+        self.reset();
+    }
+
+    /// Builds the list of emissive voxels the shader samples directly.
+    ///
+    /// Only cells with at least one face open to the air are kept, with a
+    /// bitmask of which faces those are. A solid lamp of 10x10x18 voxels has
+    /// 1800 emissive cells but only its shell can light anything; sampling the
+    /// interior would spend every one of those shadow rays on occlusion.
+    pub fn set_emitters(
+        &mut self,
+        device: &wgpu::Device,
+        volume: &Volume,
+        materials: &[vox_format::Material],
+    ) {
+        let list = exposed_emitters(volume, materials);
+        self.emitter_count = list.len() as u32;
+        self.emitters = if list.is_empty() {
+            empty_emitter_buffer(device)
+        } else {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("path tracer emitters"),
+                contents: bytemuck::cast_slice(&list),
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+        };
+        self.reset();
+    }
+
+    pub fn emitter_count(&self) -> u32 {
+        self.emitter_count
+    }
+
     pub fn set_palette(&mut self, queue: &wgpu::Queue, palette: &Palette) {
         let mut data = [[0.0f32; 4]; 256];
         for (i, c) in palette.as_slice().iter().enumerate() {
             // Albedo must be linear for the light transport to be correct;
             // palette entries are sRGB-encoded.
-            let to_linear = |v: u8| {
-                let v = v as f32 / 255.0;
-                if v <= 0.04045 {
-                    v / 12.92
-                } else {
-                    ((v + 0.055) / 1.055).powf(2.4)
-                }
-            };
-            data[i] = [to_linear(c.r), to_linear(c.g), to_linear(c.b), 1.0];
+            data[i] = [srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b), 1.0];
         }
         queue.write_buffer(&self.palette, 0, bytemuck::cast_slice(&data));
     }
@@ -415,6 +558,7 @@ impl PathTracer {
             sun_angular_radius: environment.sun_angular_radius,
             reset: reset as u32,
             volume_offset: volume_offset.extend(0.0).to_array(),
+            emitter_info: [self.emitter_count, 0, 0, 0],
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
 
@@ -441,6 +585,14 @@ impl PathTracer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(&target.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.materials.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.emitters.as_entire_binding(),
                 },
             ],
         });
@@ -511,5 +663,119 @@ impl PathTracer {
         buffer.unmap();
 
         Some((width, height, out))
+    }
+}
+
+/// A storage binding cannot be zero-sized, so "no emitters" is one unused
+/// entry plus a count of zero.
+fn empty_emitter_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("path tracer emitters (empty)"),
+        contents: bytemuck::cast_slice(&[[0i32; 4]]),
+        usage: wgpu::BufferUsages::STORAGE,
+    })
+}
+
+/// Emissive cells with at least one empty neighbour, as `[x, y, z, mask]`.
+///
+/// Mask bit `2 * axis` is the negative face, `2 * axis + 1` the positive one,
+/// matching how the shader picks the face that looks at a shading point.
+pub fn exposed_emitters(volume: &Volume, materials: &[vox_format::Material]) -> Vec<[i32; 4]> {
+    let mut emissive = [false; 256];
+    for m in materials {
+        if let Ok(i) = u8::try_from(m.id) {
+            emissive[i as usize] = m.resolve().kind == vox_format::MaterialKind::Emissive;
+        }
+    }
+    emissive[0] = false;
+
+    let [sx, sy, sz] = volume.size();
+    let mut out = Vec::new();
+    for z in 0..sz as i32 {
+        for y in 0..sy as i32 {
+            for x in 0..sx as i32 {
+                if !emissive[volume.get_i(x, y, z) as usize] {
+                    continue;
+                }
+                let mut mask = 0i32;
+                for axis in 0..3 {
+                    for (side, step) in [(0, -1), (1, 1)] {
+                        let mut n = [x, y, z];
+                        n[axis] += step;
+                        if volume.get_i(n[0], n[1], n[2]) == 0 {
+                            mask |= 1 << (axis * 2 + side);
+                        }
+                    }
+                }
+                if mask != 0 {
+                    out.push([x, y, z, mask]);
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn emit_material(id: i32) -> vox_format::Material {
+        vox_format::Material {
+            id,
+            properties: vox_format::Dict(vec![("_type".into(), "_emit".into())]),
+        }
+    }
+
+    #[test]
+    fn only_the_shell_of_a_solid_lamp_is_sampled() {
+        let mut v = Volume::new([5, 5, 5]);
+        for z in 0..3 {
+            for y in 0..3 {
+                for x in 0..3 {
+                    v.set(x + 1, y + 1, z + 1, 9);
+                }
+            }
+        }
+        let list = exposed_emitters(&v, &[emit_material(9)]);
+        // A 3x3x3 block has 27 cells; the centre one is fully enclosed.
+        assert_eq!(list.len(), 26);
+        assert!(!list.iter().any(|e| e[0..3] == [2, 2, 2]));
+    }
+
+    #[test]
+    fn face_mask_marks_open_sides_only() {
+        let mut v = Volume::new([3, 1, 1]);
+        v.set(0, 0, 0, 9);
+        v.set(1, 0, 0, 9);
+        let list = exposed_emitters(&v, &[emit_material(9)]);
+        let left = list.iter().find(|e| e[0] == 0).unwrap();
+        // -X is outside the grid (empty), +X touches the other emitter.
+        assert_ne!(left[3] & 0b01, 0, "-x face is open");
+        assert_eq!(left[3] & 0b10, 0, "+x face is covered");
+    }
+
+    #[test]
+    fn non_emissive_voxels_are_ignored() {
+        let mut v = Volume::new([2, 2, 2]);
+        v.set(0, 0, 0, 3);
+        assert!(exposed_emitters(&v, &[emit_material(9)]).is_empty());
+    }
+
+    #[test]
+    fn emission_matches_the_editor_formula() {
+        // room.vox's lamps: _emit 1 (from _weight), _flux 2.
+        assert_eq!(emission_strength(1.0, 2.0), 301.0);
+        // An emitter with no emission still shows its colour.
+        assert_eq!(emission_strength(0.0, 3.0), 1.0);
+        // Each flux step is a factor of ten, not two.
+        let ratio = (emission_strength(1.0, 2.0) - 1.0) / (emission_strength(1.0, 1.0) - 1.0);
+        assert!((ratio - 10.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn roughness_is_scaled_like_the_editor() {
+        assert!((effective_roughness(1.0) - 0.15).abs() < 1e-6);
+        assert_eq!(effective_roughness(0.0), 0.0);
     }
 }
