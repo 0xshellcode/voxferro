@@ -6,6 +6,7 @@
 //! so nothing goes through the deprecated OpenGL stack.
 
 mod camera;
+mod console;
 mod edit;
 mod image_out;
 mod renderer;
@@ -55,10 +56,15 @@ struct App {
     erase: bool,
     /// Set when the scene changed and the GPU mesh is stale.
     mesh_dirty: bool,
-    /// When set, the app writes one rendered frame here and exits. Used to
-    /// verify the viewport without a human looking at the window, and to
+    /// Per-layer visibility; the format defines eight.
+    hidden_layers: [bool; 8],
+    console_input: String,
+    console_log: Vec<String>,
+    /// When set, the app writes one frame of the whole window here and exits.
+    /// Used to verify the UI without a human looking at the window, and to
     /// produce images for the README.
     screenshot: Option<String>,
+
 }
 
 impl App {
@@ -85,6 +91,9 @@ impl App {
             brush_color: 79,
             erase: false,
             mesh_dirty: false,
+            hidden_layers: [false; 8],
+            console_input: String::new(),
+            console_log: vec!["type 'help' for commands".to_owned()],
         };
 
         // Usage: voxferro [model.vox] [--screenshot out.bmp]
@@ -132,7 +141,8 @@ impl App {
         // fields accessed directly rather than through a method on `self`.
         let Some(loaded) = &self.scene else { return };
 
-        let mesh = Mesh::from_scene(&loaded.scene);
+        let hidden = self.hidden_layers;
+        let mesh = Mesh::from_scene_where(&loaded.scene, |i| !is_hidden(&hidden, i.layer));
         eprintln!(
             "[voxferro] {}: {} instances, {} voxels, {} triangles",
             loaded.name,
@@ -151,7 +161,8 @@ impl App {
     /// Rebuilds the GPU mesh after an edit, leaving the camera alone.
     fn remesh(&mut self, state: &egui_wgpu::RenderState) {
         let Some(loaded) = &self.scene else { return };
-        let mesh = Mesh::from_scene(&loaded.scene);
+        let hidden = self.hidden_layers;
+        let mesh = Mesh::from_scene_where(&loaded.scene, |i| !is_hidden(&hidden, i.layer));
         self.scene_renderer.set_mesh(&state.device, &mesh);
         self.mesh_dirty = false;
     }
@@ -241,6 +252,9 @@ impl App {
         }
 
         ui.separator();
+        self.palette_grid(ui);
+
+        ui.separator();
         ui.heading("Brush");
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.erase, false, "Add");
@@ -273,6 +287,25 @@ impl App {
         ui.label(format!("{} undo steps", self.history.undo_depth()));
 
         ui.separator();
+        ui.heading("Layers");
+        let mut toggled = false;
+        ui.horizontal_wrapped(|ui| {
+            for (i, hidden) in self.hidden_layers.iter_mut().enumerate() {
+                let mut visible = !*hidden;
+                if ui.checkbox(&mut visible, format!("{i}")).changed() {
+                    *hidden = !visible;
+                    toggled = true;
+                }
+            }
+        });
+        if toggled {
+            self.mesh_dirty = true;
+        }
+
+        ui.separator();
+        self.console_ui(ui, state);
+
+        ui.separator();
         ui.label("Drag to orbit, scroll to zoom.");
         ui.label("Click to edit, Cmd+Z to undo.");
         ui.separator();
@@ -301,6 +334,106 @@ impl App {
         });
         if let Some(path) = pick {
             self.load(state, &path);
+        }
+    }
+
+    /// The 256 palette entries as a clickable grid.
+    fn palette_grid(&mut self, ui: &mut egui::Ui) {
+        let Some(loaded) = &self.scene else { return };
+
+        const COLS: usize = 16;
+        const CELL: f32 = 13.0;
+        let size = egui::vec2(COLS as f32 * CELL, (256 / COLS) as f32 * CELL);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+
+        let painter = ui.painter();
+        for i in 0..256usize {
+            let (cx, cy) = (i % COLS, i / COLS);
+            let cell = egui::Rect::from_min_size(
+                rect.min + egui::vec2(cx as f32 * CELL, cy as f32 * CELL),
+                egui::vec2(CELL - 1.0, CELL - 1.0),
+            );
+            let c = loaded.palette.color(i as u8);
+            painter.rect_filled(cell, 1.0, egui::Color32::from_rgb(c.r, c.g, c.b));
+            if i as u8 == self.brush_color {
+                painter.rect_stroke(
+                    cell,
+                    1.0,
+                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
+
+        if let (true, Some(pos)) = (response.clicked(), response.interact_pointer_pos()) {
+            let local = pos - rect.min;
+            let (cx, cy) = ((local.x / CELL) as usize, (local.y / CELL) as usize);
+            if cx < COLS {
+                let index = cy * COLS + cx;
+                if index < 256 {
+                    self.brush_color = index as u8;
+                }
+            }
+        }
+    }
+
+    /// Text command console, in the spirit of the editor's own F2 console.
+    fn console_ui(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
+        ui.heading("Console");
+
+        let entered = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.console_input)
+                    .hint_text("help")
+                    .desired_width(f32::INFINITY),
+            )
+            .lost_focus()
+            && ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+        if entered {
+            let line = std::mem::take(&mut self.console_input);
+            self.run_command(&line, state);
+        }
+
+        egui::ScrollArea::vertical()
+            .max_height(80.0)
+            .id_salt("console log")
+            .show(ui, |ui| {
+                for entry in self.console_log.iter().rev().take(20) {
+                    ui.label(entry);
+                }
+            });
+    }
+
+    fn run_command(&mut self, line: &str, state: &egui_wgpu::RenderState) {
+        if line.trim().is_empty() {
+            return;
+        }
+        self.console_log.push(format!("> {line}"));
+
+        // Same disjoint-borrow dance as undo/redo: reach the fields directly.
+        let mut changed = false;
+        let mut message = None;
+        if let Some(loaded) = self.scene.as_mut() {
+            if let Some(index) = loaded.scene.instances.first().map(|i| i.model_index) {
+                if let Some(volume) = loaded.scene.models.get_mut(index) {
+                    match console::execute(line, volume, &mut self.history) {
+                        console::Outcome::Ok { message: m, changed: c } => {
+                            changed = c;
+                            if !m.is_empty() {
+                                message = Some(m);
+                            }
+                        }
+                        console::Outcome::Error(e) => message = Some(format!("error: {e}")),
+                    }
+                }
+            }
+        }
+        if let Some(m) = message {
+            self.console_log.push(m);
+        }
+        if changed {
+            self.remesh(state);
         }
     }
 
@@ -377,6 +510,11 @@ impl App {
     }
 }
 
+/// Layer -1 means "no layer assigned", which is always visible.
+fn is_hidden(hidden: &[bool; 8], layer: i32) -> bool {
+    usize::try_from(layer).ok().and_then(|i| hidden.get(i)).copied().unwrap_or(false)
+}
+
 impl eframe::App for App {
     /// Draws one frame.
     ///
@@ -415,7 +553,10 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ui, |ui| self.viewport(ui, &state));
 
-        // One frame is enough: the viewport above has already rendered.
+        // Reads back the 3D target. egui's own ViewportCommand::Screenshot
+        // would also capture the panels, but this eframe/wgpu backend never
+        // delivers the resulting event here, so the viewport is what we can
+        // verify automatically.
         if let Some(path) = self.screenshot.take() {
             match self.scene_renderer.read_frame(&state.device, &state.queue) {
                 Some((w, h, rgba)) => match image_out::write_bmp(&path, w, h, &rgba) {
@@ -424,8 +565,7 @@ impl eframe::App for App {
                 },
                 None => eprintln!("[voxferro] nothing rendered yet; no screenshot"),
             }
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Close);
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 }

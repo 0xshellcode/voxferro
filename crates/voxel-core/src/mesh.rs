@@ -194,8 +194,19 @@ impl Mesh {
 
     /// Meshes a whole scene, placing every instance in world space.
     pub fn from_scene(scene: &crate::Scene) -> Self {
+        Self::from_scene_where(scene, |_| true)
+    }
+
+    /// Meshes only the instances `keep` accepts, for layer visibility.
+    pub fn from_scene_where(
+        scene: &crate::Scene,
+        keep: impl Fn(&crate::Instance) -> bool,
+    ) -> Self {
         let mut mesh = Self::default();
         for instance in &scene.instances {
+            if !keep(instance) {
+                continue;
+            }
             if let Some(volume) = scene.models.get(instance.model_index) {
                 mesh.append_volume(volume, &instance.transform);
             }
