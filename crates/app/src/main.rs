@@ -512,11 +512,13 @@ impl App {
             &state.device,
             &state.queue,
             volume,
-            shape,
-            color,
-            radius,
-            thickness,
-            replace,
+            compute::Op {
+                shape,
+                color,
+                radius,
+                thickness,
+                replace,
+            },
         ) else {
             return "gpu kernel produced nothing".to_owned();
         };

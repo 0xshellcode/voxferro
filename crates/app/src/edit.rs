@@ -24,7 +24,7 @@ pub fn ray_through_pixel(view_proj: Mat4, viewport: Vec2, pixel: Vec2) -> Ray {
     let unproject = |z: f32| -> Vec3 {
         let p = inverse * Vec4::new(ndc.x, ndc.y, z, 1.0);
         // Perspective divide; w is zero only for degenerate matrices.
-        (p.xyz() / p.w.max(f32::EPSILON)).into()
+        p.xyz() / p.w.max(f32::EPSILON)
     };
 
     let near = unproject(0.0);

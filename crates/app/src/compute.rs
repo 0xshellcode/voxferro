@@ -97,8 +97,25 @@ impl VoxelCompute {
 
         Self { pipeline, layout }
     }
+}
 
-    /// Evaluates `shape` over the whole volume on the GPU.
+/// What a kernel run should do.
+///
+/// Grouped into a struct rather than passed as a long argument list: at nine
+/// parameters the call site stops being readable and adjacent floats become
+/// easy to swap by accident.
+#[derive(Debug, Clone, Copy)]
+pub struct Op {
+    pub shape: Shape,
+    pub color: u8,
+    pub radius: f32,
+    pub thickness: f32,
+    /// Clear cells the shape does not cover, instead of only adding.
+    pub replace: bool,
+}
+
+impl VoxelCompute {
+    /// Evaluates `op.shape` over the whole volume on the GPU.
     ///
     /// The volume is uploaded, processed and read back. A real editor would
     /// keep it resident on the GPU and only read back when saving; round
@@ -109,11 +126,7 @@ impl VoxelCompute {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         volume: &Volume,
-        shape: Shape,
-        color: u8,
-        radius: f32,
-        thickness: f32,
-        replace: bool,
+        op: Op,
     ) -> Option<Vec<u8>> {
         let [sx, sy, sz] = volume.size();
         let count = (sx as usize) * (sy as usize) * (sz as usize);
@@ -139,11 +152,11 @@ impl VoxelCompute {
 
         let params = Params {
             size: [sx, sy, sz],
-            color: color as u32,
-            mode: shape as u32,
-            radius,
-            thickness,
-            replace: replace as u32,
+            color: op.color as u32,
+            mode: op.shape as u32,
+            radius: op.radius,
+            thickness: op.thickness,
+            replace: op.replace as u32,
         };
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("voxel ops params"),
