@@ -41,6 +41,32 @@ fn main() -> eframe::Result {
 /// `cargo run` works from any directory.
 const ASSET_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/vox");
 
+/// Where environment maps are looked for, in order. A file names its map
+/// relative to the editor's own `ibl/` folder, so after the bundled copies
+/// the search falls back to a local the reference editor install.
+fn env_map_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = vec![std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/ibl"
+    ))];
+    if let Some(home) = std::env::var_os("HOME") {
+        let apps = std::path::Path::new(&home).join("Applications/the reference editor");
+        if let Ok(entries) = std::fs::read_dir(apps) {
+            dirs.extend(entries.flatten().map(|e| e.path().join("ibl")));
+        }
+    }
+    dirs
+}
+
+fn find_env_map(name: &str) -> Option<std::path::PathBuf> {
+    // A bare file name only: the path comes from a file we did not write.
+    let name = std::path::Path::new(name).file_name()?;
+    env_map_dirs()
+        .into_iter()
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+}
+
 struct App {
     backend: String,
     camera: OrbitCamera,
@@ -115,7 +141,8 @@ impl App {
         };
 
         // Usage: voxferro [model.vox] [--run "<command>"]... [--render-mode]
-        //           [--render N] [--screenshot out.bmp]
+        //           [--camera azimuth elevation] [--render N]
+        //           [--screenshot out.bmp]
         let args: Vec<String> = std::env::args().skip(1).collect();
         let screenshot = args
             .iter()
@@ -160,6 +187,19 @@ impl App {
             }
         }
 
+        // --camera <azimuth> <elevation>, degrees: view direction for
+        // reproducible renders. Azimuth -90 looks from -Y toward +Y, the
+        // editor's default front view.
+        let camera_angles = args.iter().position(|a| a == "--camera").and_then(|i| {
+            let yaw = args.get(i + 1)?.parse::<f32>().ok()?;
+            let pitch = args.get(i + 2)?.parse::<f32>().ok()?;
+            Some((yaw, pitch))
+        });
+        if let Some((yaw, pitch)) = camera_angles {
+            app.camera.yaw = yaw.to_radians();
+            app.camera.pitch = pitch.to_radians();
+        }
+
         // --render-mode opens straight into the path tracer, interactively.
         if args.iter().any(|a| a == "--render-mode") {
             app.rendering = true;
@@ -185,6 +225,7 @@ impl App {
                 self.environment = Environment::from_render_objects(&loaded.render_objects);
                 self.scene = Some(loaded);
                 self.upload_current(state);
+                self.ensure_env_map(state);
             }
             Err(e) => self.status = format!("failed to load {path}: {e}"),
         }
@@ -559,6 +600,12 @@ impl App {
         }
         self.console_log.push(format!("> {line}"));
 
+        if line.split_whitespace().next() == Some("env") {
+            let message = self.env_command(line, state);
+            self.console_log.push(message);
+            return;
+        }
+
         if line.split_whitespace().next() == Some("save") {
             let message = self.save_command(line);
             self.console_log.push(message);
@@ -594,6 +641,65 @@ impl App {
         }
         if changed {
             self.remesh(state);
+        }
+    }
+
+    /// Loads the environment map the current settings name, if it is not
+    /// already resident. A missing or unreadable map turns image lighting
+    /// off with a message rather than rendering a black sky.
+    fn ensure_env_map(&mut self, state: &egui_wgpu::RenderState) -> Option<String> {
+        if !self.environment.ibl_enabled {
+            return None;
+        }
+        let wanted = self.environment.ibl_path.clone();
+        if self.path_tracer.environment_map_name() == Some(wanted.as_str()) {
+            return None;
+        }
+        let result = find_env_map(&wanted)
+            .ok_or_else(|| format!("environment map {wanted} not found"))
+            .and_then(|path| std::fs::read(&path).map_err(|e| e.to_string()))
+            .and_then(|bytes| voxel_core::EnvMap::parse_hdr(&bytes).map_err(|e| e.to_string()));
+
+        match result {
+            Ok(map) => {
+                self.path_tracer.set_environment_map(&state.device, &wanted, &map);
+                let message = format!("environment {wanted} ({}x{})", map.width, map.height);
+                eprintln!("[voxferro] {message}");
+                Some(message)
+            }
+            Err(e) => {
+                self.environment.ibl_enabled = false;
+                eprintln!("[voxferro] {e}; using the uniform sky");
+                Some(format!("{e}; using the uniform sky"))
+            }
+        }
+    }
+
+    /// `env uniform` | `env ibl [map.hdr] [intensity] [rotation]`
+    fn env_command(&mut self, line: &str, state: &egui_wgpu::RenderState) -> String {
+        let args: Vec<&str> = line.split_whitespace().skip(1).collect();
+        match args.first().copied() {
+            Some("uniform") => {
+                self.environment.ibl_enabled = false;
+                self.path_tracer.reset();
+                "sky: uniform".to_owned()
+            }
+            Some("ibl") => {
+                if let Some(name) = args.get(1) {
+                    self.environment.ibl_path = (*name).to_owned();
+                }
+                if let Some(i) = args.get(2).and_then(|v| v.parse::<f32>().ok()) {
+                    self.environment.ibl_intensity = i.max(0.0);
+                }
+                if let Some(r) = args.get(3).and_then(|v| v.parse::<f32>().ok()) {
+                    self.environment.ibl_rotation = r;
+                }
+                self.environment.ibl_enabled = true;
+                self.path_tracer.reset();
+                self.ensure_env_map(state)
+                    .unwrap_or_else(|| format!("sky: {}", self.environment.ibl_path))
+            }
+            _ => "env uniform | env ibl [map.hdr] [intensity] [rotation]".to_owned(),
         }
     }
 

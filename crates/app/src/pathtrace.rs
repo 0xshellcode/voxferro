@@ -8,7 +8,7 @@ use wgpu::util::DeviceExt;
 
 /// Lighting and film settings, read from the file's `rOBJ` chunks where
 /// available.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Environment {
     pub sun_direction: Vec3,
     pub sun_color: Vec3,
@@ -27,6 +27,14 @@ pub struct Environment {
     pub ground_color: Vec3,
     /// `_hor`: how quickly the ground fades into the sky with distance.
     pub horizon_density: f32,
+    /// Sky from an HDR map instead of the uniform colour (`_env._mode` 2).
+    pub ibl_enabled: bool,
+    /// `_ibl._i`: the map's mean radiance after normalisation.
+    pub ibl_intensity: f32,
+    /// `_ibl._rot`, in turns.
+    pub ibl_rotation: f32,
+    /// `_ibl._path`: file name inside the editor's `ibl/` folder.
+    pub ibl_path: String,
 }
 
 impl Default for Environment {
@@ -51,6 +59,12 @@ impl Default for Environment {
             // `_ground._color` is 80 80 80 in every sample file.
             ground_color: Vec3::splat(srgb_to_linear(80)),
             horizon_density: 0.1,
+            ibl_enabled: false,
+            ibl_intensity: 1.0,
+            ibl_rotation: 0.0,
+            // The map most sample files name, and the one room.vox falls
+            // back to: it selects image lighting without naming a file.
+            ibl_path: "HDR_041_Path_Env.hdr".to_owned(),
         };
         let pair = |k: &str, v: &str| (k.to_owned(), v.to_owned());
         base.with_render_objects(&[
@@ -95,11 +109,15 @@ impl Environment {
                         // scale it so a default scene is not nearly black.
                         env.sun_intensity = (i * 1.8).max(0.0);
                     }
-                    // `_angle` is "azimuth elevation" in degrees.
+                    // `_angle` is "azimuth elevation" in degrees, azimuth
+                    // clockwise seen from above. Rendering the same scene in
+                    // the editor cast shadows mirrored front-to-back until
+                    // the y component was negated -- the same flip the
+                    // environment map needed.
                     if let Some([azimuth, elevation]) = object.get_parsed::<f32, 2>("_angle") {
                         let (az, el) = (azimuth.to_radians(), elevation.to_radians());
                         env.sun_direction =
-                            Vec3::new(el.cos() * az.cos(), el.cos() * az.sin(), el.sin())
+                            Vec3::new(el.cos() * az.cos(), -el.cos() * az.sin(), el.sin())
                                 .normalize_or(Vec3::Z);
                     }
                     if let Some(area) = object.get("_area").and_then(|v| v.parse::<f32>().ok()) {
@@ -134,6 +152,30 @@ impl Environment {
                 Some("_setting") => {
                     if let Some(on) = object.get("_ground") {
                         env.ground_enabled = on != "0";
+                    }
+                }
+                // The sky panel's three modes: 0 uniform, 1 atmosphere,
+                // 2 image. Atmosphere is not implemented and falls back to
+                // the uniform sky.
+                Some("_env") => {
+                    env.ibl_enabled = object.get("_mode") == Some("2");
+                }
+                Some("_ibl") => {
+                    if let Some(i) = object.get("_i").and_then(|v| v.parse::<f32>().ok()) {
+                        env.ibl_intensity = i.max(0.0);
+                    }
+                    // `_rot` is stored as-is into the editor's ibl_rot.
+                    if let Some(r) = object.get("_rot").and_then(|v| v.parse::<f32>().ok()) {
+                        env.ibl_rotation = r;
+                    } else if let Some([_, azimuth]) = object.get_parsed::<f32, 2>("_angle") {
+                        // Version 200 writes `_angle`, which the a recent version
+                        // binary does not read for the sky. Taken as degrees
+                        // of azimuth -- unverified; both corpus files using
+                        // it ("0 0", "0 360") mean no rotation either way.
+                        env.ibl_rotation = azimuth / 360.0;
+                    }
+                    if let Some(path) = object.get("_path") {
+                        env.ibl_path = path.to_owned();
                     }
                 }
                 Some("_film") => {
@@ -224,6 +266,18 @@ struct Params {
     /// x: plane height in voxel space, y: enabled, z: horizon density.
     ground: [f32; 4],
     ground_color: [f32; 4],
+
+    ibl: [f32; 4],
+    ibl_size: [u32; 4],
+}
+
+/// An environment map resident on the GPU, with what the shader needs to
+/// know about it.
+struct LoadedEnvMap {
+    name: String,
+    width: u32,
+    height: u32,
+    sampling: voxel_core::EnvSampling,
 }
 
 struct Target {
@@ -242,6 +296,9 @@ pub struct PathTracer {
     materials: wgpu::Buffer,
     emitters: wgpu::Buffer,
     emitter_count: u32,
+    env_texels: wgpu::Buffer,
+    env_cdf: wgpu::Buffer,
+    env_map: Option<LoadedEnvMap>,
     volume: Option<(wgpu::TextureView, [u32; 3])>,
     target: Option<Target>,
     /// Frames accumulated since the last reset.
@@ -305,6 +362,8 @@ impl PathTracer {
                 },
                 storage(5, true),
                 storage(6, true),
+                storage(7, true),
+                storage(8, true),
             ],
         });
 
@@ -360,6 +419,11 @@ impl PathTracer {
             materials,
             emitters: empty_emitter_buffer(device),
             emitter_count: 0,
+            // Placeholders until a map is loaded: storage bindings cannot be
+            // empty, and the shader ignores them while ibl.x is zero.
+            env_texels: placeholder_buffer(device, 16),
+            env_cdf: placeholder_buffer(device, 4),
+            env_map: None,
             volume: None,
             target: None,
             samples: 0,
@@ -500,6 +564,39 @@ impl PathTracer {
         self.reset();
     }
 
+    /// Uploads an environment map and its sampling table.
+    pub fn set_environment_map(
+        &mut self,
+        device: &wgpu::Device,
+        name: &str,
+        map: &voxel_core::EnvMap,
+    ) {
+        let sampling = voxel_core::EnvSampling::new(map);
+        let texels: Vec<[f32; 4]> = map.pixels.iter().map(|p| [p[0], p[1], p[2], 0.0]).collect();
+        self.env_texels = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("environment texels"),
+            contents: bytemuck::cast_slice(&texels),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        self.env_cdf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("environment cdf"),
+            contents: bytemuck::cast_slice(&sampling.cdf),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        self.env_map = Some(LoadedEnvMap {
+            name: name.to_owned(),
+            width: map.width,
+            height: map.height,
+            sampling,
+        });
+        self.reset();
+    }
+
+    /// Name of the loaded environment map, if any.
+    pub fn environment_map_name(&self) -> Option<&str> {
+        self.env_map.as_ref().map(|m| m.name.as_str())
+    }
+
     pub fn emitter_count(&self) -> u32 {
         self.emitter_count
     }
@@ -632,6 +729,19 @@ impl PathTracer {
                 0.0,
             ],
             ground_color: environment.ground_color.extend(0.0).to_array(),
+            ibl: match &self.env_map {
+                Some(map) if environment.ibl_enabled => [
+                    1.0,
+                    map.sampling.scale(environment.ibl_intensity),
+                    environment.ibl_rotation,
+                    map.sampling.total,
+                ],
+                _ => [0.0; 4],
+            },
+            ibl_size: match &self.env_map {
+                Some(map) => [map.width, map.height, 0, 0],
+                None => [1, 1, 0, 0],
+            },
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
 
@@ -666,6 +776,14 @@ impl PathTracer {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: self.emitters.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.env_texels.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: self.env_cdf.as_entire_binding(),
                 },
             ],
         });
@@ -737,6 +855,15 @@ impl PathTracer {
 
         Some((width, height, out))
     }
+}
+
+fn placeholder_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("placeholder"),
+        size,
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    })
 }
 
 /// A storage binding cannot be zero-sized, so "no emitters" is one unused
@@ -869,6 +996,35 @@ mod tests {
         assert!((v150.horizon_density - 0.1).abs() < 1e-6);
 
         assert!(Environment::from_render_objects(&[]).ground_enabled, "on by default");
+    }
+
+    #[test]
+    fn image_lighting_settings_read_both_conventions() {
+        // T-Rex.vox: version 200, image mode, _angle instead of _rot.
+        let v200 = Environment::from_render_objects(&[
+            dict(&[("_type", "_env"), ("_mode", "2")]),
+            dict(&[
+                ("_type", "_ibl"),
+                ("_path", "HDR_111_Parking_Lot_2_Env.hdr"),
+                ("_i", "0.726491"),
+                ("_angle", "0 360"),
+            ]),
+        ]);
+        assert!(v200.ibl_enabled);
+        assert_eq!(v200.ibl_path, "HDR_111_Parking_Lot_2_Env.hdr");
+        assert!((v200.ibl_intensity - 0.726491).abs() < 1e-6);
+
+        // room.vox: image mode with no path falls back to the default map.
+        let room = Environment::from_render_objects(&[
+            dict(&[("_type", "_env"), ("_mode", "2")]),
+            dict(&[("_type", "_ibl"), ("_i", "1"), ("_rot", "0.463889")]),
+        ]);
+        assert!(room.ibl_enabled);
+        assert_eq!(room.ibl_path, "HDR_041_Path_Env.hdr");
+        assert!((room.ibl_rotation - 0.463889).abs() < 1e-6);
+
+        let uniform = Environment::from_render_objects(&[dict(&[("_type", "_env"), ("_mode", "0")])]);
+        assert!(!uniform.ibl_enabled);
     }
 
     #[test]

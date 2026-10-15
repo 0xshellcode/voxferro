@@ -13,3 +13,9 @@ committed: the repository must not redistribute someone else's assets.
 To populate this directory on a fresh clone, copy the `vox/` folder out of a
 local the reference editor install. Tests that need the corpus skip themselves when it
 is absent, so a clean checkout still builds and tests green.
+
+## `ibl/` — environment maps
+
+The Radiance `.hdr` files the reference editor ships in its own `ibl/` folder, credited
+in its readme to the HDRI-Hub free samples. Like `vox/`, they are third-party
+and stay out of version control; copy them from a the reference editor install.

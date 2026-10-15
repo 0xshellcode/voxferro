@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las once fases del [ROADMAP](ROADMAP.md) están completas, con **78 tests
+Las doce fases del [ROADMAP](ROADMAP.md) están completas, con **86 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -24,6 +24,7 @@ verdes**. Funciona hoy:
 - Path tracer progresivo (GI, sombras, ACES) con la iluminación del archivo
 - Materiales metal, vidrio y emisivos, con las fórmulas de the reference editor
 - Plano de suelo infinito con fusión en el horizonte
+- Iluminación con mapas HDR, orientada y normalizada como en the reference editor
 
 Nativo arm64 sobre Metal: `[voxferro] graphics backend: Metal on Apple M2`.
 
@@ -38,7 +39,7 @@ cargo run -p voxferro -- assets/vox/monu1.vox --render 200 --screenshot out.bmp
 ```
 
 En la consola del panel izquierdo: `help`, `fill <c>`, `box …`, `sphere <c>`,
-`gpu sphere|torus|box|shell`, `save [ruta]`, `undo`, `redo`. También Cmd+S.
+`gpu sphere|torus|box|shell`, `env uniform|ibl <mapa>`, `save [ruta]`, `undo`, `redo`. También Cmd+S.
 
 ## Stack
 

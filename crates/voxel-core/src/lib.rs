@@ -4,6 +4,7 @@
 //! in under a second instead of rebuilding the wgpu stack.
 
 mod command;
+mod env_map;
 mod mesh;
 mod raycast;
 mod scene;
@@ -11,6 +12,7 @@ mod transform;
 mod volume;
 
 pub use command::{Command, History};
+pub use env_map::{EnvMap, EnvSampling, HdrError};
 pub use mesh::{Face, Mesh, Vertex};
 pub use raycast::{raycast, Hit};
 pub use scene::{Instance, NodeId, Scene};

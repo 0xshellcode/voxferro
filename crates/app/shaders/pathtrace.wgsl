@@ -49,6 +49,12 @@ struct Params {
     // density (`_hor`).
     ground: vec4<f32>,
     ground_color: vec4<f32>,
+
+    // Image-based lighting. x: enabled, y: radiance scale (the editor's
+    // ibl_I = _i * 4pi / integral), z: rotation in turns, w: CDF total.
+    ibl: vec4<f32>,
+    // x, y: map width and height.
+    ibl_size: vec4<u32>,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -91,6 +97,50 @@ fn absorb(albedo: vec3<f32>, density: f32, distance: f32) -> vec3<f32> {
 @group(0) @binding(6) var<storage, read> emitters: array<vec4<i32>>;
 
 const PI: f32 = 3.14159265;
+
+// Equirectangular environment map, row 0 straight up, and its running-sum
+// CDF over max(r, g, b) -- the editor's own sampling table.
+@group(0) @binding(7) var<storage, read> env_texels: array<vec4<f32>>;
+@group(0) @binding(8) var<storage, read> env_cdf: array<f32>;
+
+fn env_texel(x: i32, y: i32) -> vec3<f32> {
+    let w = i32(p.ibl_size.x);
+    let h = i32(p.ibl_size.y);
+    let xx = ((x % w) + w) % w; // wraps around the horizon
+    let yy = clamp(y, 0, h - 1); // clamps at the poles
+    return env_texels[u32(yy * w + xx)].rgb;
+}
+
+// Radiance from the map in a world direction, bilinear for the visible
+// background. Z is up; azimuth turns with the file's rotation.
+fn env_radiance(direction: vec3<f32>) -> vec3<f32> {
+    let w = f32(p.ibl_size.x);
+    let h = f32(p.ibl_size.y);
+    // Azimuth runs clockwise seen from above (-y), the editor's convention:
+    // rendering the same map in both, side by side, put the bright sky on
+    // the opposite side until this was flipped.
+    var u = atan2(-direction.y, direction.x) / (2.0 * PI) + p.ibl.z;
+    u = u - floor(u);
+    let v = acos(clamp(direction.z, -1.0, 1.0)) / PI;
+    let fx = u * w - 0.5;
+    let fy = v * h - 0.5;
+    let x0 = i32(floor(fx));
+    let y0 = i32(floor(fy));
+    let tx = fx - floor(fx);
+    let ty = fy - floor(fy);
+    let top = mix(env_texel(x0, y0), env_texel(x0 + 1, y0), tx);
+    let bottom = mix(env_texel(x0, y0 + 1), env_texel(x0 + 1, y0 + 1), tx);
+    return mix(top, bottom, ty) * p.ibl.y;
+}
+
+// What the sky is behind everything, without the sun disc: the map when
+// image-based lighting is on, the uniform sky otherwise.
+fn background(direction: vec3<f32>) -> vec3<f32> {
+    if (p.ibl.x > 0.5) {
+        return env_radiance(direction);
+    }
+    return p.sky_color.rgb * p.sky_intensity;
+}
 
 // PCG hash. Cheap, and good enough that consecutive pixels and frames do not
 // correlate -- a weak hash shows up immediately as structured noise.
@@ -316,7 +366,74 @@ fn ground_distance(origin: vec3<f32>, direction: vec3<f32>) -> f32 {
 // which the binary does not carry as text, so this exponential fog is an
 // approximation of the effect, not a transcription of it.
 fn horizon_fade(distance: f32) -> f32 {
-    return 1.0 - exp(-p.ground.z * distance * 0.01);
+    return 1.0 - exp(-p.ground.z * distance * 0.003);
+}
+
+// Next event estimation toward the environment map.
+//
+// Picks a texel with probability proportional to its weight by binary search
+// over the CDF, then a direction inside it uniform in cos θ -- uniform in
+// solid angle within the texel, which makes the pdf exact instead of
+// approximate near the poles.
+fn sample_env(point: vec3<f32>, normal: vec3<f32>, state: ptr<function, u32>) -> vec3<f32> {
+    if (p.ibl.x < 0.5 || p.ibl.w <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let w = p.ibl_size.x;
+    let h = p.ibl_size.y;
+    let count = w * h;
+
+    let wanted = random(state) * p.ibl.w;
+    var lo = 0u;
+    var hi = count - 1u;
+    loop {
+        if (lo >= hi) {
+            break;
+        }
+        let mid = (lo + hi) / 2u;
+        if (env_cdf[mid] < wanted) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    let index = lo;
+    let x = index % w;
+    let y = index / w;
+
+    var weight = env_cdf[index];
+    if (index > 0u) {
+        weight = weight - env_cdf[index - 1u];
+    }
+    if (weight <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+
+    let cos0 = cos(PI * f32(y) / f32(h));
+    let cos1 = cos(PI * f32(y + 1u) / f32(h));
+    let cos_t = mix(cos0, cos1, random(state));
+    let sin_t = sqrt(max(0.0, 1.0 - cos_t * cos_t));
+    let u = (f32(x) + random(state)) / f32(w);
+    let phi = 2.0 * PI * (u - p.ibl.z); // undo the rotation env_radiance applies
+    // Mirror of env_radiance's clockwise azimuth.
+    let dir = vec3<f32>(sin_t * cos(phi), -sin_t * sin(phi), cos_t);
+
+    let cos_surface = dot(normal, dir);
+    if (cos_surface <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    // Below the horizon the ground plane is in the way.
+    if (p.ground.y > 0.5 && dir.z < 0.0) {
+        return vec3<f32>(0.0);
+    }
+
+    let solid_angle = (2.0 * PI / f32(w)) * (cos0 - cos1);
+    let pdf = (weight / p.ibl.w) / solid_angle;
+    let visible = shadow(point, dir, 1e5);
+    // The sampled texel's own value: consistent with the weight it was
+    // chosen by, where a bilinear lookup would blur across neighbours.
+    let radiance = env_texel(i32(x), i32(y)) * p.ibl.y;
+    return radiance * visible * cos_surface / (PI * pdf);
 }
 
 fn random_in_sphere(state: ptr<function, u32>) -> vec3<f32> {
@@ -341,8 +458,14 @@ fn fresnel(cos_theta: f32, ior: f32) -> f32 {
 // directly there, and adding the disc again when a bounce happens to escape
 // toward it would count that light twice.
 fn sky(direction: vec3<f32>, include_sun: bool) -> vec3<f32> {
-    // Uniform sky plus a sun disc, which is what _uni and _inf describe.
-    var light = p.sky_color.rgb * p.sky_intensity;
+    // Uniform sky or environment map, plus a sun disc (_uni / _ibl, _inf).
+    // After a diffuse bounce (`include_sun` false) an environment map is
+    // left out too: it is importance-sampled at the surface, and adding it
+    // again when a bounce escapes would count it twice.
+    var light = vec3<f32>(0.0);
+    if (p.ibl.x < 0.5 || include_sun) {
+        light = background(direction);
+    }
     let alignment = dot(direction, normalize(p.sun_direction.xyz));
     if (include_sun && alignment > cos(p.sun_angular_radius)) {
         light = light + p.sun_color.rgb * p.sun_intensity;
@@ -394,7 +517,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
             // Distant ground dissolves into the sky toward the horizon.
             let fade = horizon_fade(t_ground);
-            radiance = radiance + throughput * fade * sky(direction, false);
+            radiance = radiance + throughput * fade * background(direction);
             throughput = throughput * (1.0 - fade) * p.ground_color.rgb;
 
             // A diffuse surface like any other: sun, emitters, a bounce.
@@ -404,6 +527,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 radiance = radiance + throughput * visible * p.sun_color.rgb * p.sun_intensity * to_sun.z;
             }
             radiance = radiance + throughput * sample_emitters(lifted, up, &rng);
+            radiance = radiance + throughput * sample_env(lifted, up, &rng);
 
             direction = sample_hemisphere(up, &rng);
             origin = lifted;
@@ -510,6 +634,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // Direct light from emissive voxels.
         radiance = radiance + throughput * sample_emitters(outside, hit.normal, &rng);
+        radiance = radiance + throughput * sample_env(outside, hit.normal, &rng);
 
         // Cosine-weighted bounce; the lambertian term cancels.
         direction = sample_hemisphere(hit.normal, &rng);
@@ -534,6 +659,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                   vec3<f32>(0.0), vec3<f32>(1.0));
     // The storage texture is rgba8unorm (no automatic sRGB), so encode here.
     color = pow(color, vec3<f32>(1.0 / 2.2));
+
+    // Triangular dither of +-1 code before 8-bit quantisation. In bright
+    // sky the ACES shoulder squeezes a wide radiance range into two or three
+    // output codes, which shows up as contour lines; noise below one code
+    // trades those steps for grain the eye averages away.
+    let dither = (random(&rng) + random(&rng) - 1.0) / 255.0;
+    color = color + vec3<f32>(dither);
 
     textureStore(output, vec2<i32>(gid.xy), vec4<f32>(color, 1.0));
 }
