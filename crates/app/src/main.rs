@@ -6,6 +6,7 @@
 //! so nothing goes through the deprecated OpenGL stack.
 
 mod camera;
+mod compute;
 mod console;
 mod edit;
 mod image_out;
@@ -45,6 +46,7 @@ struct App {
     /// `&mut` on egui's own renderer at the same time (to register the target
     /// texture), and both cannot be borrowed out of the same map at once.
     scene_renderer: SceneRenderer,
+    voxel_compute: compute::VoxelCompute,
     status: String,
     /// Index into the scene's model list.
     shown_model: usize,
@@ -83,6 +85,7 @@ impl App {
             camera: OrbitCamera::default(),
             scene: None,
             scene_renderer: SceneRenderer::new(&state.device, state.target_format),
+            voxel_compute: compute::VoxelCompute::new(&state.device),
             status: String::new(),
             shown_model: 0,
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
@@ -93,10 +96,12 @@ impl App {
             mesh_dirty: false,
             hidden_layers: [false; 8],
             console_input: String::new(),
-            console_log: vec!["type 'help' for commands".to_owned()],
+            console_log: vec![
+                "type 'help', or 'gpu sphere' to run a compute kernel".to_owned(),
+            ],
         };
 
-        // Usage: voxferro [model.vox] [--screenshot out.bmp]
+        // Usage: voxferro [model.vox] [--run "<command>"] [--screenshot out.bmp]
         let args: Vec<String> = std::env::args().skip(1).collect();
         let screenshot = args
             .iter()
@@ -108,8 +113,24 @@ impl App {
             .cloned()
             .unwrap_or_else(|| format!("{ASSET_DIR}/monu1.vox"));
 
+        let startup_command = args
+            .iter()
+            .position(|a| a == "--run")
+            .and_then(|i| args.get(i + 1).cloned());
+
         app.screenshot = screenshot;
         app.load(state, &path);
+
+        // Runs before the first frame, so --screenshot captures its result.
+        if let Some(command) = startup_command {
+            app.run_command(&command, state);
+            if app.mesh_dirty {
+                app.remesh(state);
+            }
+            for line in &app.console_log {
+                eprintln!("[voxferro] {line}");
+            }
+        }
         app
     }
 
@@ -411,6 +432,12 @@ impl App {
         }
         self.console_log.push(format!("> {line}"));
 
+        if line.split_whitespace().next() == Some("gpu") {
+            let message = self.run_gpu_command(line, state);
+            self.console_log.push(message);
+            return;
+        }
+
         // Same disjoint-borrow dance as undo/redo: reach the fields directly.
         let mut changed = false;
         let mut message = None;
@@ -435,6 +462,88 @@ impl App {
         if changed {
             self.remesh(state);
         }
+    }
+
+    /// `gpu <shape> [colour] [radius] [thickness] [replace]`
+    ///
+    /// Runs the kernel, then feeds the result through the ordinary command
+    /// stack, so a GPU operation is as undoable as a mouse click.
+    fn run_gpu_command(&mut self, line: &str, state: &egui_wgpu::RenderState) -> String {
+        let args: Vec<&str> = line.split_whitespace().skip(1).collect();
+        let Some(shape_name) = args.first() else {
+            return format!("gpu needs a shape: {}", compute::Shape::ALL.join(", "));
+        };
+        let Some(shape) = compute::Shape::parse(shape_name) else {
+            return format!(
+                "unknown shape '{shape_name}' (try: {})",
+                compute::Shape::ALL.join(", ")
+            );
+        };
+
+        let color = args
+            .get(1)
+            .and_then(|a| a.parse::<u8>().ok())
+            .unwrap_or(self.brush_color);
+
+        let Some(loaded) = self.scene.as_mut() else {
+            return "no model loaded".to_owned();
+        };
+        let Some(index) = loaded.scene.instances.first().map(|i| i.model_index) else {
+            return "no model loaded".to_owned();
+        };
+        let Some(volume) = loaded.scene.models.get_mut(index) else {
+            return "no model loaded".to_owned();
+        };
+
+        let [sx, sy, sz] = volume.size();
+        let smallest = sx.min(sy).min(sz) as f32;
+        let radius = args
+            .get(2)
+            .and_then(|a| a.parse::<f32>().ok())
+            .unwrap_or(smallest * 0.4);
+        let thickness = args
+            .get(3)
+            .and_then(|a| a.parse::<f32>().ok())
+            .unwrap_or(smallest * 0.12);
+        let replace = args.get(4).is_some_and(|a| *a == "replace");
+
+        let started = std::time::Instant::now();
+        let Some(result) = self.voxel_compute.run(
+            &state.device,
+            &state.queue,
+            volume,
+            shape,
+            color,
+            radius,
+            thickness,
+            replace,
+        ) else {
+            return "gpu kernel produced nothing".to_owned();
+        };
+        let elapsed = started.elapsed();
+
+        // Turn the raw result into an undoable edit.
+        let mut writes = Vec::new();
+        let mut i = 0usize;
+        for z in 0..sz {
+            for y in 0..sy {
+                for x in 0..sx {
+                    let new = result[i];
+                    if volume.get(x, y, z) != new {
+                        writes.push((glam::IVec3::new(x as i32, y as i32, z as i32), new));
+                    }
+                    i += 1;
+                }
+            }
+        }
+
+        let count = writes.len();
+        self.history.end_gesture();
+        self.history.set_voxels(volume, writes);
+        self.history.end_gesture();
+        self.mesh_dirty = true;
+
+        format!("gpu {shape_name}: {count} voxels in {elapsed:.1?}")
     }
 
     fn viewport(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
