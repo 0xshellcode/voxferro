@@ -34,6 +34,20 @@ impl Dict {
             .map(|(_, v)| v.as_str())
     }
 
+    /// Sets a key, replacing its value in place if present so file order
+    /// is kept, appending it otherwise.
+    pub fn set(&mut self, key: &str, value: impl Into<String>) {
+        let value = value.into();
+        match self.0.iter_mut().find(|(k, _)| k == key) {
+            Some((_, v)) => *v = value,
+            None => self.0.push((key.to_owned(), value)),
+        }
+    }
+
+    pub fn remove(&mut self, key: &str) {
+        self.0.retain(|(k, _)| k != key);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

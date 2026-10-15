@@ -11,6 +11,7 @@ mod console;
 mod edit;
 mod files;
 mod image_out;
+mod palette_ui;
 mod pathtrace;
 mod renderer;
 mod scene;
@@ -528,6 +529,7 @@ impl App {
         }
 
         self.palette_grid(ui);
+        self.palette_editor_ui(ui, state);
 
         ui.separator();
         ui.heading("Brush");
@@ -609,7 +611,7 @@ impl App {
         ui.label("Samples");
 
         let mut pick = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(220.0).id_salt("samples").show(ui, |ui| {
             if let Ok(entries) = std::fs::read_dir(ASSET_DIR) {
                 let mut paths: Vec<_> = entries
                     .flatten()
@@ -728,6 +730,12 @@ impl App {
                 self.revalidate_selection();
                 self.refresh_document(state);
             }
+            return;
+        }
+
+        if matches!(line.split_whitespace().next(), Some("palette" | "material")) {
+            let message = self.palette_command(line, state);
+            self.console_log.push(message);
             return;
         }
 
@@ -1228,10 +1236,20 @@ impl eframe::App for App {
         }
 
         egui::Panel::left("controls")
-            .default_size(240.0)
-            .show(ui, |ui| self.controls(ui, &state));
+            .default_size(250.0)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("controls scroll")
+                    .show(ui, |ui| self.controls(ui, &state));
+            });
 
         egui::CentralPanel::default().show(ui, |ui| self.viewport(ui, &state));
+
+        // Releasing the button ends whatever gesture was being merged: a
+        // colour or material slider drag, as well as a stroke.
+        if ui.input(|i| i.pointer.any_released()) {
+            self.history.end_gesture();
+        }
 
         // Reads back the 3D target. egui's own ViewportCommand::Screenshot
         // would also capture the panels, but this eframe/wgpu backend never

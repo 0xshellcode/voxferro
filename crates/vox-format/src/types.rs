@@ -313,6 +313,54 @@ impl Material {
     }
 }
 
+impl Material {
+    /// The `MATL` entry for edited parameters, starting from the entry the
+    /// file had so keys this editor does not model (`_spec`, `_ldr`,
+    /// `_media`...) survive.
+    ///
+    /// Both conventions are written: `_weight` and `_att` for version 150
+    /// readers, `_metal`, `_trans`, `_emit`, `_d` and `_ri` for version 200,
+    /// so the file reads the same in either editor and in [`Material::resolve`].
+    /// Keys of the other kinds are removed, or a glass turned metal would keep
+    /// reading as glass in a reader that checks `_trans` first.
+    pub fn from_resolved(id: i32, base: Option<&Material>, r: &ResolvedMaterial) -> Material {
+        let mut d = base.map(|m| m.properties.clone()).unwrap_or_default();
+        let kind = match r.kind {
+            MaterialKind::Diffuse => "_diffuse",
+            MaterialKind::Metal => "_metal",
+            MaterialKind::Glass => "_glass",
+            MaterialKind::Emissive => "_emit",
+        };
+        d.set("_type", kind);
+        for key in ["_metal", "_trans", "_alpha", "_emit", "_weight"] {
+            d.remove(key);
+        }
+        let number = |v: f32| format!("{}", (v * 1000.0).round() / 1000.0);
+        d.set("_rough", number(r.roughness));
+        d.set("_ior", number(r.ior - 1.0));
+        d.set("_ri", number(r.ior));
+        d.set("_flux", number(r.flux));
+        d.set("_d", number(r.density));
+        d.set("_att", number(r.density));
+        match r.kind {
+            MaterialKind::Diffuse => {}
+            MaterialKind::Metal => {
+                d.set("_metal", number(r.metalness));
+                d.set("_weight", number(r.metalness));
+            }
+            MaterialKind::Glass => {
+                d.set("_trans", number(r.transparency));
+                d.set("_weight", number(r.transparency));
+            }
+            MaterialKind::Emissive => {
+                d.set("_emit", number(r.emission));
+                d.set("_weight", number(r.emission));
+            }
+        }
+        Material { id, properties: d }
+    }
+}
+
 /// The broad class of a material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
@@ -452,4 +500,37 @@ mod material_tests {
         assert_eq!(m.ior, 1.0);
         assert_eq!(m.transparency, 0.0);
     }
+
+    #[test]
+    fn edited_materials_resolve_to_what_was_edited() {
+        let cases = [
+            ResolvedMaterial { kind: MaterialKind::Metal, metalness: 0.7, roughness: 0.3, ior: 1.5, ..Default::default() },
+            ResolvedMaterial { kind: MaterialKind::Glass, transparency: 0.4, density: 0.2, ior: 1.8, ..Default::default() },
+            ResolvedMaterial { kind: MaterialKind::Emissive, emission: 0.5, flux: 2.0, ..Default::default() },
+            ResolvedMaterial { kind: MaterialKind::Diffuse, roughness: 0.6, ..Default::default() },
+        ];
+        for r in cases {
+            let m = Material::from_resolved(9, None, &r);
+            assert_eq!(m.id, 9);
+            assert_eq!(m.resolve(), r, "{:?}", m.properties);
+        }
+    }
+
+    #[test]
+    fn changing_kind_drops_the_old_kind_and_keeps_unknown_keys() {
+        let glass = Material {
+            id: 3,
+            properties: Dict(vec![
+                ("_type".into(), "_glass".into()),
+                ("_trans".into(), "0.8".into()),
+                ("_spec".into(), "0.5".into()),
+            ]),
+        };
+        let metal = ResolvedMaterial { kind: MaterialKind::Metal, metalness: 1.0, ..Default::default() };
+        let m = Material::from_resolved(3, Some(&glass), &metal);
+        assert_eq!(m.properties.get("_trans"), None);
+        assert_eq!(m.properties.get("_spec"), Some("0.5"));
+        assert_eq!(m.resolve().kind, MaterialKind::Metal);
+    }
 }
+
