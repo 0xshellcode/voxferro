@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–20 del [ROADMAP](ROADMAP.md) están completas, con **146 tests
+Las fases 0–21 del [ROADMAP](ROADMAP.md) están completas, con **150 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -27,6 +27,8 @@ verdes**. Funciona hoy:
   en el grafo de escena del archivo
 - Paleta y materiales editables desde la interfaz, con undo
 - Exportación a OBJ + MTL + textura de paleta
+- Cámara: encuadrar selección o escena, vistas por eje e isométrica,
+  proyección ortográfica (también en el path tracer) y desplazamiento
 - Capas y consola de comandos
 - Operaciones de voxel como compute kernels en WGSL
 - Guardado atómico que conserva materiales, cámaras y ajustes del renderer
@@ -50,9 +52,11 @@ cargo run -p voxferro -- --run "new 16" --run "brush attach box" --drag 0.3 0.7 
 ```
 
 **Ratón:** pulsar sobre el modelo edita con el pincel; pulsar en el vacío (o
-arrastrar con el botón derecho) orbita; la rueda acerca.
+arrastrar con el botón derecho) orbita; Mayúsculas + arrastre o el botón
+central desplazan; la rueda acerca.
 
-**Teclado:** Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z; con selección,
+**Teclado:** F encuadra (Mayúsculas+F todo), 1–7 vistas fijas, O ortográfica;
+Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z; con selección,
 Cmd+A, Esc, Supr, Cmd+C/X/V, flechas y Re Pág/Av Pág para moverla.
 
 **Consola** (panel izquierdo; `help` para los comandos de modelo):
@@ -65,6 +69,7 @@ Cmd+A, Esc, Supr, Cmd+C/X/V, flechas y Re Pág/Av Pág para moverla.
 | Modelo | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
 | Escena | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
 | Paleta | `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [clave=valor]…` |
+| Cámara | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|frame [all\|selection\|instance]` |
 | Render | `env uniform\|atmosphere [elev]\|ibl <mapa> [i] [rot]` |
 
 Para pruebas sin ratón: `--click fx fy` y `--drag fx0 fy0 fx1 fy1`, en

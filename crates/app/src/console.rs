@@ -38,6 +38,7 @@ pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut Histo
                       select all|none|invert|color [n] | delete | paint | copy | cut | paste | \
                       move dx dy dz; palette <i> r g b | material <i> <kind> [k=v]; \
                       instance list|select i|move|place|turn|dup|delete|new; \
+                      camera front|back|left|right|top|bottom|iso|ortho|persp|frame [all|selection|instance]; \
                       open | new | save | export <file.obj>; env …; undo | redo"
                 .to_owned(),
             changed: false,

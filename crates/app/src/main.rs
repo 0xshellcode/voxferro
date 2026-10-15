@@ -6,6 +6,7 @@
 //! so nothing goes through the deprecated OpenGL stack.
 
 mod camera;
+mod camera_tools;
 mod compute;
 mod console;
 mod edit;
@@ -23,7 +24,6 @@ use camera::OrbitCamera;
 use eframe::{egui, egui_wgpu};
 use glam::Vec3;
 use renderer::SceneRenderer;
-use glam::Mat3;
 use pathtrace::{Environment, PathTracer};
 use voxel_core::{History, Mesh};
 
@@ -507,6 +507,9 @@ impl App {
             }
         });
 
+        ui.label("Camera");
+        self.camera_ui(ui);
+
         if self.rendering {
             ui.label(format!(
                 "{} samples, {} emissive voxels",
@@ -622,7 +625,8 @@ impl App {
 
         ui.separator();
         ui.label("Drag on the model to edit, elsewhere (or right-drag) to orbit.");
-        ui.label("Scroll to zoom, Cmd+Z to undo.");
+        ui.label("Shift+drag or middle-drag to pan, scroll to zoom.");
+        ui.label("F frame, 1-7 views, O ortho, Cmd+Z undo.");
         ui.separator();
         ui.label("Samples");
 
@@ -746,6 +750,12 @@ impl App {
                 self.revalidate_selection();
                 self.refresh_document(state);
             }
+            return;
+        }
+
+        if line.split_whitespace().next() == Some("camera") {
+            let message = self.camera_command(line);
+            self.console_log.push(message);
             return;
         }
 
@@ -1027,14 +1037,15 @@ impl App {
         // The primary button edits when it goes down on a voxel and orbits
         // when it goes down on empty space; the secondary and middle buttons
         // always orbit. In Render mode every drag orbits.
-        let (pressed, down, released, delta, secondary, modifiers) = ui.input(|i| {
+        let (pressed, down, released, delta, secondary, middle, modifiers) = ui.input(|i| {
             let p = &i.pointer;
             (
                 p.primary_pressed(),
                 p.primary_down(),
                 p.primary_released(),
                 p.delta(),
-                p.secondary_down() || p.middle_down(),
+                p.secondary_down(),
+                p.middle_down(),
                 i.modifiers,
             )
         });
@@ -1064,8 +1075,16 @@ impl App {
             }
             // The factor turns pixels into a comfortable radians-per-pixel
             // rate.
-            if (down && self.orbiting || secondary && response.hovered()) && delta != egui::Vec2::ZERO {
-                self.camera.orbit(delta.x * 0.01, delta.y * 0.01);
+            // Shift turns an orbit into a pan, and the middle button always
+            // pans, as in the editor (and usable from a trackpad).
+            let orbit = down && self.orbiting || secondary && response.hovered();
+            let pan = middle && response.hovered() || orbit && modifiers.shift;
+            if delta != egui::Vec2::ZERO && (orbit || pan) {
+                if pan {
+                    self.camera.pan(delta.x, delta.y, view_size.y);
+                } else {
+                    self.camera.orbit(delta.x * 0.01, delta.y * 0.01);
+                }
                 self.path_tracer.reset();
             }
             if released {
@@ -1099,7 +1118,7 @@ impl App {
         }
 
         if self.rendering {
-            let basis = camera_basis(&self.camera);
+            let basis = self.camera.basis();
             let offset = self.volume_offset();
             let mut egui_renderer = state.renderer.write();
             let id = self.path_tracer.render(
@@ -1110,6 +1129,7 @@ impl App {
                 self.camera.eye(),
                 basis,
                 self.camera.fov_y,
+                self.camera.ortho.then(|| self.camera.half_height()),
                 &self.environment,
                 offset,
             );
@@ -1183,15 +1203,6 @@ impl App {
     }
 }
 
-/// Camera basis as right/up/forward columns, which is what the tracer wants
-/// instead of a view-projection matrix: it builds rays, not clip coordinates.
-fn camera_basis(camera: &OrbitCamera) -> Mat3 {
-    let forward = (camera.target - camera.eye()).normalize_or(Vec3::Y);
-    let right = forward.cross(Vec3::Z).normalize_or(Vec3::X);
-    let up = right.cross(forward);
-    Mat3::from_cols(right, up, forward)
-}
-
 /// Arguments that are not flags or a flag's values, i.e. the model path.
 ///
 /// Searching every argument for ".vox" would also find the path inside
@@ -1260,6 +1271,7 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.file_input(&ctx, &state);
         self.selection_input(&ctx);
+        self.camera_input(&ctx);
         self.confirm_ui(&ctx, &state);
         let title = self.title();
         if title != self.window_title {

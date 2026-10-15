@@ -55,6 +55,9 @@ struct Params {
     ibl: vec4<f32>,
     // x, y: map width and height.
     ibl_size: vec4<u32>,
+
+    // x: orthographic half-height in world units; 0 means perspective.
+    projection: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -531,6 +534,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         + p.up.xyz * (ndc.y * p.tan_half_fov)
     );
     var origin = p.origin.xyz + p.volume_offset.xyz;
+    // Distance the primary ray starts behind the eye, not to be counted
+    // as distance through the haze toward the horizon.
+    var pulled_back = 0.0;
+    if (p.projection.x > 0.0) {
+        pulled_back = 50000.0;
+        // Parallel rays from a plane through the eye, pulled far back:
+        // in a parallel view nothing in front of the eye may be cut off,
+        // and trace() skips the empty stretch to the grid anyway.
+        let h = p.projection.x;
+        direction = p.forward.xyz;
+        origin = origin
+            + p.right.xyz * (ndc.x * h * p.aspect)
+            + p.up.xyz * (ndc.y * h)
+            - p.forward.xyz * 50000.0;
+    }
 
     var radiance = vec3<f32>(0.0);
     var throughput = vec3<f32>(1.0);
@@ -558,7 +576,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // is the photo's ground in an HDR, or a short dark path into the
             // planet under the atmosphere, and the editor keeps its ground
             // grey in both.
-            let fade = horizon_fade(t_ground);
+            let fade = horizon_fade(max(t_ground - pulled_back, 0.0));
+            pulled_back = 0.0;
             let horizon = normalize(vec3<f32>(direction.xy, 0.02 * length(direction.xy)));
             radiance = radiance + throughput * fade * background(horizon);
             throughput = throughput * (1.0 - fade) * p.ground_color.rgb;
@@ -578,6 +597,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
 
+        pulled_back = 0.0;
         if (!hit.hit) {
             radiance = radiance + throughput * sky(direction, specular);
             break;

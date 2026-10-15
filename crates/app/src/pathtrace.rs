@@ -320,6 +320,9 @@ struct Params {
 
     ibl: [f32; 4],
     ibl_size: [u32; 4],
+
+    /// x: orthographic half-height, 0 for perspective.
+    projection: [f32; 4],
 }
 
 /// An environment map resident on the GPU, with what the shader needs to
@@ -757,6 +760,7 @@ impl PathTracer {
         eye: Vec3,
         basis: Mat3,
         fov_y: f32,
+        ortho_half_height: Option<f32>,
         environment: &Environment,
         volume_offset: Vec3,
     ) -> Option<egui::TextureId> {
@@ -824,6 +828,7 @@ impl PathTracer {
                 Some(map) => [map.width, map.height, 0, 0],
                 None => [1, 1, 0, 0],
             },
+            projection: [ortho_half_height.unwrap_or(0.0), 0.0, 0.0, 0.0],
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
 
