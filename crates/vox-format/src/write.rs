@@ -360,4 +360,32 @@ mod tests {
         };
         assert!(VoxFile::parse(&file.to_bytes()).is_ok());
     }
+
+    #[test]
+    fn a_new_file_has_one_grounded_model_and_the_default_palette() {
+        let file = VoxFile::new_single([10, 20, 7]);
+        assert_eq!(file.models.len(), 1);
+        assert_eq!(file.models[0].size, [10, 20, 7]);
+        assert!(!file.nodes.is_empty(), "the graph the writer adds is kept");
+        let lifted = file.nodes.iter().any(|n| match n {
+            SceneNode::Transform(t) => t.translation(0) == [0, 0, 3],
+            _ => false,
+        });
+        assert!(lifted, "a 7-high model sits on the ground at z = 3");
+        assert!(VoxFile::parse(&file.to_bytes()).is_ok());
+    }
+
+    #[test]
+    fn the_specification_palette_has_its_landmarks() {
+        let p = crate::Palette::specification_default();
+        let rgb = |i: u8| {
+            let c = p.color(i);
+            (c.r, c.g, c.b)
+        };
+        assert_eq!(rgb(1), (0xff, 0xff, 0xff));
+        assert_eq!(rgb(2), (0xff, 0xff, 0xcc), "blue changes fastest");
+        assert_eq!(rgb(215), (0x00, 0x00, 0x33), "the cube ends just before black");
+        assert_eq!(rgb(216), (0xee, 0x00, 0x00), "then the red ramp");
+        assert_eq!(rgb(255), (0x11, 0x11, 0x11), "and the grey ramp closes it");
+    }
 }

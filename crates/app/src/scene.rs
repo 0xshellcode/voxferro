@@ -18,8 +18,9 @@ pub struct LoadedScene {
     /// materials, render settings, cameras, palette notes. Writing from the
     /// scene alone would silently drop all of it.
     source: VoxFile,
-    /// Where it came from, for a save with no path.
-    pub path: String,
+    /// Where it came from, for a save with no path. `None` for a new model
+    /// that has never been saved.
+    pub path: Option<String>,
 }
 
 impl LoadedScene {
@@ -31,12 +32,23 @@ impl LoadedScene {
             return Err("file contains no models".to_owned());
         }
 
-        let name = std::path::Path::new(path)
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_owned());
+        Ok(Self::from_file(file, Some(path.to_owned())))
+    }
 
-        Ok(Self {
+    /// A new, empty model of the given size, never saved.
+    pub fn new_empty(size: [u32; 3]) -> Self {
+        Self::from_file(VoxFile::new_single(size), None)
+    }
+
+    fn from_file(file: VoxFile, path: Option<String>) -> Self {
+        let name = match &path {
+            Some(p) => std::path::Path::new(p)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.clone()),
+            None => "untitled.vox".to_owned(),
+        };
+        Self {
             name,
             version: file.version,
             doc: Document {
@@ -46,8 +58,16 @@ impl LoadedScene {
             },
             render_objects: file.render_objects.clone(),
             source: file,
-            path: path.to_owned(),
-        })
+            path,
+        }
+    }
+
+    /// Records that the document now lives at `path`, after a save as.
+    pub fn set_path(&mut self, path: &str) {
+        self.path = Some(path.to_owned());
+        if let Some(name) = std::path::Path::new(path).file_name() {
+            self.name = name.to_string_lossy().into_owned();
+        }
     }
 
     /// Writes the current state to `path`.

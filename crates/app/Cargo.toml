@@ -22,3 +22,6 @@ bytemuck.workspace = true
 eframe = "0.36"
 egui = "0.36"
 wgpu = "30"
+# Native open/save panels (NSOpenPanel on macOS). Default features only pull
+# Linux portal support, which does not build anything on macOS.
+rfd = "0.17"

@@ -9,6 +9,7 @@ mod camera;
 mod compute;
 mod console;
 mod edit;
+mod files;
 mod image_out;
 mod pathtrace;
 mod renderer;
@@ -109,6 +110,14 @@ struct App {
     /// on the first frame once the viewport's size is known. They exercise
     /// the same path a mouse click takes.
     scripted_clicks: Vec<egui::Vec2>,
+    /// `history.revision()` at the last load or save.
+    saved_revision: u64,
+    /// The unsaved-changes prompt, while it is open.
+    confirm: Option<files::Confirm>,
+    /// Set once the user agreed to quit, so the close is not intercepted.
+    allow_close: bool,
+    /// Last title sent to the window, to send it only when it changes.
+    window_title: String,
 }
 
 impl App {
@@ -138,6 +147,10 @@ impl App {
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
             screenshot: None,
             scripted_clicks: Vec::new(),
+            saved_revision: 0,
+            confirm: None,
+            allow_close: false,
+            window_title: String::new(),
             history: History::default(),
             brush_color: 79,
             erase: false,
@@ -165,10 +178,9 @@ impl App {
             .position(|a| a == "--render")
             .and_then(|i| args.get(i + 1))
             .and_then(|v| v.parse::<u32>().ok());
-        let path = args
-            .iter()
+        let path = positional_args(&args)
+            .into_iter()
             .find(|a| a.ends_with(".vox"))
-            .cloned()
             .unwrap_or_else(|| format!("{ASSET_DIR}/monu1.vox"));
 
         // Several --run flags may be given; they execute in order, which is
@@ -197,7 +209,7 @@ impl App {
 
         // Run before the first frame, so --screenshot captures the result.
         for command in &startup_commands {
-            app.run_command(command, state);
+            app.run_command(command, &cc.egui_ctx, state);
             if app.mesh_dirty {
                 app.remesh(state);
             }
@@ -235,24 +247,31 @@ impl App {
 
     fn load(&mut self, state: &egui_wgpu::RenderState, path: &str) {
         match scene::LoadedScene::load(path) {
-            Ok(loaded) => {
-                self.status = format!(
-                    "{} models, {} placed, v{}",
-                    loaded.doc.scene.models.len(),
-                    loaded.doc.scene.instances.len(),
-                    loaded.version
-                );
-                self.selected = 0;
-                // Undo steps name models by index: they mean nothing in
-                // another file.
-                self.history.clear();
-                self.environment = Environment::from_render_objects(&loaded.render_objects);
-                self.scene = Some(loaded);
-                self.upload_current(state);
-                self.ensure_env_map(state);
+            Ok(loaded) => self.install(state, loaded),
+            Err(e) => {
+                self.status = format!("failed to load {path}: {e}");
+                self.console_log.push(self.status.clone());
             }
-            Err(e) => self.status = format!("failed to load {path}: {e}"),
         }
+    }
+
+    /// Makes `loaded` the open document.
+    fn install(&mut self, state: &egui_wgpu::RenderState, loaded: scene::LoadedScene) {
+        self.status = format!(
+            "{} models, {} placed, v{}",
+            loaded.doc.scene.models.len(),
+            loaded.doc.scene.instances.len(),
+            loaded.version
+        );
+        self.selected = 0;
+        // Undo steps name models by index: they mean nothing in another
+        // file.
+        self.history.clear();
+        self.saved_revision = self.history.revision();
+        self.environment = Environment::from_render_objects(&loaded.render_objects);
+        self.scene = Some(loaded);
+        self.upload_current(state);
+        self.ensure_env_map(state);
     }
 
     /// Meshes the whole scene and hands it to the GPU.
@@ -276,7 +295,7 @@ impl App {
             mesh.triangle_count()
         );
 
-        if let Some((min, max)) = mesh.bounds() {
+        if let Some((min, max)) = mesh.bounds().or_else(|| loaded.doc.scene.declared_bounds()) {
             self.camera.frame_world_bounds(min, max);
         }
         self.scene_renderer.set_mesh(&state.device, &mesh);
@@ -414,6 +433,31 @@ impl App {
         ui.heading("Voxferro");
         ui.label(&self.backend);
         ui.separator();
+
+        let ctx = ui.ctx().clone();
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("New").on_hover_text("Cmd+N").clicked() {
+                self.request(files::Discarding::New(files::NEW_MODEL_SIZE), &ctx, state);
+            }
+            if ui.button("Open…").on_hover_text("Cmd+O").clicked() {
+                self.request(files::Discarding::Open(None), &ctx, state);
+            }
+            let has_doc = self.scene.is_some();
+            if ui.add_enabled(has_doc, egui::Button::new("Save")).on_hover_text("Cmd+S").clicked() {
+                if let Some(m) = self.save() {
+                    self.console_log.push(m);
+                }
+            }
+            if ui
+                .add_enabled(has_doc, egui::Button::new("Save as…"))
+                .on_hover_text("Cmd+Shift+S")
+                .clicked()
+            {
+                if let Some(m) = self.save_as() {
+                    self.console_log.push(m);
+                }
+            }
+        });
         ui.label(&self.status);
 
         // Read everything needed up front, so no borrow of `self.scene` is
@@ -509,13 +553,6 @@ impl App {
         });
         ui.label(format!("{} undo steps", self.history.undo_depth()));
 
-        if ui
-            .add_enabled(self.scene.is_some(), egui::Button::new("Save (Cmd+S)"))
-            .clicked()
-        {
-            let message = self.save_command("save");
-            self.console_log.push(message);
-        }
 
         ui.separator();
         ui.heading("Layers");
@@ -564,7 +601,7 @@ impl App {
             }
         });
         if let Some(path) = pick {
-            self.load(state, &path);
+            self.request(files::Discarding::Open(Some(path)), &ctx, state);
         }
     }
 
@@ -623,7 +660,8 @@ impl App {
 
         if entered {
             let line = std::mem::take(&mut self.console_input);
-            self.run_command(&line, state);
+            let ctx = ui.ctx().clone();
+            self.run_command(&line, &ctx, state);
         }
 
         egui::ScrollArea::vertical()
@@ -636,7 +674,7 @@ impl App {
             });
     }
 
-    fn run_command(&mut self, line: &str, state: &egui_wgpu::RenderState) {
+    fn run_command(&mut self, line: &str, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
         if line.trim().is_empty() {
             return;
         }
@@ -648,9 +686,11 @@ impl App {
             return;
         }
 
-        if line.split_whitespace().next() == Some("save") {
-            let message = self.save_command(line);
-            self.console_log.push(message);
+        if matches!(line.split_whitespace().next(), Some("save" | "open" | "new")) {
+            let message = self.file_command(line, ctx, state);
+            if !message.is_empty() {
+                self.console_log.push(message);
+            }
             return;
         }
 
@@ -766,23 +806,6 @@ impl App {
                     .unwrap_or_else(|| format!("sky: {}", self.environment.ibl_path))
             }
             _ => "env uniform | env atmosphere [sun elevation] | env ibl [map.hdr] [i] [rot]".to_owned(),
-        }
-    }
-
-    /// `save [path]` — defaults to the file that was opened.
-    fn save_command(&mut self, line: &str) -> String {
-        let Some(loaded) = &self.scene else {
-            return "nothing to save".to_owned();
-        };
-        let target = line
-            .split_whitespace()
-            .nth(1)
-            .map(str::to_owned)
-            .unwrap_or_else(|| loaded.path.clone());
-
-        match loaded.save(&target) {
-            Ok(bytes) => format!("saved {target} ({bytes} bytes)"),
-            Err(e) => format!("error: could not save: {e}"),
         }
     }
 
@@ -995,6 +1018,29 @@ fn camera_basis(camera: &OrbitCamera) -> Mat3 {
     Mat3::from_cols(right, up, forward)
 }
 
+/// Arguments that are not flags or a flag's values, i.e. the model path.
+///
+/// Searching every argument for ".vox" would also find the path inside
+/// `--run "save out.vox"`.
+fn positional_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let skip = match args[i].as_str() {
+            "--run" | "--screenshot" | "--render" => 1,
+            "--camera" | "--click" => 2,
+            "--drag" => 4,
+            a if a.starts_with("--") => 0,
+            a => {
+                out.push(a.to_owned());
+                0
+            }
+        };
+        i += 1 + skip;
+    }
+    out
+}
+
 /// Layer -1 means "no layer assigned", which is always visible.
 fn is_hidden(hidden: &[bool; 8], layer: i32) -> bool {
     usize::try_from(layer).ok().and_then(|i| hidden.get(i)).copied().unwrap_or(false)
@@ -1032,10 +1078,13 @@ impl eframe::App for App {
             self.redo(&state);
         }
 
-        let save = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command);
-        if save {
-            let message = self.save_command("save");
-            self.console_log.push(message);
+        let ctx = ui.ctx().clone();
+        self.file_input(&ctx, &state);
+        self.confirm_ui(&ctx, &state);
+        let title = self.title();
+        if title != self.window_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title = title;
         }
 
         egui::Panel::left("controls")
@@ -1090,5 +1139,18 @@ impl eframe::App for App {
             // left to save, so skipping the teardown loses nothing.
             std::process::exit(if ok { 0 } else { 1 });
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::positional_args;
+
+    #[test]
+    fn a_path_inside_a_command_is_not_the_model_path() {
+        let args: Vec<String> = ["--run", "save out.vox", "--click", "0.5", "0.5", "in.vox", "--render-mode"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(positional_args(&args), vec!["in.vox".to_owned()]);
     }
 }

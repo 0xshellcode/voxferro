@@ -222,6 +222,24 @@ impl Scene {
         best
     }
 
+    /// World bounds of every instance's declared box, filled or not: what
+    /// to frame when the models are still empty.
+    pub fn declared_bounds(&self) -> Option<(Vec3, Vec3)> {
+        let mut bounds: Option<(Vec3, Vec3)> = None;
+        for instance in &self.instances {
+            let Some(volume) = self.models.get(instance.model_index) else { continue };
+            let size = Vec3::from_array(volume.size().map(|s| s as f32));
+            for corner in [Vec3::ZERO, size] {
+                let p = instance.transform.apply(corner - volume.pivot());
+                bounds = Some(match bounds {
+                    None => (p, p),
+                    Some((a, b)) => (a.min(p), b.max(p)),
+                });
+            }
+        }
+        bounds
+    }
+
     pub fn total_voxels(&self) -> usize {
         self.instances
             .iter()

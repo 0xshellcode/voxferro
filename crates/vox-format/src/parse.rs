@@ -56,6 +56,31 @@ pub struct VoxFile {
 }
 
 impl VoxFile {
+    /// A file holding one empty model of the given size, placed the way the
+    /// editor places a new model: on the ground, at the origin.
+    ///
+    /// Built by writing and re-reading, so the scene graph it carries is
+    /// exactly the one a save will write -- a new model and its saved copy
+    /// cannot disagree about where it sits.
+    pub fn new_single(size: [u32; 3]) -> Self {
+        let size = size.map(|s| s.clamp(1, 256));
+        let file = Self {
+            version: crate::VERSION_200,
+            models: vec![Model { size, voxels: Vec::new() }],
+            palette: Palette::specification_default(),
+            nodes: Vec::new(),
+            layers: Vec::new(),
+            materials: Vec::new(),
+            render_objects: Vec::new(),
+            cameras: Vec::new(),
+            color_names: Vec::new(),
+            index_map: None,
+            meta: Vec::new(),
+            unknown_chunks: Vec::new(),
+        };
+        Self::parse(&file.to_bytes()).unwrap_or(file)
+    }
+
     /// Parses a whole `.vox` file.
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut r = Reader::new(data);

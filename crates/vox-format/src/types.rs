@@ -72,6 +72,47 @@ impl Palette {
     }
 }
 
+impl Palette {
+    /// The default palette from the format's public specification, which a
+    /// file without an `RGBA` chunk is meant to use.
+    ///
+    /// It is generated rather than tabulated: the first 215 entries are a
+    /// 6x6x6 colour cube (each channel from 0xff down to 0x00 in steps of
+    /// 0x33, blue fastest, black left out), then four 10-step ramps of red,
+    /// green, blue and grey (0xee, 0xdd, 0xbb, 0xaa, 0x88, 0x77, 0x55, 0x44,
+    /// 0x22, 0x11).
+    pub fn specification_default() -> Self {
+        let mut colors = [Color::default(); 256];
+        let levels = [0xff, 0xcc, 0x99, 0x66, 0x33, 0x00];
+        let mut i = 1;
+        for r in levels {
+            for g in levels {
+                for b in levels {
+                    if r == 0 && g == 0 && b == 0 {
+                        continue;
+                    }
+                    colors[i] = Color { r, g, b, a: 255 };
+                    i += 1;
+                }
+            }
+        }
+        let ramp = [0xee, 0xdd, 0xbb, 0xaa, 0x88, 0x77, 0x55, 0x44, 0x22, 0x11];
+        for channel in 0..4 {
+            for v in ramp {
+                colors[i] = match channel {
+                    0 => Color { r: v, g: 0, b: 0, a: 255 },
+                    1 => Color { r: 0, g: v, b: 0, a: 255 },
+                    2 => Color { r: 0, g: 0, b: v, a: 255 },
+                    _ => Color { r: v, g: v, b: v, a: 255 },
+                };
+                i += 1;
+            }
+        }
+        debug_assert_eq!(i, 256);
+        Self { colors }
+    }
+}
+
 impl Default for Palette {
     /// the reference editor's default ramp is not reproduced here; a file without an
     /// `RGBA` chunk gets a visible grey so missing palettes are obvious rather
