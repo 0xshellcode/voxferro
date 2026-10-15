@@ -4,6 +4,7 @@
 //! in under a second instead of rebuilding the wgpu stack.
 
 mod atmosphere;
+pub mod brush;
 mod command;
 mod document;
 mod env_map;
@@ -13,6 +14,7 @@ mod scene;
 mod transform;
 mod volume;
 
+pub use brush::{BrushMode, BrushShape};
 pub use atmosphere::{Atmosphere, AtmosphereSettings, PLANET_RADIUS, SKY_SCALE};
 pub use command::{Command, History};
 pub use document::Document;

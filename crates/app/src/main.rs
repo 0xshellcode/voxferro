@@ -14,6 +14,7 @@ mod image_out;
 mod pathtrace;
 mod renderer;
 mod scene;
+mod tools;
 
 use camera::OrbitCamera;
 use eframe::{egui, egui_wgpu};
@@ -94,8 +95,12 @@ struct App {
     history: History,
     /// Palette index the brush paints with.
     brush_color: u8,
-    /// Removing instead of adding.
-    erase: bool,
+    brush_mode: voxel_core::BrushMode,
+    brush_shape: voxel_core::BrushShape,
+    /// The brush stroke under way, while the button is held.
+    stroke: Option<tools::Stroke>,
+    /// A press on empty space turns the drag into an orbit.
+    orbiting: bool,
     /// Set when the scene changed and the GPU mesh is stale.
     mesh_dirty: bool,
     /// Per-layer visibility; the format defines eight.
@@ -106,10 +111,11 @@ struct App {
     /// Used to verify the UI without a human looking at the window, and to
     /// produce images for the README.
     screenshot: Option<String>,
-    /// Clicks given on the command line, as fractions of the viewport, run
-    /// on the first frame once the viewport's size is known. They exercise
-    /// the same path a mouse click takes.
-    scripted_clicks: Vec<egui::Vec2>,
+    /// Strokes given on the command line (`--click`, `--drag`), as press and
+    /// release points in fractions of the viewport. They run on the first
+    /// frame, once the viewport's size is known, through the same calls a
+    /// mouse stroke makes.
+    scripted_strokes: Vec<(egui::Vec2, egui::Vec2)>,
     /// `history.revision()` at the last load or save.
     saved_revision: u64,
     /// The unsaved-changes prompt, while it is open.
@@ -146,14 +152,17 @@ impl App {
             trace_origin: glam::IVec3::ZERO,
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
             screenshot: None,
-            scripted_clicks: Vec::new(),
+            scripted_strokes: Vec::new(),
             saved_revision: 0,
             confirm: None,
             allow_close: false,
             window_title: String::new(),
             history: History::default(),
             brush_color: 79,
-            erase: false,
+            brush_mode: voxel_core::BrushMode::Attach,
+            brush_shape: voxel_core::BrushShape::Voxel,
+            stroke: None,
+            orbiting: false,
             mesh_dirty: false,
             hidden_layers: [false; 8],
             console_input: String::new(),
@@ -193,14 +202,20 @@ impl App {
             .collect();
 
         // --click <fx> <fy>: a click at that fraction of the viewport.
-        app.scripted_clicks = args
+        // --drag <fx0> <fy0> <fx1> <fy1>: press, move, release.
+        app.scripted_strokes = args
             .iter()
             .enumerate()
-            .filter(|(_, a)| a.as_str() == "--click")
-            .filter_map(|(i, _)| {
-                let x = args.get(i + 1)?.parse::<f32>().ok()?;
-                let y = args.get(i + 2)?.parse::<f32>().ok()?;
-                Some(egui::vec2(x, y))
+            .filter_map(|(i, a)| {
+                let n = |k: usize| args.get(i + k)?.parse::<f32>().ok();
+                match a.as_str() {
+                    "--click" => {
+                        let p = egui::vec2(n(1)?, n(2)?);
+                        Some((p, p))
+                    }
+                    "--drag" => Some((egui::vec2(n(1)?, n(2)?), egui::vec2(n(3)?, n(4)?))),
+                    _ => None,
+                }
             })
             .collect();
 
@@ -375,41 +390,6 @@ impl App {
         Some(instance.model_index)
     }
 
-    /// Picks under the cursor and adds or removes a voxel.
-    ///
-    /// The ray is tested against every visible instance and the nearest hit
-    /// wins; that instance becomes the selection, so the console and the
-    /// kernels follow whatever was last clicked.
-    fn edit_at(&mut self, pixel: egui::Vec2, viewport: egui::Vec2, view_proj: glam::Mat4) {
-        let Some(loaded) = &mut self.scene else { return };
-
-        let ray = edit::ray_through_pixel(
-            view_proj,
-            Vec3::new(viewport.x, viewport.y, 0.0).truncate(),
-            Vec3::new(pixel.x, pixel.y, 0.0).truncate(),
-        );
-
-        let hidden = self.hidden_layers;
-        let Some(pick) = loaded
-            .doc
-            .scene
-            .pick(ray.origin, ray.direction, 10_000.0, |i| !is_hidden(&hidden, i.layer))
-        else {
-            return;
-        };
-        self.selected = pick.instance;
-        let model = loaded.doc.scene.instances[pick.instance].model_index;
-
-        let (target, value) = if self.erase {
-            (pick.hit.voxel, 0)
-        } else {
-            (pick.hit.adjacent(), self.brush_color)
-        };
-
-        self.history.set_voxels(&mut loaded.doc, model, [(target, value)]);
-        self.mesh_dirty = true;
-    }
-
     fn undo(&mut self, state: &egui_wgpu::RenderState) {
         let Some(loaded) = self.scene.as_mut() else { return };
         if self.history.undo(&mut loaded.doc) {
@@ -524,8 +504,14 @@ impl App {
         ui.separator();
         ui.heading("Brush");
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.erase, false, "Add");
-            ui.selectable_value(&mut self.erase, true, "Erase");
+            for (mode, name) in voxel_core::BrushMode::ALL {
+                ui.selectable_value(&mut self.brush_mode, mode, capitalised(name));
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            for (shape, name) in voxel_core::BrushShape::ALL {
+                ui.selectable_value(&mut self.brush_shape, shape, capitalised(name));
+            }
         });
         ui.add(egui::Slider::new(&mut self.brush_color, 1..=255).text("colour"));
 
@@ -574,8 +560,8 @@ impl App {
         self.console_ui(ui, state);
 
         ui.separator();
-        ui.label("Drag to orbit, scroll to zoom.");
-        ui.label("Click to edit, Cmd+Z to undo.");
+        ui.label("Drag on the model to edit, elsewhere (or right-drag) to orbit.");
+        ui.label("Scroll to zoom, Cmd+Z to undo.");
         ui.separator();
         ui.label("Samples");
 
@@ -682,6 +668,12 @@ impl App {
 
         if line.split_whitespace().next() == Some("env") {
             let message = self.env_command(line, state);
+            self.console_log.push(message);
+            return;
+        }
+
+        if matches!(line.split_whitespace().next(), Some("brush" | "color")) {
+            let message = self.brush_command(line);
             self.console_log.push(message);
             return;
         }
@@ -902,36 +894,66 @@ impl App {
         // camera, and the tracer then faithfully renders the wrong view.
         let headless = self.screenshot.is_some() || self.pending_samples > 0;
 
-        // A click edits; a drag orbits. egui separates the two, so the camera
-        // never lurches when placing a voxel.
-        if !self.scripted_clicks.is_empty() {
-            let aspect = view_size.x / view_size.y.max(1.0);
-            let vp = self.camera.view_proj(aspect);
-            for f in std::mem::take(&mut self.scripted_clicks) {
-                self.edit_at(f * view_size, view_size, vp);
-                self.history.end_gesture();
+        let aspect = view_size.x / view_size.y.max(1.0);
+        let ray_at = |camera: &OrbitCamera, pos: egui::Pos2| {
+            let local = pos - rect.min;
+            edit::ray_through_pixel(
+                camera.view_proj(aspect),
+                glam::Vec2::new(view_size.x, view_size.y),
+                glam::Vec2::new(local.x, local.y),
+            )
+        };
+
+        if !self.scripted_strokes.is_empty() {
+            for (from, to) in std::mem::take(&mut self.scripted_strokes) {
+                let at = |f: egui::Vec2| rect.min + f * view_size;
+                if self.begin_stroke(ray_at(&self.camera, at(from))) {
+                    self.update_stroke(ray_at(&self.camera, at(to)));
+                    self.finish_stroke();
+                }
             }
-            eprintln!("[voxferro] scripted clicks done; selected instance {}", self.selected);
+            eprintln!(
+                "[voxferro] scripted strokes done; selected instance {}, {} undo steps",
+                self.selected,
+                self.history.undo_depth()
+            );
         }
 
-        if !headless && response.clicked() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                let aspect = view_size.x / view_size.y.max(1.0);
-                let vp = self.camera.view_proj(aspect);
-                let local = pos - rect.min;
-                self.edit_at(local, view_size, vp);
+        // The primary button edits when it goes down on a voxel and orbits
+        // when it goes down on empty space; the secondary and middle buttons
+        // always orbit. In Render mode every drag orbits.
+        let (pressed, down, released, delta, secondary) = ui.input(|i| {
+            let p = &i.pointer;
+            (
+                p.primary_pressed(),
+                p.primary_down(),
+                p.primary_released(),
+                p.delta(),
+                p.secondary_down() || p.middle_down(),
+            )
+        });
+        let pointer = response.hover_pos();
+        if !headless {
+            if pressed && response.hovered() {
+                let hit = !self.rendering
+                    && pointer.is_some_and(|pos| self.begin_stroke(ray_at(&self.camera, pos)));
+                self.orbiting = !hit;
             }
-        }
-
-        // Orbit with a drag; the factor turns pixels into a comfortable
-        // radians-per-pixel rate.
-        if !headless && response.dragged() {
-            let d = response.drag_delta();
-            self.camera.orbit(d.x * 0.01, d.y * 0.01);
-            self.path_tracer.reset();
-        }
-        if response.drag_stopped() || response.clicked() {
-            self.history.end_gesture();
+            if down && self.stroke.is_some() {
+                if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                    self.update_stroke(ray_at(&self.camera, pos));
+                }
+            }
+            // The factor turns pixels into a comfortable radians-per-pixel
+            // rate.
+            if (down && self.orbiting || secondary && response.hovered()) && delta != egui::Vec2::ZERO {
+                self.camera.orbit(delta.x * 0.01, delta.y * 0.01);
+                self.path_tracer.reset();
+            }
+            if released {
+                self.finish_stroke();
+                self.orbiting = false;
+            }
         }
 
         if !headless && response.hovered() {
@@ -987,6 +1009,13 @@ impl App {
             return;
         }
 
+        // Outline the cell the brush would act on.
+        let hover = if headless || self.stroke.is_some() || self.orbiting {
+            None
+        } else {
+            pointer.and_then(|pos| self.hover_cell(ray_at(&self.camera, pos)))
+        };
+
         let mut egui_renderer = state.renderer.write();
         let texture_id = self.scene_renderer.render(
             &state.device,
@@ -1006,6 +1035,20 @@ impl App {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
+
+        if let Some(corners) = hover {
+            let vp = self.camera.view_proj(aspect);
+            let project = |p: Vec3| {
+                let c = vp * p.extend(1.0);
+                let ndc = c.truncate() / c.w.max(1e-6);
+                rect.min + egui::vec2((ndc.x + 1.0) * 0.5 * view_size.x, (1.0 - ndc.y) * 0.5 * view_size.y)
+            };
+            let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 230, 120));
+            // The 12 edges of a cube whose corners are numbered by bits x, y, z.
+            for (a, b) in [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)] {
+                ui.painter().line_segment([project(corners[a]), project(corners[b])], stroke);
+            }
+        }
     }
 }
 
@@ -1039,6 +1082,11 @@ fn positional_args(args: &[String]) -> Vec<String> {
         i += 1 + skip;
     }
     out
+}
+
+fn capitalised(name: &str) -> String {
+    let mut chars = name.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
 /// Layer -1 means "no layer assigned", which is always visible.
