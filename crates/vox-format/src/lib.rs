@@ -1,13 +1,33 @@
-//! Reader and writer for the reference editor `.vox` files.
+//! Reader for the reference editor `.vox` files.
 //!
 //! The format is a RIFF-like container: a `VOX ` magic, a `u32` version, then
-//! a tree of chunks. Every chunk header is three fields: a four-byte id, the
-//! byte length of its own content, and the byte length of its children. A
-//! reader that honours both lengths can skip any chunk it does not know, which
-//! is what keeps the format forward compatible.
+//! a tree of chunks. Every chunk header is three fields — a four-byte id, the
+//! byte length of its own content, and the byte length of its children — so a
+//! reader that honours both lengths can step over any chunk it does not know.
+//! That rule is why one parser handles every version.
 //!
-//! Phase 1 fills in the chunk tree. For now this covers the header and the
-//! byte cursor every later stage builds on.
+//! ```no_run
+//! let bytes = std::fs::read("model.vox")?;
+//! let file = vox_format::VoxFile::parse(&bytes)?;
+//! println!("{} models, {} voxels", file.models.len(), file.voxel_count());
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! Layouts were verified byte by byte against the sample models shipped with
+//! the reference editor a recent version and a recent version.
+
+mod dict;
+mod parse;
+mod reader;
+mod types;
+
+pub use dict::Dict;
+pub use parse::{UnknownChunk, VoxFile};
+pub use reader::Reader;
+pub use types::{
+    Camera, Color, GroupNode, Layer, Material, Model, Palette, SceneNode, ShapeModel, ShapeNode,
+    TransformNode, Voxel,
+};
 
 use thiserror::Error;
 
@@ -19,17 +39,35 @@ pub const VERSION_150: u32 = 150;
 
 /// Version written by the reference editor a recent version.x.
 ///
-/// Adds the `rCAM` (saved cameras), `NOTE` (palette notes) and `META` chunks,
-/// and drops `IMAP`. The chunk-skipping rule means a reader that handles 150
-/// also loads 200 files; only the new chunks need explicit support.
+/// Adds the `rCAM` (saved cameras), `NOTE` (palette row names) and `META`
+/// chunks, and stops writing `IMAP`. The chunk-skipping rule means a reader
+/// that handles 150 also loads 200 files; only the new chunks need explicit
+/// support.
 pub const VERSION_200: u32 = 200;
 
-/// Versions this crate knows how to read.
+/// Versions this crate claims to read.
 pub const SUPPORTED_VERSIONS: &[u32] = &[VERSION_150, VERSION_200];
 
 /// Whether `version` is one this crate claims to support.
 pub fn is_supported_version(version: u32) -> bool {
     SUPPORTED_VERSIONS.contains(&version)
+}
+
+/// Ceilings applied to every count read from a file.
+///
+/// A corrupt or hostile length field must not be handed straight to
+/// `Vec::with_capacity`. These bounds sit far above anything the editor
+/// produces, so they reject nonsense without rejecting real files.
+pub mod limits {
+    /// 256³, the largest volume the editor allows, fully solid.
+    pub const MAX_VOXELS: u32 = 256 * 256 * 256;
+    pub const MAX_DICT_PAIRS: u32 = 4096;
+    pub const MAX_STRING_LEN: u32 = 1 << 20;
+    pub const MAX_FRAMES: u32 = 65536;
+    pub const MAX_NODE_CHILDREN: u32 = 1 << 20;
+    pub const MAX_SHAPE_MODELS: u32 = 65536;
+    pub const MAX_COLOR_NAMES: u32 = 1024;
+    pub const MAX_CHUNK_DEPTH: u32 = 32;
 }
 
 #[derive(Debug, Error)]
@@ -43,70 +81,25 @@ pub enum VoxError {
         wanted: usize,
         available: usize,
     },
+
+    #[error("implausible {what}: {value} exceeds the limit of {limit}")]
+    ImplausibleCount {
+        what: &'static str,
+        value: u32,
+        limit: u32,
+    },
+
+    #[error("XYZI chunk without a preceding SIZE chunk")]
+    XyziWithoutSize,
+
+    #[error("SIZE chunk {size:?} was never followed by an XYZI chunk")]
+    DanglingSize { size: [u32; 3] },
+
+    #[error("chunk nesting deeper than {limit} levels")]
+    TooDeep { limit: u32 },
 }
 
 pub type Result<T> = std::result::Result<T, VoxError>;
-
-/// A cursor over the file bytes.
-///
-/// Holding a borrow plus an offset — rather than reslicing as we go — keeps a
-/// single immutable borrow alive for the whole parse. Every read is bounds
-/// checked and returns an error instead of panicking, so a truncated or hostile
-/// file cannot take the process down.
-pub struct Reader<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
-    }
-
-    pub fn position(&self) -> usize {
-        self.pos
-    }
-
-    pub fn remaining(&self) -> usize {
-        self.data.len() - self.pos
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.remaining() == 0
-    }
-
-    pub fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        if self.remaining() < n {
-            return Err(VoxError::UnexpectedEof {
-                offset: self.pos,
-                wanted: n,
-                available: self.remaining(),
-            });
-        }
-        let out = &self.data[self.pos..self.pos + n];
-        self.pos += n;
-        Ok(out)
-    }
-
-    pub fn u8(&mut self) -> Result<u8> {
-        Ok(self.take(1)?[0])
-    }
-
-    pub fn u32(&mut self) -> Result<u32> {
-        let b = self.take(4)?;
-        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-    }
-
-    pub fn i32(&mut self) -> Result<i32> {
-        Ok(self.u32()? as i32)
-    }
-
-    /// Reads a four-byte chunk id such as `SIZE` or `XYZI`.
-    pub fn chunk_id(&mut self) -> Result<[u8; 4]> {
-        let b = self.take(4)?;
-        Ok([b[0], b[1], b[2], b[3]])
-    }
-}
 
 /// Validates the magic and returns the file's version without parsing chunks.
 pub fn peek_version(data: &[u8]) -> Result<u32> {
@@ -146,5 +139,32 @@ mod tests {
         let mut r = Reader::new(&[0x96, 0x00, 0x00, 0x00]);
         assert_eq!(r.u32().unwrap(), 150);
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn rejects_implausible_counts() {
+        // A count field claiming four billion entries must not reach
+        // Vec::with_capacity.
+        let mut r = Reader::new(&[0xff, 0xff, 0xff, 0xff]);
+        let err = r.count(limits::MAX_DICT_PAIRS, "dict pairs").unwrap_err();
+        assert!(matches!(err, VoxError::ImplausibleCount { .. }));
+    }
+
+    #[test]
+    fn palette_undoes_the_chunk_shift() {
+        let mut entries = [Color::default(); 256];
+        entries[0] = Color { r: 1, g: 2, b: 3, a: 255 };
+        let pal = Palette::from_chunk(&entries);
+        // Chunk entry 0 is the colour of voxel index 1.
+        assert_eq!(pal.color(1), Color { r: 1, g: 2, b: 3, a: 255 });
+        // Index 0 is empty and never carries a colour.
+        assert_eq!(pal.color(0).a, 0);
+    }
+
+    #[test]
+    fn dict_parses_numeric_values() {
+        let d = Dict(vec![("_t".into(), "0 0 30".into())]);
+        assert_eq!(d.get_parsed::<i32, 3>("_t"), Some([0, 0, 30]));
+        assert_eq!(d.get_parsed::<i32, 3>("_missing"), None);
     }
 }
