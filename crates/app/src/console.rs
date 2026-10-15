@@ -32,8 +32,12 @@ pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut Histo
     // Keep verbs aligned with the editor's own vocabulary where they overlap.
     match verb {
         "help" => Outcome::Ok {
-            message: "fill <c> | clear | box <x0..z1 c> | sphere <c> | undo | redo | \
-                      save [path] | gpu <sphere|torus|box|shell>"
+            message: "model: fill <c> | clear | box <x0..z1 c> | sphere <c> | gpu <shape> | \
+                      rotate|mirror x|y|z | crop | resize x y z; \
+                      brush [attach|erase|paint|select] [voxel|box|line|face|fill] | color <n>; \
+                      select all|none|invert|color [n] | delete | paint | copy | cut | paste | \
+                      move dx dy dz; palette <i> r g b | material <i> <kind> [k=v]; \
+                      open | new | save | export <file.obj>; env …; undo | redo"
                 .to_owned(),
             changed: false,
         },
