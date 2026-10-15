@@ -7,7 +7,7 @@ use vox_format::Model;
 /// Dense rather than sparse: the editor caps volumes at 256³, so the worst
 /// case is 16 MB — cheap enough that constant-time random access is the better
 /// trade. Sparsity belongs in the GPU-side acceleration structure, not here.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Volume {
     size: [u32; 3],
     voxels: Vec<u8>,

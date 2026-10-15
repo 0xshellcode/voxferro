@@ -6,7 +6,7 @@
 //! free rather than being bolted on later.
 
 use glam::IVec3;
-use voxel_core::{Command, History, Volume};
+use voxel_core::{Command, Document, History, Volume};
 
 /// Outcome of running a command line.
 pub enum Outcome {
@@ -15,8 +15,11 @@ pub enum Outcome {
     Error(String),
 }
 
-/// Parses and runs one command line against a volume.
-pub fn execute(line: &str, volume: &mut Volume, history: &mut History) -> Outcome {
+/// Parses and runs one command line against one model of the document.
+pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut History) -> Outcome {
+    let Some(volume) = doc.scene.models.get(model) else {
+        return Outcome::Error("no model selected".to_owned());
+    };
     let mut parts = line.split_whitespace();
     let Some(verb) = parts.next() else {
         return Outcome::Ok {
@@ -46,12 +49,12 @@ pub fn execute(line: &str, volume: &mut Volume, history: &mut History) -> Outcom
                 .filter(|p| volume.get_i(p.x, p.y, p.z) != 0)
                 .map(|p| (p, color))
                 .collect::<Vec<_>>();
-            apply(volume, history, writes, "filled")
+            apply(doc, model, history, writes, "filled")
         }
 
         "clear" => {
             let writes = all_cells(volume).map(|p| (p, 0)).collect::<Vec<_>>();
-            apply(volume, history, writes, "cleared")
+            apply(doc, model, history, writes, "cleared")
         }
 
         "box" => {
@@ -80,7 +83,7 @@ pub fn execute(line: &str, volume: &mut Volume, history: &mut History) -> Outcom
                     }
                 }
             }
-            apply(volume, history, writes, "box")
+            apply(doc, model, history, writes, "box")
         }
 
         "sphere" => {
@@ -95,11 +98,11 @@ pub fn execute(line: &str, volume: &mut Volume, history: &mut History) -> Outcom
                 .filter(|p| (*p - centre).as_vec3().length() <= radius)
                 .map(|p| (p, color))
                 .collect::<Vec<_>>();
-            apply(volume, history, writes, "sphere")
+            apply(doc, model, history, writes, "sphere")
         }
 
         "undo" => {
-            let changed = history.undo(volume);
+            let changed = history.undo(doc);
             Outcome::Ok {
                 message: if changed { "undone" } else { "nothing to undo" }.to_owned(),
                 changed,
@@ -107,7 +110,7 @@ pub fn execute(line: &str, volume: &mut Volume, history: &mut History) -> Outcom
         }
 
         "redo" => {
-            let changed = history.redo(volume);
+            let changed = history.redo(doc);
             Outcome::Ok {
                 message: if changed { "redone" } else { "nothing to redo" }.to_owned(),
                 changed,
@@ -135,25 +138,24 @@ fn parse_color(arg: Option<&&str>) -> Result<u8, String> {
 }
 
 fn apply(
-    volume: &mut Volume,
+    doc: &mut Document,
+    model: usize,
     history: &mut History,
     writes: Vec<(IVec3, u8)>,
     what: &str,
 ) -> Outcome {
-    let command = Command::set_voxels(volume, writes);
-    if command.is_empty() {
+    let command = Command::set_voxels(doc, model, writes);
+    let count = match &command {
+        Command::SetVoxels { changes, .. } => changes.len(),
+        _ => 0,
+    };
+    // A console command is one gesture, never merged into a previous stroke.
+    if !history.exec_alone(doc, command) {
         return Outcome::Ok {
             message: format!("{what}: nothing to change"),
             changed: false,
         };
     }
-    let count = match &command {
-        Command::SetVoxels { changes } => changes.len(),
-    };
-    // A console command is one gesture, never merged into a previous stroke.
-    history.end_gesture();
-    history.exec(volume, command);
-    history.end_gesture();
     Outcome::Ok {
         message: format!("{what}: {count} voxels"),
         changed: true,
@@ -164,59 +166,71 @@ fn apply(
 mod tests {
     use super::*;
 
-    fn setup() -> (Volume, History) {
+    fn setup() -> (Document, History) {
         let mut v = Volume::new([8, 8, 8]);
         v.set(1, 1, 1, 3);
-        (v, History::default())
+        let doc = Document {
+            scene: voxel_core::Scene { models: vec![v], instances: Vec::new() },
+            ..Default::default()
+        };
+        (doc, History::default())
+    }
+
+    fn run(line: &str, d: &mut Document, h: &mut History) -> Outcome {
+        execute(line, d, 0, h)
+    }
+
+    fn get(d: &Document, x: u32, y: u32, z: u32) -> u8 {
+        d.scene.models[0].get(x, y, z)
     }
 
     #[test]
     fn fill_recolours_only_solid_cells() {
-        let (mut v, mut h) = setup();
-        execute("fill 9", &mut v, &mut h);
-        assert_eq!(v.get(1, 1, 1), 9);
-        assert_eq!(v.get(0, 0, 0), 0, "fill must not inflate the model");
+        let (mut d, mut h) = setup();
+        run("fill 9", &mut d, &mut h);
+        assert_eq!(get(&d, 1, 1, 1), 9);
+        assert_eq!(get(&d, 0, 0, 0), 0, "fill must not inflate the model");
     }
 
     #[test]
     fn box_writes_a_region_and_undoes_as_one_step() {
-        let (mut v, mut h) = setup();
-        execute("box 0 0 0 2 2 2 7", &mut v, &mut h);
-        assert_eq!(v.get(0, 0, 0), 7);
-        assert_eq!(v.get(2, 2, 2), 7);
+        let (mut d, mut h) = setup();
+        run("box 0 0 0 2 2 2 7", &mut d, &mut h);
+        assert_eq!(get(&d, 0, 0, 0), 7);
+        assert_eq!(get(&d, 2, 2, 2), 7);
 
-        h.undo(&mut v);
-        assert_eq!(v.get(0, 0, 0), 0);
-        assert_eq!(v.get(1, 1, 1), 3, "the original voxel should return");
+        h.undo(&mut d);
+        assert_eq!(get(&d, 0, 0, 0), 0);
+        assert_eq!(get(&d, 1, 1, 1), 3, "the original voxel should return");
     }
 
     #[test]
     fn unknown_and_malformed_commands_report_errors() {
-        let (mut v, mut h) = setup();
-        assert!(matches!(execute("nope", &mut v, &mut h), Outcome::Error(_)));
-        assert!(matches!(execute("fill", &mut v, &mut h), Outcome::Error(_)));
+        let (mut d, mut h) = setup();
+        assert!(matches!(run("nope", &mut d, &mut h), Outcome::Error(_)));
+        assert!(matches!(run("fill", &mut d, &mut h), Outcome::Error(_)));
         assert!(matches!(
-            execute("fill red", &mut v, &mut h),
+            run("fill red", &mut d, &mut h),
             Outcome::Error(_)
         ));
-        assert!(matches!(execute("box 1 2", &mut v, &mut h), Outcome::Error(_)));
+        assert!(matches!(run("box 1 2", &mut d, &mut h), Outcome::Error(_)));
     }
 
     #[test]
     fn an_empty_line_is_not_an_error() {
-        let (mut v, mut h) = setup();
+        let (mut d, mut h) = setup();
         assert!(matches!(
-            execute("   ", &mut v, &mut h),
+            run("   ", &mut d, &mut h),
             Outcome::Ok { changed: false, .. }
         ));
     }
 
     #[test]
     fn clear_then_undo_restores_everything() {
-        let (mut v, mut h) = setup();
-        execute("clear", &mut v, &mut h);
-        assert_eq!(v.filled_count(), 0);
-        execute("undo", &mut v, &mut h);
-        assert_eq!(v.get(1, 1, 1), 3);
+        let (mut d, mut h) = setup();
+        run("clear", &mut d, &mut h);
+        assert_eq!(d.scene.models[0].filled_count(), 0);
+        run("undo", &mut d, &mut h);
+        assert_eq!(get(&d, 1, 1, 1), 3);
     }
 }

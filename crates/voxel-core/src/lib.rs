@@ -5,6 +5,7 @@
 
 mod atmosphere;
 mod command;
+mod document;
 mod env_map;
 mod mesh;
 mod raycast;
@@ -14,9 +15,10 @@ mod volume;
 
 pub use atmosphere::{Atmosphere, AtmosphereSettings, PLANET_RADIUS, SKY_SCALE};
 pub use command::{Command, History};
+pub use document::Document;
 pub use env_map::{EnvMap, EnvSampling, HdrError};
 pub use mesh::{Face, Mesh, Vertex};
 pub use raycast::{raycast, Hit};
-pub use scene::{Instance, NodeId, Scene};
+pub use scene::{BakeError, Baked, Instance, NodeId, Scene, ScenePick, local_cell, world_cell};
 pub use transform::Transform;
 pub use volume::Volume;

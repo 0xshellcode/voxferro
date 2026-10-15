@@ -1,17 +1,15 @@
 //! Loading and saving a `.vox` file.
 
-use vox_format::{Palette, VoxFile};
-use voxel_core::Scene;
+use vox_format::VoxFile;
+use voxel_core::{Document, Scene};
 
 /// A loaded file: its scene graph flattened into placed models, plus the
 /// palette they share.
 pub struct LoadedScene {
     pub name: String,
     pub version: u32,
-    pub scene: Scene,
-    pub palette: Palette,
-    /// `MATL` entries, one per palette index that has one.
-    pub materials: Vec<vox_format::Material>,
+    /// Models, palette and materials: everything the undo stack can change.
+    pub doc: Document,
     /// `rOBJ` entries: sun, sky, atmosphere, lens, film, bloom.
     pub render_objects: Vec<vox_format::Dict>,
     /// The file as parsed.
@@ -41,9 +39,11 @@ impl LoadedScene {
         Ok(Self {
             name,
             version: file.version,
-            scene: Scene::from_file(&file),
-            palette: file.palette.clone(),
-            materials: file.materials.clone(),
+            doc: Document {
+                scene: Scene::from_file(&file),
+                palette: file.palette.clone(),
+                materials: file.materials.clone(),
+            },
             render_objects: file.render_objects.clone(),
             source: file,
             path: path.to_owned(),
@@ -57,13 +57,14 @@ impl LoadedScene {
     pub fn save(&self, path: &str) -> Result<usize, String> {
         let mut file = self.source.clone();
 
-        for (i, volume) in self.scene.models.iter().enumerate() {
+        for (i, volume) in self.doc.scene.models.iter().enumerate() {
             match file.models.get_mut(i) {
                 Some(slot) => *slot = volume.to_model(),
                 None => file.models.push(volume.to_model()),
             }
         }
-        file.palette = self.palette.clone();
+        file.palette = self.doc.palette.clone();
+        file.materials = self.doc.materials.clone();
 
         let bytes = file.to_bytes();
 

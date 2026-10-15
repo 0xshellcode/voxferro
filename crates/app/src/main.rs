@@ -83,8 +83,12 @@ struct App {
     /// Samples still to accumulate before a headless screenshot.
     pending_samples: u32,
     status: String,
-    /// Index into the scene's model list.
-    shown_model: usize,
+    /// The placed instance edits, kernels and console commands act on: the
+    /// one last clicked.
+    selected: usize,
+    /// World cell of the traced grid's corner. The tracer walks one grid
+    /// holding every visible instance; this maps the camera into it.
+    trace_origin: glam::IVec3,
     light_dir: Vec3,
     history: History,
     /// Palette index the brush paints with.
@@ -101,7 +105,10 @@ struct App {
     /// Used to verify the UI without a human looking at the window, and to
     /// produce images for the README.
     screenshot: Option<String>,
-
+    /// Clicks given on the command line, as fractions of the viewport, run
+    /// on the first frame once the viewport's size is known. They exercise
+    /// the same path a mouse click takes.
+    scripted_clicks: Vec<egui::Vec2>,
 }
 
 impl App {
@@ -126,9 +133,11 @@ impl App {
             environment: Environment::default(),
             pending_samples: 0,
             status: String::new(),
-            shown_model: 0,
+            selected: 0,
+            trace_origin: glam::IVec3::ZERO,
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
             screenshot: None,
+            scripted_clicks: Vec::new(),
             history: History::default(),
             brush_color: 79,
             erase: false,
@@ -169,6 +178,18 @@ impl App {
             .enumerate()
             .filter(|(_, a)| a.as_str() == "--run")
             .filter_map(|(i, _)| args.get(i + 1).cloned())
+            .collect();
+
+        // --click <fx> <fy>: a click at that fraction of the viewport.
+        app.scripted_clicks = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.as_str() == "--click")
+            .filter_map(|(i, _)| {
+                let x = args.get(i + 1)?.parse::<f32>().ok()?;
+                let y = args.get(i + 2)?.parse::<f32>().ok()?;
+                Some(egui::vec2(x, y))
+            })
             .collect();
 
         app.screenshot = screenshot;
@@ -217,11 +238,14 @@ impl App {
             Ok(loaded) => {
                 self.status = format!(
                     "{} models, {} placed, v{}",
-                    loaded.scene.models.len(),
-                    loaded.scene.instances.len(),
+                    loaded.doc.scene.models.len(),
+                    loaded.doc.scene.instances.len(),
                     loaded.version
                 );
-                self.shown_model = 0;
+                self.selected = 0;
+                // Undo steps name models by index: they mean nothing in
+                // another file.
+                self.history.clear();
                 self.environment = Environment::from_render_objects(&loaded.render_objects);
                 self.scene = Some(loaded);
                 self.upload_current(state);
@@ -243,12 +267,12 @@ impl App {
         let Some(loaded) = &self.scene else { return };
 
         let hidden = self.hidden_layers;
-        let mesh = Mesh::from_scene_where(&loaded.scene, |i| !is_hidden(&hidden, i.layer));
+        let mesh = Mesh::from_scene_where(&loaded.doc.scene, |i| !is_hidden(&hidden, i.layer));
         eprintln!(
             "[voxferro] {}: {} instances, {} voxels, {} triangles",
             loaded.name,
-            loaded.scene.instances.len(),
-            loaded.scene.total_voxels(),
+            loaded.doc.scene.instances.len(),
+            loaded.doc.scene.total_voxels(),
             mesh.triangle_count()
         );
 
@@ -256,48 +280,89 @@ impl App {
             self.camera.frame_world_bounds(min, max);
         }
         self.scene_renderer.set_mesh(&state.device, &mesh);
-        self.scene_renderer.set_palette(&state.queue, &loaded.palette);
-
-        // The tracer walks the volume directly, so it needs the voxels rather
-        // than the mesh.
-        if let Some(volume) = loaded.scene.models.first() {
-            self.path_tracer.set_volume(&state.device, &state.queue, volume);
-        }
-        self.path_tracer.set_palette(&state.queue, &loaded.palette);
-        self.path_tracer
-            .set_materials(&state.queue, &loaded.palette, &loaded.materials);
-        if let Some(volume) = loaded.scene.models.first() {
-            self.path_tracer
-                .set_emitters(&state.device, volume, &loaded.materials);
-        }
+        self.refresh_colors(state);
+        self.upload_trace_volume(state);
     }
 
     /// Rebuilds the GPU mesh after an edit, leaving the camera alone.
     fn remesh(&mut self, state: &egui_wgpu::RenderState) {
         let Some(loaded) = &self.scene else { return };
         let hidden = self.hidden_layers;
-        let mesh = Mesh::from_scene_where(&loaded.scene, |i| !is_hidden(&hidden, i.layer));
+        let mesh = Mesh::from_scene_where(&loaded.doc.scene, |i| !is_hidden(&hidden, i.layer));
         self.scene_renderer.set_mesh(&state.device, &mesh);
-        if let Some(volume) = loaded.scene.models.first() {
-            self.path_tracer.set_volume(&state.device, &state.queue, volume);
-            self.path_tracer
-                .set_emitters(&state.device, volume, &loaded.materials);
-        }
+        self.upload_trace_volume(state);
         self.mesh_dirty = false;
+    }
+
+    /// Hands the palette and materials to both renderers. Cheap: two small
+    /// buffer writes, so any palette or material edit just calls this.
+    fn refresh_colors(&mut self, state: &egui_wgpu::RenderState) {
+        let Some(loaded) = &self.scene else { return };
+        let doc = &loaded.doc;
+        self.scene_renderer.set_palette(&state.queue, &doc.palette);
+        self.path_tracer.set_palette(&state.queue, &doc.palette);
+        self.path_tracer.set_materials(&state.queue, &doc.palette, &doc.materials);
+    }
+
+    /// Bakes every visible instance into one world-aligned grid for the
+    /// tracer, which walks voxels rather than the mesh.
+    ///
+    /// Emitters come from the same grid, so a lamp on any model lights the
+    /// scene, and so does a material change that turns a colour emissive.
+    fn upload_trace_volume(&mut self, state: &egui_wgpu::RenderState) {
+        let Some(loaded) = &self.scene else { return };
+        let hidden = self.hidden_layers;
+        // A 3D texture is capped at 2048 per side on Metal; the cell budget
+        // keeps a scene of far-apart models from allocating gigabytes.
+        let max_side = state.device.limits().max_texture_dimension_3d;
+        let baked = loaded
+            .doc
+            .scene
+            .bake(|i| !is_hidden(&hidden, i.layer), 256 * 1024 * 1024)
+            .map_err(|e| e.to_string())
+            .and_then(|b| {
+                if b.volume.size().iter().any(|&s| s > max_side) {
+                    let [x, y, z] = b.volume.size();
+                    Err(format!("scene spans {x}x{y}x{z} voxels, over the GPU limit of {max_side}"))
+                } else {
+                    Ok(b)
+                }
+            });
+        match baked {
+            Ok(baked) => {
+                self.path_tracer.set_volume(&state.device, &state.queue, &baked.volume);
+                self.path_tracer
+                    .set_emitters(&state.device, &baked.volume, &loaded.doc.materials);
+                self.trace_origin = baked.origin;
+            }
+            Err(e) => {
+                self.path_tracer.clear_volume();
+                eprintln!("[voxferro] path tracer: {e}");
+            }
+        }
+    }
+
+    /// After undo or redo: the step may have touched voxels, colours or
+    /// materials, so everything is refreshed.
+    fn refresh_document(&mut self, state: &egui_wgpu::RenderState) {
+        self.refresh_colors(state);
+        self.remesh(state);
+    }
+
+    /// The selected instance's model index, if there is one.
+    fn selected_model(&self) -> Option<usize> {
+        let loaded = self.scene.as_ref()?;
+        let instance = loaded.doc.scene.instances.get(self.selected)?;
+        Some(instance.model_index)
     }
 
     /// Picks under the cursor and adds or removes a voxel.
     ///
-    /// Edits target the first placed instance: a full editor would pick the
-    /// nearest hit across every instance, which needs each one's own ray test.
+    /// The ray is tested against every visible instance and the nearest hit
+    /// wins; that instance becomes the selection, so the console and the
+    /// kernels follow whatever was last clicked.
     fn edit_at(&mut self, pixel: egui::Vec2, viewport: egui::Vec2, view_proj: glam::Mat4) {
         let Some(loaded) = &mut self.scene else { return };
-        let Some(instance) = loaded.scene.instances.first().cloned() else {
-            return;
-        };
-        let Some(volume) = loaded.scene.models.get_mut(instance.model_index) else {
-            return;
-        };
 
         let ray = edit::ray_through_pixel(
             view_proj,
@@ -305,67 +370,44 @@ impl App {
             Vec3::new(pixel.x, pixel.y, 0.0).truncate(),
         );
 
-        let Some(hit) = edit::pick(volume, &instance.transform, ray, 10_000.0) else {
+        let hidden = self.hidden_layers;
+        let Some(pick) = loaded
+            .doc
+            .scene
+            .pick(ray.origin, ray.direction, 10_000.0, |i| !is_hidden(&hidden, i.layer))
+        else {
             return;
         };
+        self.selected = pick.instance;
+        let model = loaded.doc.scene.instances[pick.instance].model_index;
 
         let (target, value) = if self.erase {
-            (hit.voxel, 0)
+            (pick.hit.voxel, 0)
         } else {
-            (hit.adjacent(), self.brush_color)
+            (pick.hit.adjacent(), self.brush_color)
         };
 
-        self.history.set_voxels(volume, [(target, value)]);
+        self.history.set_voxels(&mut loaded.doc, model, [(target, value)]);
         self.mesh_dirty = true;
     }
 
     fn undo(&mut self, state: &egui_wgpu::RenderState) {
-        if self.apply_history(|h, v| h.undo(v)) {
-            self.remesh(state);
+        let Some(loaded) = self.scene.as_mut() else { return };
+        if self.history.undo(&mut loaded.doc) {
+            self.refresh_document(state);
         }
     }
 
     fn redo(&mut self, state: &egui_wgpu::RenderState) {
-        if self.apply_history(|h, v| h.redo(v)) {
-            self.remesh(state);
+        let Some(loaded) = self.scene.as_mut() else { return };
+        if self.history.redo(&mut loaded.doc) {
+            self.refresh_document(state);
         }
     }
 
-    /// Runs a history operation against the edited volume.
-    ///
-    /// A helper returning `&mut Volume` would borrow all of `self`, leaving
-    /// `self.history` unreachable. Reaching the fields directly keeps the two
-    /// borrows disjoint, and the inner scope ends them before `remesh` needs
-    /// `self` again.
-    /// Shift from world space into the traced volume's voxel space.
-    ///
-    /// The mesher places a model's pivot on its transform, so a world point
-    /// maps to `local = world + pivot - translation`. Without this the traced
-    /// image sits half a model away from the framed one.
+    /// Shift from world space into the traced grid's voxel space.
     fn volume_offset(&self) -> Vec3 {
-        let Some(loaded) = &self.scene else {
-            return Vec3::ZERO;
-        };
-        let Some(instance) = loaded.scene.instances.first() else {
-            return Vec3::ZERO;
-        };
-        let Some(volume) = loaded.scene.models.get(instance.model_index) else {
-            return Vec3::ZERO;
-        };
-        volume.pivot() - instance.transform.translation.as_vec3()
-    }
-
-    fn apply_history(&mut self, op: impl FnOnce(&mut History, &mut voxel_core::Volume) -> bool) -> bool {
-        let Some(loaded) = self.scene.as_mut() else {
-            return false;
-        };
-        let Some(index) = loaded.scene.instances.first().map(|i| i.model_index) else {
-            return false;
-        };
-        let Some(volume) = loaded.scene.models.get_mut(index) else {
-            return false;
-        };
-        op(&mut self.history, volume)
+        -self.trace_origin.as_vec3()
     }
 
     fn controls(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
@@ -379,7 +421,7 @@ impl App {
         let summary = self
             .scene
             .as_ref()
-            .map(|s| (s.name.clone(), s.scene.instances.len(), s.scene.total_voxels()));
+            .map(|s| (s.name.clone(), s.doc.scene.instances.len(), s.doc.scene.total_voxels()));
 
         if let Some((name, placed, voxels)) = summary {
             ui.label(name);
@@ -445,7 +487,7 @@ impl App {
 
         // Show the colour the brush will actually paint.
         if let Some(loaded) = &self.scene {
-            let c = loaded.palette.color(self.brush_color);
+            let c = loaded.doc.palette.color(self.brush_color);
             let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 16.0), egui::Sense::hover());
             ui.painter()
                 .rect_filled(rect, 2.0, egui::Color32::from_rgb(c.r, c.g, c.b));
@@ -542,7 +584,7 @@ impl App {
                 rect.min + egui::vec2(cx as f32 * CELL, cy as f32 * CELL),
                 egui::vec2(CELL - 1.0, CELL - 1.0),
             );
-            let c = loaded.palette.color(i as u8);
+            let c = loaded.doc.palette.color(i as u8);
             painter.rect_filled(cell, 1.0, egui::Color32::from_rgb(c.r, c.g, c.b));
             if i as u8 == self.brush_color {
                 painter.rect_stroke(
@@ -618,29 +660,27 @@ impl App {
             return;
         }
 
-        // Same disjoint-borrow dance as undo/redo: reach the fields directly.
+        // Reach the fields directly rather than through a `&mut self`
+        // helper, so the document and the history can be borrowed together.
         let mut changed = false;
         let mut message = None;
-        if let Some(loaded) = self.scene.as_mut() {
-            if let Some(index) = loaded.scene.instances.first().map(|i| i.model_index) {
-                if let Some(volume) = loaded.scene.models.get_mut(index) {
-                    match console::execute(line, volume, &mut self.history) {
-                        console::Outcome::Ok { message: m, changed: c } => {
-                            changed = c;
-                            if !m.is_empty() {
-                                message = Some(m);
-                            }
-                        }
-                        console::Outcome::Error(e) => message = Some(format!("error: {e}")),
+        let model = self.selected_model();
+        if let (Some(loaded), Some(model)) = (self.scene.as_mut(), model) {
+            match console::execute(line, &mut loaded.doc, model, &mut self.history) {
+                console::Outcome::Ok { message: m, changed: c } => {
+                    changed = c;
+                    if !m.is_empty() {
+                        message = Some(m);
                     }
                 }
+                console::Outcome::Error(e) => message = Some(format!("error: {e}")),
             }
         }
         if let Some(m) = message {
             self.console_log.push(m);
         }
         if changed {
-            self.remesh(state);
+            self.refresh_document(state);
         }
     }
 
@@ -767,15 +807,11 @@ impl App {
             .and_then(|a| a.parse::<u8>().ok())
             .unwrap_or(self.brush_color);
 
-        let Some(loaded) = self.scene.as_mut() else {
+        let model = self.selected_model();
+        let (Some(loaded), Some(model)) = (self.scene.as_mut(), model) else {
             return "no model loaded".to_owned();
         };
-        let Some(index) = loaded.scene.instances.first().map(|i| i.model_index) else {
-            return "no model loaded".to_owned();
-        };
-        let Some(volume) = loaded.scene.models.get_mut(index) else {
-            return "no model loaded".to_owned();
-        };
+        let volume = &loaded.doc.scene.models[model];
 
         let [sx, sy, sz] = volume.size();
         let smallest = sx.min(sy).min(sz) as f32;
@@ -823,7 +859,7 @@ impl App {
 
         let count = writes.len();
         self.history.end_gesture();
-        self.history.set_voxels(volume, writes);
+        self.history.set_voxels(&mut loaded.doc, model, writes);
         self.history.end_gesture();
         self.mesh_dirty = true;
 
@@ -845,6 +881,16 @@ impl App {
 
         // A click edits; a drag orbits. egui separates the two, so the camera
         // never lurches when placing a voxel.
+        if !self.scripted_clicks.is_empty() {
+            let aspect = view_size.x / view_size.y.max(1.0);
+            let vp = self.camera.view_proj(aspect);
+            for f in std::mem::take(&mut self.scripted_clicks) {
+                self.edit_at(f * view_size, view_size, vp);
+                self.history.end_gesture();
+            }
+            eprintln!("[voxferro] scripted clicks done; selected instance {}", self.selected);
+        }
+
         if !headless && response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let aspect = view_size.x / view_size.y.max(1.0);

@@ -210,18 +210,54 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, mode: u32) 
     result.hit = false;
     result.distance = max_distance;
 
-    var cell = vec3<i32>(floor(origin));
+    // Jump straight to where the ray enters the grid. The walk's step budget
+    // scales with the grid, so a camera pulled far back from a wide scene
+    // would otherwise run out of steps in the empty space before reaching
+    // it. Mode 1 starts inside glass by definition and needs no clipping.
+    var start = origin;
+    var skipped = 0.0;
+    var normal = vec3<f32>(0.0);
+    if (mode == 0u) {
+        let size = vec3<f32>(p.volume_size.xyz);
+        let safe = select(direction, vec3<f32>(1e-8), abs(direction) < vec3<f32>(1e-8));
+        let ta = -origin / safe;
+        let tb = (size - origin) / safe;
+        let near = min(ta, tb);
+        let far_t = max(ta, tb);
+        let t_enter = max(max(near.x, near.y), near.z);
+        let t_exit = min(min(far_t.x, far_t.y), far_t.z);
+        if (t_exit < max(t_enter, 0.0) || t_enter > max_distance) {
+            return result;
+        }
+        if (t_enter > 0.0) {
+            skipped = t_enter;
+            start = origin + direction * t_enter;
+            // The face the ray came in through, for a hit on the first cell.
+            if (near.x >= near.y && near.x >= near.z) {
+                normal = vec3<f32>(-sign(direction.x), 0.0, 0.0);
+            } else if (near.y >= near.z) {
+                normal = vec3<f32>(0.0, -sign(direction.y), 0.0);
+            } else {
+                normal = vec3<f32>(0.0, 0.0, -sign(direction.z));
+            }
+        }
+    }
+
+    var cell = vec3<i32>(floor(start));
+    if (skipped > 0.0) {
+        // Rounding can leave the entry point a hair outside the box.
+        cell = clamp(cell, vec3<i32>(0), vec3<i32>(p.volume_size.xyz) - vec3<i32>(1));
+    }
     let step = vec3<i32>(sign(direction));
 
     let inv = 1.0 / max(abs(direction), vec3<f32>(1e-8));
     var t_max = vec3<f32>(
-        select(origin.x - f32(cell.x), f32(cell.x) + 1.0 - origin.x, direction.x > 0.0) * inv.x,
-        select(origin.y - f32(cell.y), f32(cell.y) + 1.0 - origin.y, direction.y > 0.0) * inv.y,
-        select(origin.z - f32(cell.z), f32(cell.z) + 1.0 - origin.z, direction.z > 0.0) * inv.z
-    );
+        max(select(start.x - f32(cell.x), f32(cell.x) + 1.0 - start.x, direction.x > 0.0), 0.0) * inv.x,
+        max(select(start.y - f32(cell.y), f32(cell.y) + 1.0 - start.y, direction.y > 0.0), 0.0) * inv.y,
+        max(select(start.z - f32(cell.z), f32(cell.z) + 1.0 - start.z, direction.z > 0.0), 0.0) * inv.z
+    ) + vec3<f32>(skipped);
 
-    var travelled = 0.0;
-    var normal = vec3<f32>(0.0);
+    var travelled = skipped;
     let limit = i32(p.volume_size.x + p.volume_size.y + p.volume_size.z) * 3 + 32;
 
     for (var i = 0; i < limit; i = i + 1) {
@@ -505,7 +541,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let far = f32(p.volume_size.x + p.volume_size.y + p.volume_size.z) * 2.0;
 
     for (var bounce = 0u; bounce <= p.bounces; bounce = bounce + 1u) {
-        let hit = trace(origin, direction, far, 0u);
+        // No distance cap here: the camera may sit far outside the grid,
+        // and trace() clips to the grid box itself.
+        let hit = trace(origin, direction, 1e30, 0u);
 
         // The ground wins when it is nearer than any voxel, or when the ray
         // left the grid without hitting one.

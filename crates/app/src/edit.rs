@@ -1,7 +1,6 @@
 //! Turning a click into a voxel edit.
 
 use glam::{Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
-use voxel_core::{Hit, Transform, Volume, raycast};
 
 /// A ray in world space.
 #[derive(Debug, Clone, Copy)]
@@ -33,17 +32,6 @@ pub fn ray_through_pixel(view_proj: Mat4, viewport: Vec2, pixel: Vec2) -> Ray {
         origin: near,
         direction: (far - near).normalize_or_zero(),
     }
-}
-
-/// Casts a world ray at one placed volume, in that volume's local space.
-///
-/// The mesher places a model's pivot on its transform, so that shift has to
-/// be undone here too, or picking lands away from the geometry on screen.
-pub fn pick(volume: &Volume, transform: &Transform, ray: Ray, max_distance: f32) -> Option<Hit> {
-    let local_origin = transform.inverse_apply(ray.origin) + volume.pivot();
-    let local_dir = transform.inverse_rotate(ray.direction);
-
-    raycast(volume, local_origin, local_dir, max_distance)
 }
 
 #[cfg(test)]
@@ -83,36 +71,8 @@ mod tests {
 
     #[test]
     fn a_click_adds_a_voxel_and_undo_removes_it() {
-        use voxel_core::History;
+        use voxel_core::{Document, History, Instance, Scene, Transform, Volume};
 
-        let mut v = Volume::new([8, 8, 8]);
-        for x in 0..8 {
-            for z in 0..8 {
-                v.set(x, 4, z, 1);
-            }
-        }
-
-        let ray = ray_through_pixel(view_proj(), Vec2::splat(100.0), Vec2::splat(50.0));
-        let hit = pick(&v, &Transform::default(), ray, 1000.0).expect("centre ray hits the slab");
-
-        // Adding places a voxel in the empty cell on the hit face.
-        let target = hit.adjacent();
-        assert_eq!(v.get_i(target.x, target.y, target.z), 0, "target starts empty");
-
-        let mut history = History::default();
-        history.set_voxels(&mut v, [(target, 42)]);
-        assert_eq!(v.get_i(target.x, target.y, target.z), 42);
-
-        assert!(history.undo(&mut v));
-        assert_eq!(
-            v.get_i(target.x, target.y, target.z),
-            0,
-            "undo should clear the added voxel"
-        );
-    }
-
-    #[test]
-    fn picking_hits_a_voxel_under_the_centre_pixel() {
         let mut v = Volume::new([8, 8, 8]);
         // Fill the slab the centre ray must cross.
         for x in 0..8 {
@@ -120,8 +80,34 @@ mod tests {
                 v.set(x, 4, z, 1);
             }
         }
+        let mut doc = Document {
+            scene: Scene {
+                models: vec![v],
+                instances: vec![Instance {
+                    model_index: 0,
+                    transform: Transform::default(),
+                    layer: -1,
+                }],
+            },
+            ..Default::default()
+        };
+
         let ray = ray_through_pixel(view_proj(), Vec2::splat(100.0), Vec2::splat(50.0));
-        let hit = pick(&v, &Transform::default(), ray, 1000.0);
-        assert!(hit.is_some(), "centre ray should hit the slab");
+        let pick = doc
+            .scene
+            .pick(ray.origin, ray.direction, 1000.0, |_| true)
+            .expect("centre ray hits the slab");
+
+        // Adding places a voxel in the empty cell on the hit face.
+        let target = pick.hit.adjacent();
+        let at = |d: &Document| d.scene.models[0].get_i(target.x, target.y, target.z);
+        assert_eq!(at(&doc), 0, "target starts empty");
+
+        let mut history = History::default();
+        history.set_voxels(&mut doc, 0, [(target, 42)]);
+        assert_eq!(at(&doc), 42);
+
+        assert!(history.undo(&mut doc));
+        assert_eq!(at(&doc), 0, "undo should clear the added voxel");
     }
 }

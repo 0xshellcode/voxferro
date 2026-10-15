@@ -492,6 +492,13 @@ impl PathTracer {
         self.reset_pending = true;
     }
 
+    /// Drops the volume, so the tracer shows nothing rather than a stale
+    /// scene when the current one cannot be baked.
+    pub fn clear_volume(&mut self) {
+        self.volume = None;
+        self.reset();
+    }
+
     /// Uploads the volume as a 3D texture.
     pub fn set_volume(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, volume: &Volume) {
         let [sx, sy, sz] = volume.size();

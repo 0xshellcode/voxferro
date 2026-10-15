@@ -5,16 +5,35 @@
 //! with one advantage: `match` is exhaustive, so adding a command the compiler
 //! cannot undo is a build error rather than a bug found later.
 
-use crate::Volume;
+use crate::{Document, Volume};
 use glam::IVec3;
+use vox_format::{Color, Material};
 
-/// A single reversible change.
+/// A single reversible change to a [`Document`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
-    /// Writes palette indices at specific cells, remembering what was there.
+    /// Writes palette indices at specific cells of one model, remembering
+    /// what was there.
     SetVoxels {
+        /// Index into the scene's model list.
+        model: usize,
         /// `(position, previous, next)` per cell.
         changes: Vec<(IVec3, u8, u8)>,
+    },
+    /// Swaps a whole model for another: resizing, rotating, mirroring and
+    /// cropping change its shape, which a list of cell writes cannot express.
+    ReplaceModel {
+        model: usize,
+        before: Volume,
+        after: Volume,
+    },
+    /// Changes one palette colour.
+    SetColor { index: u8, before: Color, after: Color },
+    /// Changes the material of one palette index; `None` is plain diffuse.
+    SetMaterial {
+        index: u8,
+        before: Option<Material>,
+        after: Option<Material>,
     },
 }
 
@@ -23,55 +42,130 @@ impl Command {
     ///
     /// Cells whose value would not change are dropped, so a stroke that
     /// repaints the same colour does not land on the undo stack as a no-op.
-    pub fn set_voxels(volume: &Volume, writes: impl IntoIterator<Item = (IVec3, u8)>) -> Self {
-        let changes = writes
-            .into_iter()
-            .filter_map(|(p, next)| {
-                let previous = volume.get_i(p.x, p.y, p.z);
-                (previous != next).then_some((p, previous, next))
-            })
-            .collect();
-        Self::SetVoxels { changes }
+    /// So are cells outside the model, which a write cannot reach.
+    pub fn set_voxels(
+        document: &Document,
+        model: usize,
+        writes: impl IntoIterator<Item = (IVec3, u8)>,
+    ) -> Self {
+        let changes = match document.scene.models.get(model) {
+            Some(volume) => {
+                let [sx, sy, sz] = volume.size();
+                let inside = |p: IVec3| {
+                    p.x >= 0
+                        && p.y >= 0
+                        && p.z >= 0
+                        && (p.x as u32) < sx
+                        && (p.y as u32) < sy
+                        && (p.z as u32) < sz
+                };
+                // A stroke may name the same cell twice; the last write wins
+                // and the first previous value is the one to restore.
+                let mut seen = std::collections::HashMap::new();
+                let mut changes: Vec<(IVec3, u8, u8)> = Vec::new();
+                for (p, next) in writes {
+                    if !inside(p) {
+                        continue;
+                    }
+                    match seen.get(&p) {
+                        Some(&i) => {
+                            let entry: &mut (IVec3, u8, u8) = &mut changes[i];
+                            entry.2 = next;
+                        }
+                        None => {
+                            seen.insert(p, changes.len());
+                            changes.push((p, volume.get_i(p.x, p.y, p.z), next));
+                        }
+                    }
+                }
+                changes.retain(|&(_, previous, next)| previous != next);
+                changes
+            }
+            None => Vec::new(),
+        };
+        Self::SetVoxels { model, changes }
     }
 
     pub fn is_empty(&self) -> bool {
         match self {
-            Self::SetVoxels { changes } => changes.is_empty(),
+            Self::SetVoxels { changes, .. } => changes.is_empty(),
+            Self::ReplaceModel { before, after, .. } => before == after,
+            Self::SetColor { before, after, .. } => before == after,
+            Self::SetMaterial { before, after, .. } => before == after,
         }
     }
 
-    pub fn apply(&self, volume: &mut Volume) {
+    pub fn apply(&self, document: &mut Document) {
         match self {
-            Self::SetVoxels { changes } => {
-                for &(p, _, next) in changes {
-                    set_signed(volume, p, next);
+            Self::SetVoxels { model, changes } => {
+                if let Some(volume) = document.model_mut(*model) {
+                    for &(p, _, next) in changes {
+                        set_signed(volume, p, next);
+                    }
                 }
             }
+            Self::ReplaceModel { model, after, .. } => {
+                if let Some(volume) = document.model_mut(*model) {
+                    *volume = after.clone();
+                }
+            }
+            Self::SetColor { index, after, .. } => document.palette.set_color(*index, *after),
+            Self::SetMaterial { index, after, .. } => document.put_material(*index, after.clone()),
         }
     }
 
-    pub fn revert(&self, volume: &mut Volume) {
+    pub fn revert(&self, document: &mut Document) {
         match self {
-            Self::SetVoxels { changes } => {
-                // Reverse order, so overlapping writes unwind correctly.
-                for &(p, previous, _) in changes.iter().rev() {
-                    set_signed(volume, p, previous);
+            Self::SetVoxels { model, changes } => {
+                if let Some(volume) = document.model_mut(*model) {
+                    // Reverse order, so overlapping writes unwind correctly.
+                    for &(p, previous, _) in changes.iter().rev() {
+                        set_signed(volume, p, previous);
+                    }
                 }
+            }
+            Self::ReplaceModel { model, before, .. } => {
+                if let Some(volume) = document.model_mut(*model) {
+                    *volume = before.clone();
+                }
+            }
+            Self::SetColor { index, before, .. } => document.palette.set_color(*index, *before),
+            Self::SetMaterial { index, before, .. } => {
+                document.put_material(*index, before.clone())
             }
         }
     }
 
     /// Merges `next` into this command if they belong to one gesture.
     ///
-    /// A brush drag fires one command per frame; without this the undo stack
-    /// fills with single voxels and one Ctrl+Z barely undoes anything.
-    /// the reference editor calls the same idea `CombinePrevCmd`.
+    /// A brush drag fires one command per frame, and a colour slider one per
+    /// frame it moves; without this the undo stack fills with tiny steps and
+    /// one Cmd+Z barely undoes anything. the reference editor calls the same idea
+    /// `CombinePrevCmd`.
     pub fn absorb(&mut self, next: &Command) -> bool {
         match (self, next) {
-            (Self::SetVoxels { changes }, Self::SetVoxels { changes: more }) => {
+            (
+                Self::SetVoxels { model, changes },
+                Self::SetVoxels { model: other, changes: more },
+            ) if model == other => {
                 changes.extend(more.iter().copied());
                 true
             }
+            (
+                Self::SetColor { index, after, .. },
+                Self::SetColor { index: other, after: newer, .. },
+            ) if index == other => {
+                *after = *newer;
+                true
+            }
+            (
+                Self::SetMaterial { index, after, .. },
+                Self::SetMaterial { index: other, after: newer, .. },
+            ) if index == other => {
+                after.clone_from(newer);
+                true
+            }
+            _ => false,
         }
     }
 }
@@ -89,38 +183,49 @@ pub struct History {
     redo: Vec<Command>,
     /// Commands pushed while this is true may merge into the previous one.
     coalescing: bool,
+    /// Bumped on every change, so the app can tell whether the document
+    /// differs from what was last saved.
+    revision: u64,
 }
 
 impl History {
-    /// Writes voxels, capturing their previous values, and records the edit.
+    /// Writes voxels into one model, capturing their previous values, and
+    /// records the edit.
     ///
     /// This exists because the obvious call does not compile:
     ///
     /// ```compile_fail
-    /// # use voxel_core::{Command, History, Volume};
+    /// # use voxel_core::{Command, Document, History};
     /// # use glam::IVec3;
-    /// # let (mut history, mut volume) = (History::default(), Volume::new([8, 8, 8]));
-    /// history.exec(&mut volume, Command::set_voxels(&volume, [(IVec3::ZERO, 1)]));
+    /// # let (mut history, mut doc) = (History::default(), Document::default());
+    /// history.exec(&mut doc, Command::set_voxels(&doc, 0, [(IVec3::ZERO, 1)]));
     /// ```
     ///
-    /// The argument borrows the volume immutably while the receiver already
-    /// holds it mutably. Taking the writes and building the command inside
-    /// keeps both borrows apart, so callers never meet the conflict.
+    /// The argument borrows the document immutably while the receiver
+    /// already holds it mutably. Taking the writes and building the command
+    /// inside keeps both borrows apart, so callers never meet the conflict.
     pub fn set_voxels(
         &mut self,
-        volume: &mut Volume,
+        document: &mut Document,
+        model: usize,
         writes: impl IntoIterator<Item = (IVec3, u8)>,
-    ) {
-        let command = Command::set_voxels(volume, writes);
-        self.exec(volume, command);
+    ) -> usize {
+        let command = Command::set_voxels(document, model, writes);
+        let count = match &command {
+            Command::SetVoxels { changes, .. } => changes.len(),
+            _ => 0,
+        };
+        self.exec(document, command);
+        count
     }
 
-    /// Applies a command and records it.
-    pub fn exec(&mut self, volume: &mut Volume, command: Command) {
+    /// Applies a command and records it. Returns whether anything changed.
+    pub fn exec(&mut self, document: &mut Document, command: Command) -> bool {
         if command.is_empty() {
-            return;
+            return false;
         }
-        command.apply(volume);
+        command.apply(document);
+        self.revision += 1;
 
         // A new edit invalidates anything that was undone.
         self.redo.clear();
@@ -128,12 +233,22 @@ impl History {
         if self.coalescing {
             if let Some(previous) = self.undo.last_mut() {
                 if previous.absorb(&command) {
-                    return;
+                    return true;
                 }
             }
         }
         self.undo.push(command);
         self.coalescing = true;
+        true
+    }
+
+    /// Runs a command as a gesture of its own, never merged with a stroke
+    /// before or after it. Console commands and menu actions use this.
+    pub fn exec_alone(&mut self, document: &mut Document, command: Command) -> bool {
+        self.end_gesture();
+        let changed = self.exec(document, command);
+        self.end_gesture();
+        changed
     }
 
     /// Ends the current gesture, so the next edit starts a fresh undo entry.
@@ -141,28 +256,35 @@ impl History {
         self.coalescing = false;
     }
 
-    pub fn undo(&mut self, volume: &mut Volume) -> bool {
+    pub fn undo(&mut self, document: &mut Document) -> bool {
         self.end_gesture();
         match self.undo.pop() {
             Some(c) => {
-                c.revert(volume);
+                c.revert(document);
                 self.redo.push(c);
+                self.revision += 1;
                 true
             }
             None => false,
         }
     }
 
-    pub fn redo(&mut self, volume: &mut Volume) -> bool {
+    pub fn redo(&mut self, document: &mut Document) -> bool {
         self.end_gesture();
         match self.redo.pop() {
             Some(c) => {
-                c.apply(volume);
+                c.apply(document);
                 self.undo.push(c);
+                self.revision += 1;
                 true
             }
             None => false,
         }
+    }
+
+    /// Forgets every step, for when a different file is opened.
+    pub fn clear(&mut self) {
+        *self = Self::default();
     }
 
     pub fn can_undo(&self) -> bool {
@@ -176,83 +298,190 @@ impl History {
     pub fn undo_depth(&self) -> usize {
         self.undo.len()
     }
+
+    /// Changes whenever the document does, undo and redo included.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Instance, Scene, Transform};
 
-    fn volume() -> Volume {
-        Volume::new([8, 8, 8])
+    fn doc() -> Document {
+        Document {
+            scene: Scene {
+                models: vec![Volume::new([8, 8, 8]), Volume::new([4, 4, 4])],
+                instances: vec![Instance {
+                    model_index: 0,
+                    transform: Transform::default(),
+                    layer: -1,
+                }],
+            },
+            ..Default::default()
+        }
+    }
+
+    fn get(d: &Document, model: usize, x: u32, y: u32, z: u32) -> u8 {
+        d.scene.models[model].get(x, y, z)
     }
 
     #[test]
     fn undo_restores_the_previous_value() {
-        let mut v = volume();
-        v.set(1, 1, 1, 5);
+        let mut d = doc();
+        d.scene.models[0].set(1, 1, 1, 5);
         let mut h = History::default();
 
-        h.set_voxels(&mut v, [(IVec3::new(1, 1, 1), 9)]);
-        assert_eq!(v.get(1, 1, 1), 9);
+        h.set_voxels(&mut d, 0, [(IVec3::new(1, 1, 1), 9)]);
+        assert_eq!(get(&d, 0, 1, 1, 1), 9);
 
-        assert!(h.undo(&mut v));
-        assert_eq!(v.get(1, 1, 1), 5, "should be back to the old colour");
+        assert!(h.undo(&mut d));
+        assert_eq!(get(&d, 0, 1, 1, 1), 5, "should be back to the old colour");
 
-        assert!(h.redo(&mut v));
-        assert_eq!(v.get(1, 1, 1), 9);
+        assert!(h.redo(&mut d));
+        assert_eq!(get(&d, 0, 1, 1, 1), 9);
     }
 
     #[test]
-    fn no_op_writes_never_reach_the_stack() {
-        let mut v = volume();
-        v.set(2, 2, 2, 7);
+    fn edits_land_on_the_model_they_name() {
+        let mut d = doc();
         let mut h = History::default();
-        h.set_voxels(&mut v, [(IVec3::new(2, 2, 2), 7)]);
-        assert!(!h.can_undo(), "repainting the same colour is not an edit");
+        h.set_voxels(&mut d, 1, [(IVec3::new(2, 2, 2), 4)]);
+        assert_eq!(get(&d, 1, 2, 2, 2), 4);
+        assert_eq!(get(&d, 0, 2, 2, 2), 0, "the other model is untouched");
+        h.undo(&mut d);
+        assert_eq!(get(&d, 1, 2, 2, 2), 0);
+    }
+
+    #[test]
+    fn strokes_on_different_models_stay_separate_steps() {
+        let mut d = doc();
+        let mut h = History::default();
+        h.set_voxels(&mut d, 0, [(IVec3::ZERO, 1)]);
+        h.set_voxels(&mut d, 1, [(IVec3::ZERO, 1)]);
+        assert_eq!(h.undo_depth(), 2, "one undo must never touch two models");
+    }
+
+    #[test]
+    fn no_op_and_out_of_bounds_writes_never_reach_the_stack() {
+        let mut d = doc();
+        d.scene.models[0].set(2, 2, 2, 7);
+        let mut h = History::default();
+        h.set_voxels(&mut d, 0, [(IVec3::new(2, 2, 2), 7)]);
+        h.set_voxels(&mut d, 0, [(IVec3::new(-1, 2, 2), 7), (IVec3::new(8, 0, 0), 7)]);
+        assert!(!h.can_undo(), "nothing actually changed");
+    }
+
+    #[test]
+    fn repeated_cells_in_one_command_undo_to_the_original() {
+        let mut d = doc();
+        let mut h = History::default();
+        let p = IVec3::new(3, 3, 3);
+        h.set_voxels(&mut d, 0, [(p, 1), (p, 2), (p, 3)]);
+        assert_eq!(get(&d, 0, 3, 3, 3), 3);
+        h.undo(&mut d);
+        assert_eq!(get(&d, 0, 3, 3, 3), 0);
     }
 
     #[test]
     fn a_gesture_collapses_into_one_undo_entry() {
-        let mut v = volume();
+        let mut d = doc();
         let mut h = History::default();
-        for i in 0..5u32 {
-            h.set_voxels(&mut v, [(IVec3::new(i as i32, 0, 0), 3)]);
+        for i in 0..5 {
+            h.set_voxels(&mut d, 0, [(IVec3::new(i, 0, 0), 3)]);
         }
         assert_eq!(h.undo_depth(), 1, "one drag is one undo");
 
-        h.undo(&mut v);
+        h.undo(&mut d);
         for i in 0..5 {
-            assert_eq!(v.get(i, 0, 0), 0, "the whole stroke should be gone");
+            assert_eq!(get(&d, 0, i, 0, 0), 0, "the whole stroke should be gone");
         }
     }
 
     #[test]
     fn ending_a_gesture_starts_a_new_entry() {
-        let mut v = volume();
+        let mut d = doc();
         let mut h = History::default();
-        h.set_voxels(&mut v, [(IVec3::new(0, 0, 0), 1)]);
+        h.set_voxels(&mut d, 0, [(IVec3::new(0, 0, 0), 1)]);
         h.end_gesture();
-        h.set_voxels(&mut v, [(IVec3::new(1, 0, 0), 1)]);
+        h.set_voxels(&mut d, 0, [(IVec3::new(1, 0, 0), 1)]);
         assert_eq!(h.undo_depth(), 2);
     }
 
     #[test]
     fn a_new_edit_clears_the_redo_stack() {
-        let mut v = volume();
+        let mut d = doc();
         let mut h = History::default();
-        h.set_voxels(&mut v, [(IVec3::new(0, 0, 0), 1)]);
-        h.undo(&mut v);
+        h.set_voxels(&mut d, 0, [(IVec3::new(0, 0, 0), 1)]);
+        h.undo(&mut d);
         assert!(h.can_redo());
 
-        h.set_voxels(&mut v, [(IVec3::new(5, 5, 5), 2)]);
+        h.set_voxels(&mut d, 0, [(IVec3::new(5, 5, 5), 2)]);
         assert!(!h.can_redo(), "redo cannot survive a divergent edit");
     }
 
     #[test]
     fn undo_on_an_empty_stack_is_harmless() {
-        let mut v = volume();
+        let mut d = doc();
         let mut h = History::default();
-        assert!(!h.undo(&mut v));
-        assert!(!h.redo(&mut v));
+        assert!(!h.undo(&mut d));
+        assert!(!h.redo(&mut d));
+    }
+
+    #[test]
+    fn replacing_a_model_undoes_its_size_too() {
+        let mut d = doc();
+        let mut h = History::default();
+        let before = d.scene.models[1].clone();
+        let after = Volume::new([2, 9, 3]);
+        h.exec_alone(&mut d, Command::ReplaceModel { model: 1, before, after });
+        assert_eq!(d.scene.models[1].size(), [2, 9, 3]);
+        h.undo(&mut d);
+        assert_eq!(d.scene.models[1].size(), [4, 4, 4]);
+    }
+
+    #[test]
+    fn a_colour_drag_is_one_step_back_to_the_first_colour() {
+        let mut d = doc();
+        let mut h = History::default();
+        let original = d.palette.color(7);
+        let mut current = original;
+        for r in [10, 20, 30] {
+            let next = Color { r, ..current };
+            h.exec(&mut d, Command::SetColor { index: 7, before: current, after: next });
+            current = next;
+        }
+        assert_eq!(h.undo_depth(), 1);
+        assert_eq!(d.palette.color(7).r, 30);
+        h.undo(&mut d);
+        assert_eq!(d.palette.color(7), original);
+    }
+
+    #[test]
+    fn materials_are_added_changed_and_removed_by_undo() {
+        let mut d = doc();
+        let mut h = History::default();
+        let metal = Material {
+            id: 0,
+            properties: vox_format::Dict(vec![("_type".into(), "_metal".into())]),
+        };
+        h.exec_alone(&mut d, Command::SetMaterial { index: 12, before: None, after: Some(metal) });
+        assert_eq!(d.material(12).map(|m| m.kind()), Some("_metal"));
+        assert_eq!(d.material(12).map(|m| m.id), Some(12), "the id follows the slot");
+        h.undo(&mut d);
+        assert!(d.material(12).is_none());
+    }
+
+    #[test]
+    fn the_revision_moves_with_every_change() {
+        let mut d = doc();
+        let mut h = History::default();
+        let r0 = h.revision();
+        h.set_voxels(&mut d, 0, [(IVec3::ZERO, 1)]);
+        let r1 = h.revision();
+        h.undo(&mut d);
+        assert!(r1 != r0 && h.revision() != r1);
     }
 }

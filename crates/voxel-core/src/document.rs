@@ -1,0 +1,48 @@
+//! Everything an edit can change, in one place.
+
+use crate::{Scene, Volume};
+use vox_format::{Material, Palette};
+
+/// The editable state of an open file: placed models, colours, materials.
+///
+/// Commands act on this rather than on a single volume, which is what lets
+/// one undo stack hold voxel strokes on any model, palette changes and
+/// material changes side by side, in the order they happened.
+#[derive(Debug, Clone, Default)]
+pub struct Document {
+    pub scene: Scene,
+    pub palette: Palette,
+    /// `MATL` entries; a palette index without one is plain diffuse.
+    pub materials: Vec<Material>,
+}
+
+impl Document {
+    pub fn model_mut(&mut self, index: usize) -> Option<&mut Volume> {
+        self.scene.models.get_mut(index)
+    }
+
+    /// The material of a palette index, if it has one.
+    pub fn material(&self, index: u8) -> Option<&Material> {
+        self.materials.iter().find(|m| m.id == index as i32)
+    }
+
+    /// Replaces, adds or removes the material of a palette index.
+    pub fn put_material(&mut self, index: u8, material: Option<Material>) {
+        let slot = self.materials.iter().position(|m| m.id == index as i32);
+        match (slot, material) {
+            (Some(i), Some(mut m)) => {
+                m.id = index as i32;
+                self.materials[i] = m;
+            }
+            (Some(i), None) => {
+                self.materials.remove(i);
+            }
+            (None, Some(mut m)) => {
+                m.id = index as i32;
+                self.materials.push(m);
+                self.materials.sort_by_key(|m| m.id);
+            }
+            (None, None) => {}
+        }
+    }
+}

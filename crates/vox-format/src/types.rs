@@ -58,6 +58,14 @@ impl Palette {
         self.colors[index as usize]
     }
 
+    /// Replaces the colour of a voxel index. Index 0 is the empty slot and is
+    /// never drawn, so writing it is accepted and ignored.
+    pub fn set_color(&mut self, index: u8, color: Color) {
+        if index != 0 {
+            self.colors[index as usize] = color;
+        }
+    }
+
     /// All 256 slots, indexed by voxel index. Ready to upload to the GPU.
     pub fn as_slice(&self) -> &[Color; 256] {
         &self.colors
@@ -171,7 +179,7 @@ impl Layer {
 }
 
 /// `MATL`: the material of one palette index.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Material {
     pub id: i32,
     pub properties: Dict,
