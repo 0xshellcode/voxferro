@@ -39,6 +39,33 @@ pub struct Environment {
     pub atmosphere_enabled: bool,
     /// `_atm` settings.
     pub atmosphere: voxel_core::AtmosphereSettings,
+
+    /// `_lens._fov`: the render camera's vertical field of view, degrees.
+    pub lens_fov: f32,
+    /// `_lens._aperture`: lens size; the editor uploads `_aperture * 0.03`
+    /// as the lens radius over the focus distance.
+    pub aperture: f32,
+    /// `_lens._blade_n`: aperture blades; below 3 the lens is round.
+    pub blades: u32,
+    /// `_lens._blade_r`: blade rotation, degrees. Also turns the bloom.
+    pub blade_rotation: f32,
+    /// Depth of field on or off. The editor has a switch for it in its
+    /// render panel but no key in the file, so it is not saved either.
+    pub dof: bool,
+
+    /// `_film._vig`: vignette strength.
+    pub vignette: f32,
+    /// `_film._aces`: ACES tone curve, or a plain clamp.
+    pub aces: bool,
+    /// `_film._gam`.
+    pub gamma: f32,
+
+    /// `_bloom`: `_mix`, `_scale` (radius `_scale * 200 + 1` pixels),
+    /// `_aspect` (stretch `2^(_aspect * 4)`), `_threshold`.
+    pub bloom_mix: f32,
+    pub bloom_scale: f32,
+    pub bloom_aspect: f32,
+    pub bloom_threshold: f32,
 }
 
 impl Default for Environment {
@@ -71,6 +98,20 @@ impl Default for Environment {
             ibl_path: "HDR_041_Path_Env.hdr".to_owned(),
             atmosphere_enabled: false,
             atmosphere: voxel_core::AtmosphereSettings::default(),
+            // `_lens`, `_film` and `_bloom` as the editor writes them for a
+            // new scene (every sample file carries these values).
+            lens_fov: 45.0,
+            aperture: 0.25,
+            blades: 0,
+            blade_rotation: 0.0,
+            dof: false,
+            vignette: 0.0,
+            aces: true,
+            gamma: 2.2,
+            bloom_mix: 0.5,
+            bloom_scale: 0.0,
+            bloom_aspect: 0.0,
+            bloom_threshold: 1.0,
         };
         let pair = |k: &str, v: &str| (k.to_owned(), v.to_owned());
         base.with_render_objects(&[
@@ -230,9 +271,49 @@ impl Environment {
                     }
                 }
                 Some("_film") => {
-                    if let Some(e) = object.get("_expo").and_then(|v| v.parse::<f32>().ok()) {
+                    let number = |k: &str| object.get(k).and_then(|v| v.parse::<f32>().ok());
+                    if let Some(e) = number("_expo") {
                         // The editor's exposure is an EV-like stop value.
                         env.exposure = (e / 3.0).clamp(0.05, 20.0);
+                    }
+                    if let Some(v) = number("_vig") {
+                        env.vignette = v.clamp(0.0, 1.0);
+                    }
+                    if let Some(a) = object.get("_aces") {
+                        env.aces = a != "0";
+                    }
+                    if let Some(g) = number("_gam") {
+                        env.gamma = g.clamp(0.1, 10.0);
+                    }
+                }
+                Some("_lens") => {
+                    let number = |k: &str| object.get(k).and_then(|v| v.parse::<f32>().ok());
+                    if let Some(v) = number("_fov") {
+                        env.lens_fov = v.clamp(1.0, 160.0);
+                    }
+                    if let Some(v) = number("_aperture") {
+                        env.aperture = v.max(0.0);
+                    }
+                    if let Some(v) = object.get("_blade_n").and_then(|v| v.parse::<u32>().ok()) {
+                        env.blades = v.min(32);
+                    }
+                    if let Some(v) = number("_blade_r") {
+                        env.blade_rotation = v;
+                    }
+                }
+                Some("_bloom") => {
+                    let number = |k: &str| object.get(k).and_then(|v| v.parse::<f32>().ok());
+                    if let Some(v) = number("_mix") {
+                        env.bloom_mix = v.max(0.0);
+                    }
+                    if let Some(v) = number("_scale") {
+                        env.bloom_scale = v.clamp(0.0, 1.0);
+                    }
+                    if let Some(v) = number("_aspect") {
+                        env.bloom_aspect = v.clamp(-1.0, 1.0);
+                    }
+                    if let Some(v) = number("_threshold") {
+                        env.bloom_threshold = v.max(0.0);
                     }
                 }
                 _ => {}
@@ -315,7 +396,23 @@ impl Environment {
             }
         }
 
-        object(&mut out, "_film").set("_expo", num(self.exposure * 3.0));
+        let film = object(&mut out, "_film");
+        film.set("_expo", num(self.exposure * 3.0));
+        film.set("_vig", num(self.vignette));
+        film.set("_aces", if self.aces { "1" } else { "0" });
+        film.set("_gam", num(self.gamma));
+
+        let lens = object(&mut out, "_lens");
+        lens.set("_fov", num(self.lens_fov));
+        lens.set("_aperture", num(self.aperture));
+        lens.set("_blade_n", self.blades.to_string());
+        lens.set("_blade_r", num(self.blade_rotation));
+
+        let bloom = object(&mut out, "_bloom");
+        bloom.set("_mix", num(self.bloom_mix));
+        bloom.set("_scale", num(self.bloom_scale));
+        bloom.set("_aspect", num(self.bloom_aspect));
+        bloom.set("_threshold", num(self.bloom_threshold));
         object(&mut out, "_bounce").set("_diffuse", self.bounces.to_string());
         out
     }
@@ -420,6 +517,40 @@ struct Params {
 
     /// x: orthographic half-height, 0 for perspective.
     projection: [f32; 4],
+
+    /// x: lens radius over focus distance (0 = pinhole), y: focus distance,
+    /// z: blades, w: blade rotation in radians.
+    lens: [f32; 4],
+}
+
+/// Must match the WGSL `Post`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PostParams {
+    resolution: [u32; 2],
+    sample_count: u32,
+    reset: u32,
+    film: [f32; 4],
+    bloom: [f32; 4],
+    star: [f32; 4],
+}
+
+impl Environment {
+    /// The bloom kernel, as `the reference renderer` sets it up:
+    /// `(iterations, base angle, angle step)`. With n > 2 blades the glow
+    /// turns by pi / n' each iteration, n' being n / 2 for even n (opposite
+    /// blades share a direction) and n for odd n; iterations are 24 rounded
+    /// down to a multiple of n'.
+    pub fn bloom_star(&self) -> (u32, f32, f32) {
+        let n = self.blades;
+        let (directions, step) = if n > 2 {
+            let d = if n % 2 == 0 { n / 2 } else { n };
+            (d, std::f32::consts::PI / d as f32)
+        } else {
+            (1, 0.0)
+        };
+        (24 - 24 % directions, -self.blade_rotation.to_radians(), step)
+    }
 }
 
 /// An environment map resident on the GPU, with what the shader needs to
@@ -440,11 +571,16 @@ struct Target {
     view: wgpu::TextureView,
     texture_id: egui::TextureId,
     accumulator: wgpu::Buffer,
+    /// Running bloom estimate, accumulated like the image.
+    glow: wgpu::Buffer,
 }
 
 pub struct PathTracer {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
+    post_pipeline: wgpu::ComputePipeline,
+    post_layout: wgpu::BindGroupLayout,
+    post_params: wgpu::Buffer,
     params: wgpu::Buffer,
     palette: wgpu::Buffer,
     materials: wgpu::Buffer,
@@ -504,16 +640,6 @@ impl PathTracer {
                 },
                 storage(2, true),
                 storage(3, false),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
                 storage(5, true),
                 storage(6, true),
                 storage(7, true),
@@ -534,6 +660,49 @@ impl PathTracer {
             entry_point: Some("main"),
             compilation_options: Default::default(),
             cache: None,
+        });
+
+        // The post-processing pass: bloom, exposure, vignette, tone curve.
+        let post_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("path tracer post"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/post.wgsl").into()),
+        });
+        let post_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("post layout"),
+            entries: &[
+                uniform(0),
+                storage(1, true),
+                storage(2, false),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let post_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("post pipeline layout"),
+            bind_group_layouts: &[Some(&post_layout)],
+            immediate_size: 0,
+        });
+        let post_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("post pipeline"),
+            layout: Some(&post_pipeline_layout),
+            module: &post_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let post_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("post params"),
+            size: std::mem::size_of::<PostParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
         let params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -568,6 +737,9 @@ impl PathTracer {
         Self {
             pipeline,
             layout,
+            post_pipeline,
+            post_layout,
+            post_params,
             params,
             palette,
             materials,
@@ -823,6 +995,13 @@ impl PathTracer {
             mapped_at_creation: false,
         });
 
+        let glow = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bloom accumulator"),
+            size: (size[0] as u64) * (size[1] as u64) * 16,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
         let texture_id = match self.target.take() {
             Some(old) => {
                 renderer.update_egui_texture_from_wgpu_texture(
@@ -842,6 +1021,7 @@ impl PathTracer {
             view,
             texture_id,
             accumulator,
+            glow,
         });
         self.reset();
     }
@@ -858,6 +1038,7 @@ impl PathTracer {
         basis: Mat3,
         fov_y: f32,
         ortho_half_height: Option<f32>,
+        focus_distance: f32,
         environment: &Environment,
         volume_offset: Vec3,
     ) -> Option<egui::TextureId> {
@@ -926,8 +1107,48 @@ impl PathTracer {
                 None => [1, 1, 0, 0],
             },
             projection: [ortho_half_height.unwrap_or(0.0), 0.0, 0.0, 0.0],
+            lens: [
+                if environment.dof { environment.aperture * 0.03 } else { 0.0 },
+                focus_distance,
+                environment.blades as f32,
+                -environment.blade_rotation.to_radians(),
+            ],
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
+
+        let (iterations, angle, step) = environment.bloom_star();
+        let post = PostParams {
+            resolution: size,
+            sample_count: self.samples + 1,
+            reset: reset as u32,
+            film: [
+                environment.exposure,
+                environment.vignette,
+                environment.gamma,
+                environment.aces as u32 as f32,
+            ],
+            bloom: [
+                environment.bloom_mix,
+                environment.bloom_threshold,
+                environment.bloom_scale * 200.0 + 1.0,
+                2f32.powf(environment.bloom_aspect * 4.0),
+            ],
+            star: [iterations as f32, angle, step, self.samples as f32],
+        };
+        queue.write_buffer(&self.post_params, 0, bytemuck::bytes_of(&post));
+        let post_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("post bind group"),
+            layout: &self.post_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.post_params.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: target.accumulator.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: target.glow.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&target.view),
+                },
+            ],
+        });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("path tracer bind group"),
@@ -948,10 +1169,6 @@ impl PathTracer {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: target.accumulator.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&target.view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
@@ -977,6 +1194,13 @@ impl PathTracer {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+        }
+        {
+            // A second pass, so every pixel it reads is already traced.
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.post_pipeline);
+            pass.set_bind_group(0, &post_group, &[]);
             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
         }
         queue.submit(Some(encoder.finish()));
@@ -1274,6 +1498,42 @@ mod tests {
         assert!((back.exposure - 0.8).abs() < 1e-4);
         assert_eq!(back.bounces, 4);
         assert!(written.iter().any(|o| o.get("_fov") == Some("45")), "unknown objects survive");
+    }
+
+    #[test]
+    fn the_bloom_star_follows_the_editor() {
+        let with = |blades: u32| Environment { blades, ..Default::default() }.bloom_star();
+        // No blades: 24 samples, all one way.
+        assert_eq!(with(0), (24, 0.0, 0.0));
+        // Six blades: opposite blades share a direction, so three, pi/3 apart.
+        let (n, _, step) = with(6);
+        assert_eq!(n, 24);
+        assert!((step - std::f32::consts::PI / 3.0).abs() < 1e-6);
+        // Five blades: five directions, 24 rounded down to 20.
+        let (n, _, step) = with(5);
+        assert_eq!(n, 20);
+        assert!((step - std::f32::consts::PI / 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lens_film_and_bloom_round_trip() {
+        // room.vox's settings.
+        let room = [
+            dict(&[("_type", "_bloom"), ("_mix", "0.16"), ("_scale", "0.04"), ("_aspect", "0.41"), ("_threshold", "0.7")]),
+            dict(&[("_type", "_film"), ("_expo", "3.07"), ("_vig", "0.29"), ("_aces", "1"), ("_gam", "2.2")]),
+            dict(&[("_type", "_lens"), ("_proj", "0"), ("_fov", "52"), ("_aperture", "0.5"), ("_blade_n", "0"), ("_blade_r", "0")]),
+        ];
+        let env = Environment::from_render_objects(&room);
+        assert_eq!((env.lens_fov, env.aperture, env.vignette), (52.0, 0.5, 0.29));
+        assert_eq!((env.bloom_mix, env.bloom_scale, env.bloom_threshold), (0.16, 0.04, 0.7));
+        assert!(env.aces && !env.dof, "depth of field is never read from a file");
+
+        let edited = Environment { blades: 6, blade_rotation: 30.0, aces: false, ..env };
+        let back = Environment::from_render_objects(&edited.write_render_objects(&room));
+        assert_eq!((back.blades, back.blade_rotation, back.aces), (6, 30.0, false));
+        assert_eq!(back.lens_fov, 52.0);
+        let written = edited.write_render_objects(&room);
+        assert!(written.iter().any(|o| o.get("_proj") == Some("0")), "keys not modelled survive");
     }
 }
 

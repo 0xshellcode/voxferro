@@ -87,6 +87,8 @@ struct App {
     /// Render mode, mirroring the editor's Model/Render tabs.
     rendering: bool,
     environment: Environment,
+    /// Depth of field, for the session: the file format has no key for it.
+    dof: bool,
     /// The render objects `environment` was decoded from.
     environment_source: Vec<vox_format::Dict>,
     /// Environment map names found on disk, listed on first use.
@@ -167,6 +169,7 @@ impl App {
             environment: Environment::default(),
             env_maps: None,
             environment_source: Vec::new(),
+            dof: false,
             pending_samples: 0,
             status: String::new(),
             selected: 0,
@@ -1102,6 +1105,9 @@ impl App {
                 basis,
                 self.camera.fov_y,
                 self.camera.ortho.then(|| self.camera.half_height()),
+                // In focus: the point the camera orbits, which framing and
+                // panning put on the subject.
+                self.camera.distance,
                 &self.environment,
                 offset,
             );

@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–23 del [ROADMAP](ROADMAP.md) están completas, con **158 tests
+Las fases 0–24 del [ROADMAP](ROADMAP.md) están completas, con **160 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -30,8 +30,9 @@ verdes**. Funciona hoy:
 - Exportación a OBJ + MTL + textura de paleta
 - Cámara: encuadrar selección o escena, vistas por eje e isométrica,
   proyección ortográfica (también en el path tracer) y desplazamiento
-- Ajustes de render (sol, cielo uniforme / atmosférico / HDR, suelo, película)
-  editables en el panel, con deshacer y guardados en el archivo
+- Ajustes de render (sol, cielo uniforme / atmosférico / HDR, suelo, lente,
+  película, bloom) editables en el panel, con deshacer y guardados en el
+  archivo; profundidad de campo con apertura poligonal
 - Consola de comandos
 - Operaciones de voxel como compute kernels en WGSL
 - Guardado atómico que conserva materiales, cámaras y ajustes del renderer
@@ -74,7 +75,7 @@ Cmd+A, Esc, Supr, Cmd+C/X/V, flechas y Re Pág/Av Pág para moverla.
 | Paleta | `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [clave=valor]…` |
 | Grupos y capas | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move`, `layer list\|new\|hide\|show\|name\|assign` |
 | Cámara | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|frame [all\|selection\|instance]` |
-| Render | `env uniform\|atmosphere [elev]\|ibl <mapa> [i] [rot]` |
+| Render | `env uniform\|atmosphere [elev]\|ibl <mapa> [i] [rot]\|dof [on\|off]\|lens [apertura] [palas] [ángulo]\|bloom [mix] [escala] [aspecto] [umbral]\|vig <v>` |
 
 Para pruebas sin ratón: `--click fx fy` y `--drag fx0 fy0 fx1 fy1`, en
 fracciones del visor.

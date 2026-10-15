@@ -58,6 +58,11 @@ struct Params {
 
     // x: orthographic half-height in world units; 0 means perspective.
     projection: vec4<f32>,
+
+    // Depth of field. x: lens radius over focus distance (the editor's
+    // `_aperture * 0.03`; 0 is a pinhole), y: focus distance, z: number of
+    // aperture blades (below 3, a round lens), w: blade rotation, radians.
+    lens: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -65,7 +70,6 @@ struct Params {
 @group(0) @binding(2) var<storage, read> palette: array<vec4<f32>, 256>;
 // Linear-light accumulator, one vec4 per pixel: rgb sum plus sample count.
 @group(0) @binding(3) var<storage, read_write> accumulator: array<vec4<f32>>;
-@group(0) @binding(4) var output: texture_storage_2d<rgba8unorm, write>;
 
 const KIND_DIFFUSE: u32 = 0u;
 const KIND_METAL: u32 = 1u;
@@ -475,6 +479,30 @@ fn sample_env(point: vec3<f32>, normal: vec3<f32>, state: ptr<function, u32>) ->
     return radiance * visible * cos_surface / (PI * pdf);
 }
 
+// A point on the unit aperture: a disc, or a regular polygon with one corner
+// per blade, which is what gives out-of-focus highlights their shape.
+fn aperture_sample(state: ptr<function, u32>) -> vec2<f32> {
+    let blades = i32(p.lens.z);
+    if (blades < 3) {
+        let r = sqrt(random(state));
+        let t = 6.283185307 * random(state);
+        return vec2<f32>(cos(t), sin(t)) * r;
+    }
+    // Pick one triangle of the fan, then a uniform point inside it.
+    let step = 6.283185307 / f32(blades);
+    let k = min(i32(random(state) * f32(blades)), blades - 1);
+    let a0 = p.lens.w + step * f32(k);
+    let v0 = vec2<f32>(cos(a0), sin(a0));
+    let v1 = vec2<f32>(cos(a0 + step), sin(a0 + step));
+    var u = random(state);
+    var v = random(state);
+    if (u + v > 1.0) {
+        u = 1.0 - u;
+        v = 1.0 - v;
+    }
+    return v0 * u + v1 * v;
+}
+
 fn random_in_sphere(state: ptr<function, u32>) -> vec3<f32> {
     // Rejection sampling: simple, unbiased, and converges in ~2 tries.
     for (var i = 0; i < 8; i = i + 1) {
@@ -534,6 +562,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         + p.up.xyz * (ndc.y * p.tan_half_fov)
     );
     var origin = p.origin.xyz + p.volume_offset.xyz;
+
+    // Thin lens: start the ray somewhere on the aperture and aim it at the
+    // point this pixel sees on the focal plane. Points on that plane stay
+    // sharp; the rest blurs with distance from it.
+    if (p.lens.x > 0.0 && p.lens.y > 0.0 && p.projection.x == 0.0) {
+        let focus = origin + direction * (p.lens.y / dot(direction, p.forward.xyz));
+        let on_lens = aperture_sample(&rng) * (p.lens.x * p.lens.y);
+        origin = origin + p.right.xyz * on_lens.x + p.up.xyz * on_lens.y;
+        direction = normalize(focus - origin);
+    }
     // Distance the primary ray starts behind the eye, not to be counted
     // as distance through the haze toward the horizon.
     var pulled_back = 0.0;
@@ -713,22 +751,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     accumulator[index] = total;
 
-    var color = total.rgb / max(total.a, 1.0);
-    color = color * p.exposure;
-
-    // ACES filmic tonemap, the same curve the editor's _film object applies.
-    let a = 2.51; let b = 0.03; let c = 2.43; let d = 0.59; let e = 0.14;
-    color = clamp((color * (a * color + b)) / (color * (c * color + d) + e),
-                  vec3<f32>(0.0), vec3<f32>(1.0));
-    // The storage texture is rgba8unorm (no automatic sRGB), so encode here.
-    color = pow(color, vec3<f32>(1.0 / 2.2));
-
-    // Triangular dither of +-1 code before 8-bit quantisation. In bright
-    // sky the ACES shoulder squeezes a wide radiance range into two or three
-    // output codes, which shows up as contour lines; noise below one code
-    // trades those steps for grain the eye averages away.
-    let dither = (random(&rng) + random(&rng) - 1.0) / 255.0;
-    color = color + vec3<f32>(dither);
-
-    textureStore(output, vec2<i32>(gid.xy), vec4<f32>(color, 1.0));
+    // Exposure, bloom, vignette and the tone curve are applied by the
+    // post-processing pass (post.wgsl), which can read neighbouring pixels.
 }

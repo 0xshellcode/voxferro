@@ -43,6 +43,10 @@ impl App {
         let Some(loaded) = &self.scene else { return };
         self.environment = Environment::from_render_objects(&loaded.doc.render);
         self.environment_source = loaded.doc.render.clone();
+        // Not in the file: a switch of this session.
+        self.environment.dof = self.dof;
+        // The render camera's field of view is a lens setting.
+        self.camera.fov_y = self.environment.lens_fov.to_radians();
         if let Some(message) = self.ensure_env_map(state) {
             if message.contains("not found") {
                 self.console_log.push(message);
@@ -167,9 +171,36 @@ impl App {
             });
         });
 
+        egui::CollapsingHeader::new("Lens").show(ui, |ui| {
+            dragged |= ui.add(egui::Slider::new(&mut env.lens_fov, 5.0..=120.0).text("fov")).changed();
+            // Depth of field is a switch of the session: the file has no key
+            // for it, as in the editor. It focuses on the orbit target.
+            if ui
+                .checkbox(&mut self.dof, "depth of field")
+                .on_hover_text("Focus is the point the camera orbits: frame or pan to move it")
+                .changed()
+            {
+                self.environment.dof = self.dof;
+                self.path_tracer.reset();
+            }
+            dragged |= ui.add(egui::Slider::new(&mut env.aperture, 0.0..=2.0).text("aperture")).changed();
+            dragged |= ui.add(egui::Slider::new(&mut env.blades, 0..=12).text("blades")).changed();
+            dragged |= ui.add(egui::Slider::new(&mut env.blade_rotation, 0.0..=360.0).text("blade angle")).changed();
+        });
+
         egui::CollapsingHeader::new("Film").show(ui, |ui| {
             dragged |= ui.add(egui::Slider::new(&mut env.exposure, 0.05..=5.0).text("exposure")).changed();
+            dragged |= ui.add(egui::Slider::new(&mut env.vignette, 0.0..=1.0).text("vignette")).changed();
+            dragged |= ui.add(egui::Slider::new(&mut env.gamma, 1.0..=3.0).text("gamma")).changed();
+            clicked |= ui.checkbox(&mut env.aces, "ACES tone curve").changed();
             dragged |= ui.add(egui::Slider::new(&mut env.bounces, 1..=8).text("bounces")).changed();
+        });
+
+        egui::CollapsingHeader::new("Bloom").show(ui, |ui| {
+            dragged |= ui.add(egui::Slider::new(&mut env.bloom_mix, 0.0..=2.0).text("mix")).changed();
+            dragged |= ui.add(egui::Slider::new(&mut env.bloom_scale, 0.0..=1.0).text("scale")).changed();
+            dragged |= ui.add(egui::Slider::new(&mut env.bloom_aspect, -1.0..=1.0).text("aspect")).changed();
+            dragged |= ui.add(egui::Slider::new(&mut env.bloom_threshold, 0.0..=4.0).text("threshold")).changed();
         });
 
         if dragged || clicked {
@@ -214,7 +245,53 @@ impl App {
                 env.atmosphere_enabled = false;
                 format!("sky: {}", env.ibl_path)
             }
-            _ => return "env uniform | env atmosphere [sun elevation] | env ibl [map.hdr] [i] [rot]".to_owned(),
+            Some("dof") => {
+                self.dof = args.get(1).is_none_or(|v| *v != "off");
+                self.environment.dof = self.dof;
+                self.path_tracer.reset();
+                return format!("depth of field {}", if self.dof { "on" } else { "off" });
+            }
+            Some("lens") => {
+                let n = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok());
+                if let Some(v) = n(1) {
+                    env.aperture = v.max(0.0);
+                }
+                if let Some(v) = n(2) {
+                    env.blades = v.max(0.0) as u32;
+                }
+                if let Some(v) = n(3) {
+                    env.blade_rotation = v;
+                }
+                format!("lens: aperture {} blades {} angle {}", env.aperture, env.blades, env.blade_rotation)
+            }
+            Some("bloom") => {
+                let n = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok());
+                if let Some(v) = n(1) {
+                    env.bloom_mix = v.max(0.0);
+                }
+                if let Some(v) = n(2) {
+                    env.bloom_scale = v.clamp(0.0, 1.0);
+                }
+                if let Some(v) = n(3) {
+                    env.bloom_aspect = v.clamp(-1.0, 1.0);
+                }
+                if let Some(v) = n(4) {
+                    env.bloom_threshold = v.max(0.0);
+                }
+                format!(
+                    "bloom: mix {} scale {} aspect {} threshold {}",
+                    env.bloom_mix, env.bloom_scale, env.bloom_aspect, env.bloom_threshold
+                )
+            }
+            Some("vig") => {
+                env.vignette = args.get(1).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0).clamp(0.0, 1.0);
+                format!("vignette {}", env.vignette)
+            }
+            _ => {
+                return "env uniform | atmosphere [elev] | ibl [map] [i] [rot] | dof [on|off] | \
+                        lens [aperture] [blades] [angle] | bloom [mix] [scale] [aspect] [threshold] | vig <v>"
+                    .to_owned();
+            }
         };
         self.apply_environment(&env, false, state);
         // A missing map falls back to the uniform sky; say so.
