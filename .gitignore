@@ -1,0 +1,9 @@
+# Rust build output
+/target
+
+# macOS
+.DS_Store
+
+# Third-party test assets: shipped with the reference editor and authored by its author.
+# Kept local so the repository does not redistribute them. See assets/README.md.
+/assets/vox/

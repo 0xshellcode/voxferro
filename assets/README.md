@@ -1,0 +1,15 @@
+# Assets
+
+## `vox/` — test corpus
+
+Sample models shipped with the reference editor a recent version (macOS) and a recent version (win64),
+copied here as a parser test corpus. `vox/anim/` holds the animated models,
+which only the Windows build ships.
+
+**These files are not ours.** They are authored by its author and distributed
+with the reference editor, so they are deliberately listed in `.gitignore` and are not
+committed: the repository must not redistribute someone else's assets.
+
+To populate this directory on a fresh clone, copy the `vox/` folder out of a
+local the reference editor install. Tests that need the corpus skip themselves when it
+is absent, so a clean checkout still builds and tests green.

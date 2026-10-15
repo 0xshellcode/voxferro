@@ -1,0 +1,13 @@
+[package]
+name = "vox-format"
+description = "Reader and writer for the reference editor .vox files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+# Cross-check our parser against an independent implementation.
+dot_vox = "5"

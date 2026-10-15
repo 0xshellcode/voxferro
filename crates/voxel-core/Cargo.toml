@@ -1,0 +1,10 @@
+[package]
+name = "voxel-core"
+description = "Voxel volume, scene graph and command stack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+glam.workspace = true
+vox-format = { path = "../vox-format" }

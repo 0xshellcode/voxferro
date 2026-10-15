@@ -1,0 +1,24 @@
+[package]
+name = "voxferro"
+description = "Voxel editor built on wgpu and egui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "voxferro"
+path = "src/main.rs"
+
+[dependencies]
+voxel-core = { path = "../voxel-core" }
+vox-format = { path = "../vox-format" }
+glam.workspace = true
+bytemuck.workspace = true
+
+# eframe 0.36 ships wgpu in its default features (glow is not enabled), and
+# pulls egui-wgpu 0.36 -> wgpu 30.0.1. Keeping wgpu at "30" here resolves to
+# that same version, so the graph holds a single wgpu. Two versions compile
+# but produce duplicate types that cannot be assigned to each other.
+eframe = "0.36"
+egui = "0.36"
+wgpu = "30"
