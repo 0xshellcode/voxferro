@@ -1190,7 +1190,7 @@ impl PathTracer {
             sun_angular_radius: environment.sun_angular_radius,
             reset: reset as u32,
             volume_offset: volume_offset.extend(0.0).to_array(),
-            emitter_info: [self.emitter_count, 0, 0, 0],
+            emitter_info: [self.emitter_count, trace_debug_mode(), 0, 0],
             // World z = 0, moved into the traced volume's voxel space by the
             // same offset that moves the camera there.
             ground: [
@@ -1677,5 +1677,17 @@ mod tests {
         assert_eq!((back.fog_density, back.scatter_bounces), (12.5, 3));
         assert!(written.iter().any(|o| o.get("_specular") == Some("5")), "other bounce counts survive");
     }
+}
+
+/// `VOXFERRO_TRACE_DEBUG`: replaces the path traced image with one stage of
+/// it, to find where a GPU or driver goes wrong without a debugger there
+/// (the CI's software GPUs): 1 a flat grey (the output and post-processing
+/// alone), 2 the primary hit's normal, 3 the primary hit's palette colour,
+/// 4 the sky alone. 0 or unset is the normal render.
+fn trace_debug_mode() -> u32 {
+    static MODE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        std::env::var("VOXFERRO_TRACE_DEBUG").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+    })
 }
 

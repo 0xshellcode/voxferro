@@ -1,6 +1,9 @@
 """Fails unless a BMP written by `voxferro --screenshot` holds a real image.
 
-Usage: python scripts/ci/check_image.py out.bmp
+Usage: python scripts/ci/check_image.py out.bmp [--stats]
+
+With --stats it only prints the numbers (for diagnostic images, which are
+meant to be uniform or bright).
 
 A smoke test, not a comparison: rendering on a software GPU in CI differs
 from any reference, but a blank, black or uniform frame means something
@@ -9,6 +12,7 @@ the pixels vary."""
 import struct, sys
 
 path = sys.argv[1]
+stats_only = "--stats" in sys.argv[2:]
 data = open(path, "rb").read()
 if data[:2] != b"BM":
     sys.exit(f"{path}: not a BMP")
@@ -29,6 +33,8 @@ for y in range(0, height, 4):
 mean = sum(values) / len(values)
 spread = (sum((v - mean) ** 2 for v in values) / len(values)) ** 0.5
 print(f"{path}: {width}x{height}, mean {mean:.1f}, spread {spread:.1f}")
+if stats_only:
+    sys.exit(0)
 if not 10 < mean < 245:
     sys.exit("the image is nearly black or white")
 if spread < 8:

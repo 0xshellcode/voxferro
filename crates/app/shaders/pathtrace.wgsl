@@ -42,7 +42,8 @@ struct Params {
     // this the traced image is offset from the one being framed.
     volume_offset: vec4<f32>,
 
-    // x: number of entries in `emitters`.
+    // x: number of entries in `emitters`; y: a diagnostic view in place of
+    // the render (`VOXFERRO_TRACE_DEBUG`, see `debug_view`), 0 for none.
     emitter_info: vec4<u32>,
 
     // x: plane height in voxel space (world z = 0), y: enabled, z: horizon
@@ -745,6 +746,26 @@ fn fresnel(cos_theta: f32, ior: f32) -> f32 {
 // `include_sun` is false after a diffuse bounce: the sun is already sampled
 // directly there, and adding the disc again when a bounce happens to escape
 // toward it would count that light twice.
+// One stage of the render, for finding where a GPU goes wrong: 1 a flat
+// grey, 2 the primary hit's normal, 3 its palette colour, 4 the sky alone.
+// A ray that hits nothing shows dark purple.
+fn debug_view(mode: u32, origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    if (mode == 1u) {
+        return vec3<f32>(0.5);
+    }
+    if (mode == 4u) {
+        return sky(direction, true, false);
+    }
+    let hit = trace(origin, direction, 1e30, 0u);
+    if (!hit.hit) {
+        return vec3<f32>(0.1, 0.0, 0.1);
+    }
+    if (mode == 2u) {
+        return hit.normal * 0.5 + vec3<f32>(0.5);
+    }
+    return palette[voxel_at(hit.cell)].rgb;
+}
+
 fn sky(direction: vec3<f32>, include_sun: bool, env_sampled: bool) -> vec3<f32> {
     // Uniform sky or environment map, plus a sun disc (_uni / _ibl, _inf).
     // After a diffuse bounce (`include_sun` false) an environment map is
@@ -834,7 +855,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var forced = false;
     var forced_hit: Hit;
 
-    for (var bounce = 0; bounce <= i32(p.bounces); bounce = bounce + 1) {
+    // A diagnostic view replaces the whole path.
+    var last_bounce = i32(p.bounces);
+    if (p.emitter_info.y != 0u) {
+        radiance = debug_view(p.emitter_info.y, origin, direction);
+        last_bounce = -1;
+    }
+
+    for (var bounce = 0; bounce <= last_bounce; bounce = bounce + 1) {
         // A ray that starts inside glass (a bounce off a voxel under water)
         // first walks out of it, or onto the next opaque voxel.
         var from_glass = forced;
