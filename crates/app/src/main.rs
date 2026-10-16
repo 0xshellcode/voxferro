@@ -150,6 +150,11 @@ struct App {
     /// Palette index the brush paints with.
     brush_color: u8,
     brush_mode: voxel_core::BrushMode,
+    /// Brush symmetry: strokes repeat reflected through the model's centre
+    /// on these axes.
+    mirror: [bool; 3],
+    /// The next click takes its colour from a voxel instead of editing.
+    picking: bool,
     brush_shape: voxel_core::BrushShape,
     /// The brush stroke under way, while the button is held.
     stroke: Option<tools::Stroke>,
@@ -258,6 +263,8 @@ impl App {
             history: History::default(),
             brush_color: 79,
             brush_mode: voxel_core::BrushMode::Attach,
+            mirror: [false; 3],
+            picking: false,
             brush_shape: voxel_core::BrushShape::Voxel,
             stroke: None,
             orbiting: false,
@@ -692,7 +699,28 @@ impl App {
                 ui.selectable_value(&mut self.brush_shape, shape, capitalised(name));
             }
         });
-        ui.add(egui::Slider::new(&mut self.brush_color, 1..=255).text("colour"));
+        ui.horizontal(|ui| {
+            ui.label("Mirror");
+            for (axis, name) in ["x", "y", "z"].iter().enumerate() {
+                if ui
+                    .selectable_label(self.mirror[axis], *name)
+                    .on_hover_text("Repeat strokes reflected through the model's centre")
+                    .clicked()
+                {
+                    self.mirror[axis] = !self.mirror[axis];
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.add(egui::Slider::new(&mut self.brush_color, 1..=255).text("colour"));
+            if ui
+                .selectable_label(self.picking, "Pick")
+                .on_hover_text("Take the colour of the next voxel clicked (I)")
+                .clicked()
+            {
+                self.picking = !self.picking;
+            }
+        });
 
         // Show the colour the brush will actually paint.
         if let Some(loaded) = &self.scene {
@@ -1185,7 +1213,9 @@ impl App {
         if !self.scripted_strokes.is_empty() {
             for (from, to) in std::mem::take(&mut self.scripted_strokes) {
                 let at = |f: egui::Vec2| rect.min + f * view_size;
-                if self.moving {
+                if self.picking {
+                    self.begin_stroke(ray_at(&self.camera, at(from)));
+                } else if self.moving {
                     if self.begin_move(ray_at(&self.camera, at(from)), at(from).x, egui::Modifiers::default()) {
                         self.update_move(ray_at(&self.camera, at(to)), at(to).x);
                         self.finish_move();
@@ -1229,7 +1259,10 @@ impl App {
                 let hit = !self.rendering
                     && pointer.is_some_and(|pos| {
                         let ray = ray_at(&self.camera, pos);
-                        if self.selecting {
+                        if self.picking {
+                            // The eyedropper wins over any tool.
+                            self.begin_stroke(ray)
+                        } else if self.selecting {
                             self.begin_select(ray, pos, modifiers)
                         } else if modifiers.alt {
                             // Option+click picks groups instead of painting

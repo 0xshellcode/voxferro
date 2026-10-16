@@ -255,9 +255,54 @@ pub fn writes(volume: &Volume, mode: BrushMode, colour: u8, cells: &[IVec3]) -> 
         .collect()
 }
 
+/// `cells` plus their reflections through the model's centre on each
+/// enabled axis, and on every combination of them: with x and y on, a cell
+/// also lands in the three other quadrants. Cell `c` reflects to
+/// `size - 1 - c`, so a model of even size mirrors between its two middle
+/// cells and one of odd size about its middle cell. Duplicates are dropped,
+/// keeping the first occurrence's order.
+pub fn mirrored(cells: &[IVec3], size: [u32; 3], axes: [bool; 3]) -> Vec<IVec3> {
+    if !axes.iter().any(|&a| a) {
+        return cells.to_vec();
+    }
+    let mut out = Vec::with_capacity(cells.len() * 8);
+    let mut seen = std::collections::HashSet::new();
+    for mask in 0..8u32 {
+        // Only combinations of enabled axes.
+        if (0..3).any(|a| mask & (1 << a) != 0 && !axes[a]) {
+            continue;
+        }
+        for &c in cells {
+            let mut m = c;
+            for a in 0..3 {
+                if mask & (1 << a) != 0 {
+                    m[a] = size[a] as i32 - 1 - c[a];
+                }
+            }
+            if seen.insert(m) {
+                out.push(m);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mirroring_reflects_through_the_centre_on_each_axis() {
+        let size = [8, 6, 5];
+        let c = IVec3::new(1, 2, 0);
+        assert_eq!(mirrored(&[c], size, [false; 3]), vec![c]);
+        assert_eq!(mirrored(&[c], size, [true, false, false]), vec![c, IVec3::new(6, 2, 0)]);
+        let four = mirrored(&[c], size, [true, true, false]);
+        assert_eq!(four.len(), 4);
+        assert!(four.contains(&IVec3::new(6, 3, 0)));
+        // The middle cell of an odd axis is its own reflection.
+        assert_eq!(mirrored(&[IVec3::new(0, 0, 2)], size, [false, false, true]).len(), 1);
+    }
 
     /// An 8x8 floor at z = 0 of colour 1, with a 2x2 patch of colour 2.
     fn floor() -> Volume {

@@ -34,7 +34,7 @@ pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut Histo
         "help" => Outcome::Ok {
             message: "model: fill <c> | clear | box <x0..z1 c> | voxels <x y z c>... | sphere <c> | gpu <shape> | \
                       rotate|mirror x|y|z | crop | resize x y z; \
-                      brush [attach|erase|paint|select] [voxel|box|line|face|fill] | color <n>; \
+                      brush [attach|erase|paint|select|move] [voxel|box|line|face|fill] | brush mirror <xyz|off> | brush pick | color <n>; \
                       select all|none|invert|color [n] | delete | paint | copy | cut | paste | \
                       move dx dy dz; palette <i> r g b | material <i> <kind> [k=v]; \
                       instance list|select i|move|place|turn|dup|delete|new; \

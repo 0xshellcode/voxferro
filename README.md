@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–37 del [ROADMAP](ROADMAP.md) están completas, con **191 tests
+Las fases 0–38 del [ROADMAP](ROADMAP.md) están completas, con **192 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -87,7 +87,7 @@ adentro).
 el suelo; Mayúsculas+arrastre, arriba y abajo; Cmd+arrastre gira sobre z;
 X, Y, Z dan un cuarto de vuelta.
 
-**Teclado:** F encuadra (Mayúsculas+F todo), 1–7 vistas fijas, O ortográfica;
+**Teclado:** I cuentagotas, F encuadra (Mayúsculas+F todo), 1–7 vistas fijas, O ortográfica;
 Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z; con selección,
 Cmd+A, Esc, Supr, Cmd+C/X/V, flechas y Re Pág/Av Pág para moverla.
 

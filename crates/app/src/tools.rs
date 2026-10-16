@@ -27,6 +27,9 @@ impl App {
     /// the selected model; see `brush_pick`). Returns whether it did, so
     /// a press on empty space can orbit the camera instead.
     pub fn begin_stroke(&mut self, ray: Ray) -> bool {
+        if self.picking {
+            return self.pick_colour(ray);
+        }
         let Some(pick) = self.brush_pick(ray) else {
             return false;
         };
@@ -114,6 +117,7 @@ impl App {
             BrushShape::Voxel => vec![cell],
             shape => brush::stroke_cells(volume, self.brush_mode, shape, &hit, cell),
         };
+        let cells = brush::mirrored(&cells, volume.size(), self.mirror);
         let writes = brush::writes(volume, self.brush_mode, self.brush_color, &cells);
         stroke.end = cell;
         if self.history.set_voxels(&mut loaded.doc, model, writes) > 0 {
@@ -131,6 +135,7 @@ impl App {
         let Some(volume) = loaded.doc.scene.models.get(stroke.model) else { return };
         let end = clamp_to(volume.size(), end);
         let cells = brush::stroke_cells(volume, self.brush_mode, self.brush_shape, &stroke.hit, end);
+        let cells = brush::mirrored(&cells, volume.size(), self.mirror);
         let writes = brush::writes(volume, self.brush_mode, self.brush_color, &cells);
         let command = Command::set_voxels(&loaded.doc, stroke.model, writes);
         command.apply(&mut loaded.doc);
@@ -212,6 +217,25 @@ impl App {
         out
     }
 
+    /// The eyedropper: takes the clicked voxel's colour for the brush and
+    /// goes back to the brush. A click on empty space leaves it waiting.
+    fn pick_colour(&mut self, ray: Ray) -> bool {
+        let Some((instance, hit)) = self.pick_visible(ray) else { return false };
+        let Some(loaded) = &self.scene else { return false };
+        let scene = &loaded.doc.scene;
+        let Some(volume) = scene.instances.get(instance).and_then(|i| scene.models.get(i.model_index)) else {
+            return false;
+        };
+        let colour = volume.get_i(hit.voxel.x, hit.voxel.y, hit.voxel.z);
+        if colour == 0 {
+            return false;
+        }
+        self.brush_color = colour;
+        self.picking = false;
+        self.console_log.push(format!("picked colour {colour}"));
+        true
+    }
+
     /// What the brush acts on under a ray: the nearest visible voxel, or,
     /// missing every voxel, the floor of the selected model's box when
     /// attaching -- so an empty model can be started with the mouse. Only
@@ -225,7 +249,7 @@ impl App {
         scene.pick(ray.origin, ray.direction, 10_000.0, |i| visible.shows(i)).or_else(|| {
             let places = matches!(self.brush_shape, BrushShape::Voxel | BrushShape::Box | BrushShape::Line);
             let shown = scene.instances.get(self.selected).is_some_and(|i| visible.shows(i));
-            if self.brush_mode == BrushMode::Attach && places && shown && !self.selecting && !self.moving {
+            if self.brush_mode == BrushMode::Attach && places && shown && !self.selecting && !self.moving && !self.picking {
                 scene.pick_floor(self.selected, ray.origin, ray.direction)
             } else {
                 None
@@ -241,7 +265,7 @@ impl App {
         let (instance, hit) = (pick.instance, pick.hit);
         let instance = loaded.doc.scene.instances.get(instance)?;
         let volume = loaded.doc.scene.models.get(instance.model_index)?;
-        let cell = brush::anchor(self.brush_mode, &hit).as_vec3();
+        let cell = if self.picking { hit.voxel } else { brush::anchor(self.brush_mode, &hit) }.as_vec3();
         let mut corners = [Vec3::ZERO; 8];
         for (i, c) in corners.iter_mut().enumerate() {
             let offset = Vec3::new((i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32);
@@ -262,6 +286,21 @@ impl App {
                 }
                 _ => "color <1-255>".to_owned(),
             },
+            Some("brush") if line.split_whitespace().nth(1) == Some("mirror") => {
+                match line.split_whitespace().nth(2) {
+                    Some("off") => self.mirror = [false; 3],
+                    Some(axes) if !axes.is_empty() && axes.chars().all(|c| "xyz".contains(c)) => {
+                        self.mirror = ['x', 'y', 'z'].map(|a| axes.contains(a));
+                    }
+                    _ => return "brush mirror x|y|z|xy|xz|yz|xyz|off".to_owned(),
+                }
+                let on: String = ['x', 'y', 'z'].iter().zip(self.mirror).filter(|(_, m)| *m).map(|(a, _)| *a).collect();
+                format!("mirror {}", if on.is_empty() { "off" } else { &on })
+            }
+            Some("brush") if line.split_whitespace().nth(1) == Some("pick") => {
+                self.picking = true;
+                "click a voxel to take its colour".to_owned()
+            }
             _ => {
                 for word in words {
                     if word == "select" {
@@ -277,7 +316,7 @@ impl App {
                     } else if let Some(shape) = BrushShape::parse(word) {
                         self.brush_shape = shape;
                     } else {
-                        return format!("unknown brush '{word}': attach, erase, paint, select, move; voxel, box, line, face, fill");
+                        return format!("unknown brush '{word}': attach, erase, paint, select, move, pick; voxel, box, line, face, fill; mirror <axes>");
                     }
                 }
                 let mode = if self.moving {

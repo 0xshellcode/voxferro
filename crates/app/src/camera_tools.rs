@@ -144,6 +144,9 @@ impl App {
             if i.key_pressed(egui::Key::F) {
                 lines.push(if i.modifiers.shift { "camera frame all" } else { "camera frame" }.to_owned());
             }
+            if i.key_pressed(egui::Key::I) {
+                self.picking = !self.picking;
+            }
             if i.key_pressed(egui::Key::O) {
                 lines.push(if self.camera.ortho { "camera persp" } else { "camera ortho" }.to_owned());
             }
