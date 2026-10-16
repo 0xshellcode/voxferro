@@ -343,9 +343,9 @@ impl History {
     }
 
     /// Closes the group, folding its steps into one `Batch`. Returns how
-    /// many steps were folded. If an undo inside the group reached below
-    /// where it started, or the history was cleared (a file was opened),
-    /// the steps are left as they are.
+    /// many steps were folded. An undo inside the group that reaches below
+    /// where it started moves the start down; a cleared history (a file
+    /// opened or a new model) restarts the group on the new document.
     pub fn end_group(&mut self) -> usize {
         self.end_gesture();
         let Some(start) = self.group_start.take() else { return 0 };
@@ -402,9 +402,16 @@ impl History {
         }
     }
 
-    /// Forgets every step, for when a different file is opened.
+    /// Forgets every step, for when a different file is opened. A group
+    /// left open stays open, starting over on the new document: a batch
+    /// that begins with `new` and then builds is one undo step back to the
+    /// empty model, not one per line.
     pub fn clear(&mut self) {
+        let grouping = self.group_start.is_some();
         *self = Self::default();
+        if grouping {
+            self.group_start = Some(0);
+        }
     }
 
     pub fn can_undo(&self) -> bool {
@@ -451,6 +458,24 @@ mod tests {
 
     fn get(d: &Document, model: usize, x: u32, y: u32, z: u32) -> u8 {
         d.scene.models[model].get(x, y, z)
+    }
+
+    #[test]
+    fn a_group_survives_a_cleared_history() {
+        let mut d = doc();
+        let mut h = History::default();
+        h.begin_group();
+        h.set_voxels(&mut d, 0, [(IVec3::new(5, 0, 0), 9)]);
+        h.end_gesture();
+        h.clear(); // a new document in the middle of the batch
+        h.set_voxels(&mut d, 0, [(IVec3::new(1, 0, 0), 2)]);
+        h.end_gesture();
+        h.set_voxels(&mut d, 0, [(IVec3::new(2, 0, 0), 3)]);
+        assert_eq!(h.end_group(), 2);
+        assert_eq!(h.undo_depth(), 1, "what was built after the clear is one step");
+        h.undo(&mut d);
+        assert_eq!(d.scene.models[0].get(1, 0, 0), 0);
+        assert_eq!(d.scene.models[0].get(2, 0, 0), 0);
     }
 
     #[test]

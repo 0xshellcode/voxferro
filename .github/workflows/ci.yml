@@ -54,6 +54,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev
+          # A software GPU (lavapipe, Vulkan) and a virtual display, for the
+          # smoke tests below.
+          sudo apt-get install -y mesa-vulkan-drivers xvfb
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -62,3 +65,43 @@ jobs:
       # the reference editor sample corpus is not in git; tests that need it skip.
       - name: Tests
         run: cargo test --workspace
+
+      # The app itself, run for real. CI machines have no GPU: Linux uses
+      # lavapipe (Vulkan in software) under a virtual X display, Windows
+      # WARP (DirectX 12 in software); macOS runners have Metal.
+      - name: Smoke test, path traced render
+        shell: bash
+        timeout-minutes: 15
+        env:
+          VOXFERRO_NO_RECENT: "1"
+        run: |
+          run=""; if [ "$RUNNER_OS" = Linux ]; then run="xvfb-run -a"; fi
+          py=python3; if [ "$RUNNER_OS" = Windows ]; then py=python; fi
+          $run ./target/debug/voxferro --script assets/showcase/shapes.cmds --render 8 --screenshot smoke.bmp 2>&1 | tee smoke.log
+          grep "graphics backend" smoke.log
+          $py scripts/ci/check_image.py smoke.bmp
+
+      - name: Smoke test, MCP session
+        shell: bash
+        timeout-minutes: 15
+        env:
+          VOXFERRO_NO_RECENT: "1"
+        run: |
+          run=""; if [ "$RUNNER_OS" = Linux ]; then run="xvfb-run -a"; fi
+          py=python3; if [ "$RUNNER_OS" = Windows ]; then py=python; fi
+          $run ./target/debug/voxferro --mcp > mcp.log 2>&1 &
+          app=$!
+          $py scripts/ci/mcp_smoke.py
+          kill $app || true
+
+      - name: Smoke test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.os }}
+          path: |
+            smoke.bmp
+            smoke.log
+            mcp.log
+          if-no-files-found: ignore
+
