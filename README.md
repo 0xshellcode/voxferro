@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–25 del [ROADMAP](ROADMAP.md) están completas, con **163 tests
+Las fases 0–26 del [ROADMAP](ROADMAP.md) están completas, con **166 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -58,6 +58,9 @@ cargo run -p voxferro -- --run "new 16" --run "brush attach box" --drag 0.3 0.7 
 **Ratón:** pulsar sobre el modelo edita con el pincel; pulsar en el vacío (o
 arrastrar con el botón derecho) orbita; Mayúsculas + arrastre o el botón
 central desplazan; la rueda acerca.
+
+**Opción+clic** en un modelo selecciona su grupo (otra vez: un nivel más
+adentro).
 
 **Teclado:** F encuadra (Mayúsculas+F todo), 1–7 vistas fijas, O ortográfica;
 Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z; con selección,

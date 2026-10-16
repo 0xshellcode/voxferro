@@ -65,7 +65,10 @@ impl App {
                     ("name", words) => scene.with_node_attribute(node, "_name", Some(&words.join(" "))),
                     ("hide", []) => scene.with_node_attribute(node, "_hidden", Some("1")),
                     ("show", []) => scene.with_node_attribute(node, "_hidden", None),
-                    ("turn", []) => {
+                    ("turn", axis) => {
+                        let Some(axis) = parse_axis(axis) else {
+                            return "node turn [x|y|z]".to_owned();
+                        };
                         // Around the middle of what it holds: for a group, the
                         // mean of its instances' placements, on the grid.
                         let held = scene.instances_under(node);
@@ -74,7 +77,7 @@ impl App {
                         }
                         let sum = held.iter().fold(glam::Vec3::ZERO, |a, &i| a + scene.instances[i].transform.translation.as_vec3());
                         let centre = (sum / held.len() as f32).round().as_ivec3();
-                        scene.with_node_turned(node, centre)
+                        scene.with_node_turned(node, centre, axis)
                     }
                     ("into", [target]) => {
                         let groups: Vec<i32> =
@@ -99,7 +102,7 @@ impl App {
                         (Ok(x), Ok(y), Ok(z)) => scene.with_node_moved(node, IVec3::new(x, y, z)),
                         _ => return "node move <dx> <dy> <dz>".to_owned(),
                     },
-                    _ => return "node name [text] | hide | show | move dx dy dz | turn | into <group>|root".to_owned(),
+                    _ => return "node name [text] | hide | show | move dx dy dz | turn [x|y|z] | into <group>|root".to_owned(),
                 };
                 (nodes, false)
             }
@@ -192,6 +195,36 @@ impl App {
             }
             _ => "layer list | new [name] | hide <n> | show <n> | name <n> <text> | assign <n>".to_owned(),
         }
+    }
+
+    /// Option+click in the viewport: selects the outermost group holding
+    /// the model under the cursor; each further Option+click on it steps one
+    /// group inward, then to the model itself, then out again. Returns
+    /// whether a model was hit.
+    pub fn select_group_at(&mut self, ray: crate::edit::Ray) -> bool {
+        let visible = self.visibility();
+        let Some(loaded) = &self.scene else { return false };
+        let scene = &loaded.doc.scene;
+        let Some(pick) = scene.pick(ray.origin, ray.direction, 10_000.0, |i| visible.shows(i)) else {
+            return false;
+        };
+        let path = scene.groups_above(pick.instance);
+        let next = match self.selected_group.and_then(|g| path.iter().position(|&p| p == g)) {
+            // Inside the path: one step in, or past the innermost group to
+            // the model.
+            Some(k) => path.get(k + 1).copied(),
+            // Coming from the model itself, or from elsewhere: outermost.
+            None => path.first().copied(),
+        };
+        self.selected = pick.instance;
+        self.picked.clear();
+        self.selected_group = next;
+        let message = match next {
+            Some(group) => format!("group selected ({} models)", scene.instances_under(group).len()),
+            None => format!("instance {} selected", pick.instance),
+        };
+        self.console_log.push(message);
+        true
     }
 
     /// The outline and the actions for what is selected in it.
@@ -333,9 +366,12 @@ impl App {
                 });
             }
             ui.horizontal(|ui| {
-                if ui.small_button("Turn").on_hover_text("A quarter turn about z, around its middle").clicked() {
-                    let message = self.group_command("node turn");
-                    log(self, message);
+                ui.label("Turn");
+                for a in ["x", "y", "z"] {
+                    if ui.small_button(a).on_hover_text(format!("A quarter turn about {a}, around its middle")).clicked() {
+                        let message = self.group_command(&format!("node turn {a}"));
+                        log(self, message);
+                    }
                 }
                 if ui.small_button("Ungroup").clicked() {
                     let message = self.group_command("ungroup");
@@ -394,12 +430,17 @@ impl App {
                 }
             });
             ui.horizontal(|ui| {
-                for (label, line) in [("Turn", "instance turn"), ("Duplicate", "instance dup"), ("Delete", "instance delete")] {
+                ui.label("Turn");
+                for a in ["x", "y", "z"] {
+                    if ui.small_button(a).on_hover_text(format!("A quarter turn about {a}")).clicked() {
+                        let message = self.instance_command(&format!("instance turn {a}"));
+                        log(self, message);
+                    }
+                }
+                for (label, line) in [("Duplicate", "instance dup"), ("Delete", "instance delete")] {
                     if ui.small_button(label).clicked() {
                         let message = self.instance_command(line);
-                        if line != "instance turn" {
-                            self.forget_picks();
-                        }
+                        self.forget_picks();
                         log(self, message);
                     }
                 }
@@ -485,5 +526,15 @@ fn drop_onto(ui: &egui::Ui, response: &egui::Response) -> Option<i32> {
         );
     }
     response.dnd_release_payload::<TreeDrag>().map(|d| d.0)
+}
+
+/// `x`, `y` or `z` (z when omitted) as an axis index.
+pub fn parse_axis(words: &[&str]) -> Option<usize> {
+    match words {
+        [] | ["z"] => Some(2),
+        ["x"] => Some(0),
+        ["y"] => Some(1),
+        _ => None,
+    }
 }
 

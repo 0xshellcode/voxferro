@@ -612,6 +612,7 @@ impl App {
         ui.separator();
         ui.label("Drag on the model to edit, elsewhere (or right-drag) to orbit.");
         ui.label("Shift+drag or middle-drag to pan, scroll to zoom.");
+        ui.label("Option+click selects a group (again: one level in).");
         ui.label("F frame, 1-7 views, O ortho, Cmd+Z undo.");
         ui.separator();
         ui.label("Samples");
@@ -1032,6 +1033,10 @@ impl App {
                         let ray = ray_at(&self.camera, pos);
                         if self.selecting {
                             self.begin_select(ray, pos, modifiers)
+                        } else if modifiers.alt {
+                            // Option+click picks groups instead of painting
+                            // (Option subtracts only in the Select tool).
+                            self.select_group_at(ray)
                         } else {
                             self.begin_stroke(ray)
                         }
@@ -1165,16 +1170,32 @@ impl App {
             }
         }
 
-        if let Some(corners) = hover {
-            let vp = self.camera.view_proj(aspect);
-            let project = |p: Vec3| {
-                let c = vp * p.extend(1.0);
-                let ndc = c.truncate() / c.w.max(1e-6);
-                rect.min + egui::vec2((ndc.x + 1.0) * 0.5 * view_size.x, (1.0 - ndc.y) * 0.5 * view_size.y)
+        // The selected group's box, so a group picked with Option+click (or in
+        // the outline) shows what it holds.
+        let group_box = self.bounds_group();
+        let vp = self.camera.view_proj(aspect);
+        let project = |p: Vec3| {
+            let c = vp * p.extend(1.0);
+            let ndc = c.truncate() / c.w.max(1e-6);
+            rect.min + egui::vec2((ndc.x + 1.0) * 0.5 * view_size.x, (1.0 - ndc.y) * 0.5 * view_size.y)
+        };
+        if let Some((lo, hi)) = group_box {
+            let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 180, 255));
+            let corner = |i: usize| {
+                Vec3::new(
+                    if i & 1 == 0 { lo.x } else { hi.x },
+                    if i & 2 == 0 { lo.y } else { hi.y },
+                    if i & 4 == 0 { lo.z } else { hi.z },
+                )
             };
+            for (a, b) in CUBE_EDGES {
+                ui.painter().line_segment([project(corner(a)), project(corner(b))], stroke);
+            }
+        }
+
+        if let Some(corners) = hover {
             let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 230, 120));
-            // The 12 edges of a cube whose corners are numbered by bits x, y, z.
-            for (a, b) in [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)] {
+            for (a, b) in CUBE_EDGES {
                 ui.painter().line_segment([project(corners[a]), project(corners[b])], stroke);
             }
         }
@@ -1203,6 +1224,10 @@ fn positional_args(args: &[String]) -> Vec<String> {
     }
     out
 }
+
+/// The 12 edges of a box whose corners are numbered by bits x, y, z.
+const CUBE_EDGES: [(usize, usize); 12] =
+    [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)];
 
 fn capitalised(name: &str) -> String {
     let mut chars = name.chars();

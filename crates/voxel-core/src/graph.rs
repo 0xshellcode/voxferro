@@ -110,6 +110,27 @@ impl Scene {
         }
     }
 
+    /// The groups holding instance `index`, outermost first, by their
+    /// transform nodes. Empty when it sits directly in the scene.
+    pub fn groups_above(&self, index: usize) -> Vec<i32> {
+        let rows = self.tree();
+        let Some(at) = rows.iter().position(|r| r.kind == TreeKind::Instance(index)) else {
+            return Vec::new();
+        };
+        // Walking back up the outline, each shallower group row is the next
+        // container out.
+        let mut depth = rows[at].depth;
+        let mut out = Vec::new();
+        for row in rows[..at].iter().rev() {
+            if row.kind == TreeKind::Group && row.depth < depth {
+                out.push(row.node);
+                depth = row.depth;
+            }
+        }
+        out.reverse();
+        out
+    }
+
     /// Transform nodes in the subtree under `node`, itself included.
     fn subtree(&self, node: i32) -> Vec<i32> {
         let mut out = Vec::new();
@@ -139,18 +160,18 @@ impl Scene {
             .collect()
     }
 
-    /// The nodes with transform node `node` given a quarter turn about the
-    /// world z axis, around `centre`. For a group that is the middle of what
-    /// it holds, so it turns in place instead of swinging around an origin
-    /// that may be far away.
-    pub fn with_node_turned(&self, node: i32, centre: IVec3) -> Result<Vec<SceneNode>, GraphError> {
+    /// The nodes with transform node `node` given a quarter turn about a
+    /// world axis (0 x, 1 y, 2 z), around `centre`. For a group that is the
+    /// middle of what it holds, so it turns in place instead of swinging
+    /// around an origin that may be far away.
+    pub fn with_node_turned(&self, node: i32, centre: IVec3, axis: usize) -> Result<Vec<SceneNode>, GraphError> {
         let parents = parent_transforms(&self.nodes);
         let parent = parents.get(&node).copied().ok_or(GraphError::NotPlaceable)?;
         let mut nodes = self.nodes.clone();
         let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == node) else {
             return Err(GraphError::NotPlaceable);
         };
-        let quarter = Mat3::from_cols(glam::Vec3::Y, -glam::Vec3::X, glam::Vec3::Z);
+        let quarter = quarter_turn(axis);
         let local = Transform::from_parts(t.rotation_bits(0), t.translation(0));
         let world = local.then(&parent);
         let turned = Transform {
@@ -356,11 +377,11 @@ impl Scene {
         self.with_instance_placed(index, world)
     }
 
-    /// Turns instance `index` a quarter turn about the world z axis, in
-    /// place.
-    pub fn with_instance_turned(&self, index: usize) -> Result<Vec<SceneNode>, GraphError> {
+    /// Turns instance `index` a quarter turn about a world axis (0 x, 1 y,
+    /// 2 z), in place.
+    pub fn with_instance_turned(&self, index: usize, axis: usize) -> Result<Vec<SceneNode>, GraphError> {
         let instance = self.instances.get(index).ok_or(GraphError::NoInstance)?;
-        let quarter = Mat3::from_cols(glam::Vec3::Y, -glam::Vec3::X, glam::Vec3::Z);
+        let quarter = quarter_turn(axis);
         let mut world = instance.transform;
         world.rotation = quarter * world.rotation;
         self.with_instance_placed(index, world)
@@ -485,6 +506,21 @@ fn compact(nodes: Vec<SceneNode>) -> Vec<SceneNode> {
             }
         })
         .collect()
+}
+
+/// A quarter turn about axis 0 (x), 1 (y) or 2 (z), counter-clockwise
+/// looking down the axis from its positive end -- the same sense as
+/// `ops::rotate` turns a model's contents.
+pub fn quarter_turn(axis: usize) -> Mat3 {
+    use glam::Vec3;
+    match axis {
+        // y -> z, z -> -y
+        0 => Mat3::from_cols(Vec3::X, Vec3::Z, -Vec3::Y),
+        // z -> x, x -> -z
+        1 => Mat3::from_cols(-Vec3::Z, Vec3::Y, Vec3::X),
+        // x -> y, y -> -x
+        _ => Mat3::from_cols(Vec3::Y, -Vec3::X, Vec3::Z),
+    }
 }
 
 /// The world transform above every reachable transform node: what its own
@@ -619,7 +655,7 @@ mod tests {
     fn turning_round_trips_through_the_rotation_byte() {
         let mut s = scene();
         for _ in 0..4 {
-            let nodes = s.with_instance_turned(0).unwrap();
+            let nodes = s.with_instance_turned(0, 2).unwrap();
             apply(&mut s, nodes);
         }
         assert_eq!(s.instances[0].transform, scene().instances[0].transform);
@@ -664,7 +700,7 @@ mod tests {
     #[test]
     fn shifting_a_model_moves_each_of_its_instances_in_its_own_axes() {
         let mut s = scene();
-        let nodes = s.with_instance_turned(0).unwrap();
+        let nodes = s.with_instance_turned(0, 2).unwrap();
         apply(&mut s, nodes);
         let before = s.instances[0].transform.translation;
         let nodes = s.with_model_shifted(0, IVec3::X);
@@ -876,14 +912,65 @@ mod tests {
         assert_eq!(held.len(), 2);
         let centre = IVec3::new(100, 0, 0);
         let before = world_of(&s);
-        let nodes = s.with_node_turned(group, centre).unwrap();
+        let nodes = s.with_node_turned(group, centre, 2).unwrap();
         apply(&mut s, nodes);
-        let quarter = Mat3::from_cols(glam::Vec3::Y, -glam::Vec3::X, glam::Vec3::Z);
+        let quarter = quarter_turn(2);
         for ((_, b), (_, a)) in before.iter().zip(world_of(&s).iter()) {
             assert_eq!(a.rotation, quarter * b.rotation);
             let expected = (quarter * (b.translation - centre).as_vec3()).round().as_ivec3() + centre;
             assert_eq!(a.translation, expected);
         }
+    }
+
+    #[test]
+    fn quarter_turns_are_proper_and_four_make_a_whole() {
+        for axis in 0..3 {
+            let q = quarter_turn(axis);
+            assert!((q.determinant() - 1.0).abs() < 1e-6, "a rotation, not a mirror");
+            let mut m = Mat3::IDENTITY;
+            for _ in 0..4 {
+                m = q * m;
+            }
+            assert_eq!(m, Mat3::IDENTITY);
+            // The axis itself stays put.
+            let mut a = glam::Vec3::ZERO;
+            a[axis] = 1.0;
+            assert_eq!(q * a, a);
+        }
+        // Same sense as the model operation: about z, +x goes to +y.
+        assert_eq!(quarter_turn(2) * glam::Vec3::X, glam::Vec3::Y);
+        assert_eq!(quarter_turn(0) * glam::Vec3::Y, glam::Vec3::Z);
+        assert_eq!(quarter_turn(1) * glam::Vec3::Z, glam::Vec3::X);
+    }
+
+    #[test]
+    fn turning_about_any_axis_round_trips_through_the_file_encoding() {
+        let mut s = scene();
+        for axis in 0..3 {
+            let before = s.instances[1].transform;
+            for _ in 0..4 {
+                let nodes = s.with_instance_turned(1, axis).unwrap();
+                apply(&mut s, nodes);
+            }
+            assert_eq!(s.instances[1].transform, before, "axis {axis}");
+        }
+    }
+
+    #[test]
+    fn groups_above_lists_containers_outermost_first() {
+        let mut s = scene();
+        let nodes = s.with_grouped(&[0, 1]).unwrap();
+        apply(&mut s, nodes);
+        let outer = s.tree()[0].node;
+        assert_eq!(s.groups_above(0), vec![outer]);
+        // A group inside it, around the first instance only.
+        let nodes = s.with_grouped(&[0]).unwrap();
+        apply(&mut s, nodes);
+        let outer = s.tree()[0].node;
+        let path = s.groups_above(0);
+        assert_eq!(path.len(), 2);
+        assert_eq!(path[0], outer);
+        assert_eq!(s.groups_above(1), vec![outer]);
     }
 }
 

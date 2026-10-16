@@ -76,7 +76,10 @@ impl App {
                 }
                 _ => return "instance place <x> <y> <z>".to_owned(),
             },
-            ["turn"] => scene.with_instance_turned(i),
+            ["turn", axis @ ..] => match crate::outline::parse_axis(axis) {
+                Some(axis) => scene.with_instance_turned(i, axis),
+                None => return "instance turn [x|y|z]".to_owned(),
+            },
             ["dup"] => scene.with_instance_duplicated(i, self.side_offset(i)),
             ["delete"] => scene.with_instance_removed(i),
             ["new", rest @ ..] => {
@@ -89,7 +92,7 @@ impl App {
                 };
                 return self.new_model(size);
             }
-            _ => return "instance list | select <i> | move dx dy dz | place x y z | turn | dup | delete | new [x y z]".to_owned(),
+            _ => return "instance list | select <i> | move dx dy dz | place x y z | turn [x|y|z] | dup | delete | new [x y z]".to_owned(),
         };
         let what = words[0];
         match self.exec_graph(result, false) {

@@ -36,21 +36,38 @@ impl App {
         Some(cell_box(volume, &instance.transform, lo, hi))
     }
 
+    /// World bounds of the given instances' voxels (an empty model counts
+    /// by its box).
+    pub fn bounds_of(&self, indices: &[usize]) -> Option<(Vec3, Vec3)> {
+        let loaded = self.scene.as_ref()?;
+        let mut bounds = None;
+        for &i in indices {
+            let Some(instance) = loaded.doc.scene.instances.get(i) else { continue };
+            let Some(volume) = loaded.doc.scene.models.get(instance.model_index) else { continue };
+            let (lo, hi) = match volume.occupied_bounds() {
+                Some((lo, hi)) => (lo, hi),
+                None => ([0; 3], volume.size().map(|s| s.saturating_sub(1))),
+            };
+            let to_i = |c: [u32; 3]| glam::IVec3::new(c[0] as i32, c[1] as i32, c[2] as i32);
+            bounds = grow(bounds, cell_box(volume, &instance.transform, to_i(lo), to_i(hi)));
+        }
+        bounds
+    }
+
+    /// World bounds of the selected group, if one is selected.
+    pub fn bounds_group(&self) -> Option<(Vec3, Vec3)> {
+        let group = self.selected_group?;
+        let held = self.scene.as_ref()?.doc.scene.instances_under(group);
+        self.bounds_of(&held)
+    }
+
     /// World bounds of the selected instance's voxels, or its box if empty.
     fn bounds_instance(&self) -> Option<(Vec3, Vec3)> {
-        let loaded = self.scene.as_ref()?;
-        let instance = loaded.doc.scene.instances.get(self.selected)?;
-        let volume = loaded.doc.scene.models.get(instance.model_index)?;
-        let (lo, hi) = match volume.occupied_bounds() {
-            Some((lo, hi)) => (lo, hi),
-            None => ([0; 3], volume.size().map(|s| s.saturating_sub(1))),
-        };
-        let to_i = |c: [u32; 3]| glam::IVec3::new(c[0] as i32, c[1] as i32, c[2] as i32);
-        Some(cell_box(volume, &instance.transform, to_i(lo), to_i(hi)))
+        self.bounds_of(&[self.selected])
     }
 
     /// `camera front|back|left|right|top|bottom|iso | ortho | persp |
-    /// frame [all|selection|instance]`
+    /// frame [all|selection|group|instance]`
     pub fn camera_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().skip(1).collect();
         let message = match words.as_slice() {
@@ -71,13 +88,15 @@ impl App {
                     ["all"] => ("all", self.bounds_all()),
                     ["selection"] => ("selection", self.bounds_selection()),
                     ["instance"] => ("instance", self.bounds_instance()),
-                    // The editor's F: the selection if there is one, else
-                    // the model being edited.
-                    [] => match self.bounds_selection() {
-                        Some(b) => ("selection", Some(b)),
-                        None => ("instance", self.bounds_instance()),
+                    ["group"] => ("group", self.bounds_group()),
+                    // The editor's F: the voxel selection if there is one,
+                    // else the selected group, else the model being edited.
+                    [] => match (self.bounds_selection(), self.bounds_group()) {
+                        (Some(b), _) => ("selection", Some(b)),
+                        (None, Some(b)) => ("group", Some(b)),
+                        (None, None) => ("instance", self.bounds_instance()),
                     },
-                    _ => return "camera frame [all|selection|instance]".to_owned(),
+                    _ => return "camera frame [all|selection|group|instance]".to_owned(),
                 };
                 match bounds {
                     Some((min, max)) => {
@@ -87,7 +106,7 @@ impl App {
                     None => format!("nothing to frame ({name})"),
                 }
             }
-            _ => return "camera front|back|left|right|top|bottom|iso | ortho | persp | frame [all|selection|instance]".to_owned(),
+            _ => return "camera front|back|left|right|top|bottom|iso | ortho | persp | frame [all|selection|group|instance]".to_owned(),
         };
         self.path_tracer.reset();
         message
