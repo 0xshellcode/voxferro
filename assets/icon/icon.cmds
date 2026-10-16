@@ -1,0 +1,38 @@
+# The app icon's model, as editor console commands, one per line.
+# A 3x3x3 cube of 8-voxel blocks with one-voxel gaps; the top front-right
+# block is lifted out, as if being placed. Colours run along x + y + z.
+new 26 26 40
+palette 1 46 196 182
+palette 2 58 134 255
+palette 3 131 56 236
+palette 4 255 0 110
+palette 5 251 86 7
+palette 6 255 190 11
+palette 7 255 230 109
+box 0 0 0 7 7 7 1
+box 9 0 0 16 7 7 2
+box 18 0 0 25 7 7 3
+box 0 9 0 7 16 7 2
+box 9 9 0 16 16 7 3
+box 18 9 0 25 16 7 4
+box 0 18 0 7 25 7 3
+box 9 18 0 16 25 7 4
+box 18 18 0 25 25 7 5
+box 0 0 9 7 7 16 2
+box 9 0 9 16 7 16 3
+box 18 0 9 25 7 16 4
+box 0 9 9 7 16 16 3
+box 9 9 9 16 16 16 4
+box 18 9 9 25 16 16 5
+box 0 18 9 7 25 16 4
+box 9 18 9 16 25 16 5
+box 18 18 9 25 25 16 6
+box 0 0 18 7 7 25 3
+box 9 0 18 16 7 25 4
+box 0 9 18 7 16 25 4
+box 9 9 18 16 16 25 5
+box 18 9 18 25 16 25 6
+box 0 18 18 7 25 25 5
+box 9 18 18 16 25 25 6
+box 18 18 18 25 25 25 7
+box 18 0 31 25 7 38 7

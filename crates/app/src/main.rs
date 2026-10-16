@@ -12,6 +12,7 @@ mod compute;
 mod console;
 mod edit;
 mod files;
+mod icon;
 mod image_out;
 mod palette_ui;
 mod move_tool;
@@ -36,7 +37,13 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
-            .with_title("Voxferro"),
+            .with_title("Voxferro")
+            // Window and Dock icon when run as a bare binary; the .app
+            // bundle carries its own .icns (scripts/bundle-macos.sh).
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon/icon.png"))
+                    .expect("the bundled icon is a valid PNG"),
+            ),
         ..Default::default()
     };
 
@@ -47,18 +54,29 @@ fn main() -> eframe::Result {
     )
 }
 
-/// Where the bundled sample models live, resolved at compile time so
-/// `cargo run` works from any directory.
-const ASSET_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/vox");
+/// The `assets` folder: inside the `.app` bundle when run from one
+/// (`Contents/Resources/assets`), else the source tree's, resolved at
+/// compile time so `cargo run` works from any directory. A bundle never
+/// reaches back into the source tree, which may sit in a folder macOS
+/// guards (Documents) and would ask for permission.
+fn assets_dir() -> std::path::PathBuf {
+    let bundled = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("Resources/assets")))
+        .filter(|p| p.is_dir());
+    bundled.unwrap_or_else(|| std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets")))
+}
+
+/// Where the bundled sample models live.
+fn sample_dir() -> std::path::PathBuf {
+    assets_dir().join("vox")
+}
 
 /// Where environment maps are looked for, in order. A file names its map
 /// relative to the editor's own `ibl/` folder, so after the bundled copies
 /// the search falls back to a local the reference editor install.
 fn env_map_dirs() -> Vec<std::path::PathBuf> {
-    let mut dirs = vec![std::path::PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../assets/ibl"
-    ))];
+    let mut dirs = vec![assets_dir().join("ibl")];
     if let Some(home) = std::env::var_os("HOME") {
         let apps = std::path::Path::new(&home).join("Applications/the reference editor");
         if let Ok(entries) = std::fs::read_dir(apps) {
@@ -154,6 +172,8 @@ struct App {
     /// Used to verify the UI without a human looking at the window, and to
     /// produce images for the README.
     screenshot: Option<String>,
+    /// Write the screenshot as the app icon (`--icon`).
+    write_icon: bool,
     /// Strokes given on the command line (`--click`, `--drag`), as press and
     /// release points in fractions of the viewport. They run on the first
     /// frame, once the viewport's size is known, through the same calls a
@@ -209,6 +229,7 @@ impl App {
             trace_origin: glam::IVec3::ZERO,
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
             screenshot: None,
+            write_icon: false,
             scripted_strokes: Vec::new(),
             saved_revision: 0,
             confirm: None,
@@ -237,7 +258,7 @@ impl App {
 
         // Usage: voxferro [model.vox] [--run "<command>"]... [--render-mode]
         //           [--camera azimuth elevation] [--render N]
-        //           [--screenshot out.bmp]
+        //           [--screenshot out.bmp] [--icon out.png]
         let args: Vec<String> = std::env::args().skip(1).collect();
         let screenshot = args
             .iter()
@@ -254,16 +275,29 @@ impl App {
         let path = positional_args(&args)
             .into_iter()
             .find(|a| a.ends_with(".vox"))
-            .unwrap_or_else(|| format!("{ASSET_DIR}/monu1.vox"));
+            .unwrap_or_else(|| sample_dir().join("monu1.vox").to_string_lossy().into_owned());
 
         // Several --run flags may be given; they execute in order, which is
         // how a kernel and a save fit into one headless session.
-        let startup_commands: Vec<String> = args
-            .iter()
-            .enumerate()
-            .filter(|(_, a)| a.as_str() == "--run")
-            .filter_map(|(i, _)| args.get(i + 1).cloned())
-            .collect();
+        // --script <file> runs a file of commands, one per line, in the
+        // same order; blank lines and lines starting with # are skipped.
+        let mut startup_commands = Vec::new();
+        for (i, a) in args.iter().enumerate() {
+            let Some(value) = args.get(i + 1) else { continue };
+            match a.as_str() {
+                "--run" => startup_commands.push(value.clone()),
+                "--script" => match std::fs::read_to_string(value) {
+                    Ok(text) => startup_commands.extend(
+                        text.lines()
+                            .map(str::trim)
+                            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                            .map(str::to_owned),
+                    ),
+                    Err(e) => eprintln!("[voxferro] could not read {value}: {e}"),
+                },
+                _ => {}
+            }
+        }
 
         // --click <fx> <fy>: a click at that fraction of the viewport.
         // --drag <fx0> <fy0> <fx1> <fy1>: press, move, release.
@@ -283,7 +317,10 @@ impl App {
             })
             .collect();
 
-        app.screenshot = screenshot;
+        // --icon <out.png>: like --screenshot, written as the app icon.
+        let icon = args.iter().position(|a| a == "--icon").and_then(|i| args.get(i + 1).cloned());
+        app.write_icon = icon.is_some();
+        app.screenshot = icon.or(screenshot);
         app.load(state, &path);
 
         // Run before the first frame, so --screenshot captures the result.
@@ -683,7 +720,7 @@ impl App {
 
         let mut pick = None;
         egui::ScrollArea::vertical().max_height(220.0).id_salt("samples").show(ui, |ui| {
-            if let Ok(entries) = std::fs::read_dir(ASSET_DIR) {
+            if let Ok(entries) = std::fs::read_dir(sample_dir()) {
                 let mut paths: Vec<_> = entries
                     .flatten()
                     .map(|e| e.path())
@@ -1294,7 +1331,7 @@ fn positional_args(args: &[String]) -> Vec<String> {
     let mut i = 0;
     while i < args.len() {
         let skip = match args[i].as_str() {
-            "--run" | "--screenshot" | "--render" => 1,
+            "--run" | "--script" | "--screenshot" | "--icon" | "--render" => 1,
             "--camera" | "--click" => 2,
             "--drag" => 4,
             a if a.starts_with("--") => 0,
@@ -1423,7 +1460,11 @@ impl eframe::App for App {
                 self.scene_renderer.read_frame(&state.device, &state.queue)
             };
             let ok = match frame {
-                Some((w, h, rgba)) => match image_out::write_bmp(&path, w, h, &rgba) {
+                Some((w, h, rgba)) => match if self.write_icon {
+                    icon::write(&path, w, h, &rgba)
+                } else {
+                    image_out::write_bmp(&path, w, h, &rgba)
+                } {
                     Ok(()) => {
                         eprintln!("[voxferro] wrote {path} ({w}x{h})");
                         true

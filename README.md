@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–33 del [ROADMAP](ROADMAP.md) están completas, con **184 tests
+Las fases 0–34 del [ROADMAP](ROADMAP.md) están completas, con **185 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -58,6 +58,14 @@ cargo run -p voxferro -- --run "gpu torus 166 40 14 replace" --run "save out.vox
 cargo run -p voxferro -- assets/vox/monu1.vox --render-mode           # abre en modo Render
 cargo run -p voxferro -- assets/vox/monu1.vox --render 200 --screenshot out.bmp
 cargo run -p voxferro -- --run "new 16" --run "brush attach box" --drag 0.3 0.7 0.6 0.8 --screenshot out.bmp
+```
+
+Como aplicación de macOS, con su icono:
+
+```bash
+./scripts/bundle-macos.sh          # crea target/Voxferro.app
+open target/Voxferro.app
+./scripts/make-icon.sh             # vuelve a renderizar el icono
 ```
 
 **Ratón:** pulsar sobre el modelo edita con el pincel; pulsar en el vacío (o
