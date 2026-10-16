@@ -59,6 +59,13 @@ impl App {
         for request in requests {
             match request.op {
                 Op::Command(line) => self.mcp_command(line, request.reply, ctx, state),
+                Op::Batch(lines) => {
+                    let out = self.mcp_batch(&lines, ctx, state);
+                    let _ = request.reply.send(out);
+                }
+                Op::Palette => {
+                    let _ = request.reply.send(Reply::Text(self.palette_listing()));
+                }
                 Op::Describe => {
                     let _ = request.reply.send(Reply::Text(self.describe()));
                 }
@@ -92,6 +99,11 @@ impl App {
                     let _ = reply.send(Reply::Error("another write is waiting for the user".to_owned()));
                 } else {
                     self.console_log.push(format!("mcp: asking before writing {}", path.display()));
+                    // The question is in the window, which may be behind the
+                    // agent's terminal: bounce the Dock icon.
+                    ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                        egui::UserAttentionType::Critical,
+                    ));
                     self.mcp_write = Some(PendingWrite { line, path, reply });
                 }
             }
@@ -100,6 +112,54 @@ impl App {
                 let _ = reply.send(out);
             }
         }
+    }
+
+    /// Runs lines as one undo step, stopping at the first that fails.
+    /// Lines that would write a file or open a file panel are refused before
+    /// anything runs: a confirmation cannot wait in the middle of a batch.
+    fn mcp_batch(&mut self, lines: &[String], ctx: &egui::Context, state: &egui_wgpu::RenderState) -> Reply {
+        if let Some(bad) = lines.iter().find(|l| mcp::needs_path(l) || mcp::write_target(l, None).is_some()) {
+            return Reply::Error(format!("'{bad}' writes or picks a file: use save_file or run_command for it"));
+        }
+        self.history.begin_group();
+        let mut out = Vec::new();
+        let mut failed = None;
+        for (i, line) in lines.iter().enumerate() {
+            match self.mcp_run(line, ctx, state) {
+                Reply::Error(e) => {
+                    out.push(format!("> {line}\n{e}"));
+                    failed = Some(i);
+                    break;
+                }
+                Reply::Text(t) => out.push(format!("> {line}\n{t}")),
+                Reply::Png(_) => {}
+            }
+        }
+        let steps = self.history.end_group();
+        let summary = match failed {
+            Some(i) => format!("stopped at line {} of {}; the lines before it ran ({steps} undo steps folded into one)", i + 1, lines.len()),
+            None => format!("ran {} lines as one undo step", lines.len()),
+        };
+        let text = format!("{}\n{summary}", out.join("\n"));
+        if failed.is_some() { Reply::Error(text) } else { Reply::Text(text) }
+    }
+
+    /// The palette, one line per index, for `get_palette`.
+    fn palette_listing(&self) -> String {
+        let Some(loaded) = &self.scene else { return "no document".to_owned() };
+        let doc = &loaded.doc;
+        let mut out = String::from("index hex [material]\n");
+        for i in 1..=255u8 {
+            let c = doc.palette.color(i);
+            out.push_str(&format!("{i} #{:02x}{:02x}{:02x}", c.r, c.g, c.b));
+            if let Some(m) = doc.materials.iter().find(|m| m.id == i as i32)
+                && m.kind() != "_diffuse"
+            {
+                out.push_str(&format!(" {}", m.kind().trim_start_matches('_')));
+            }
+            out.push('\n');
+        }
+        out
     }
 
     /// Runs a console line and returns what it logged.

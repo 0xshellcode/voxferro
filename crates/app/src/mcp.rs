@@ -40,7 +40,11 @@ const REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 pub enum Op {
     /// A console line.
     Command(String),
+    /// Several console lines as one undo step, stopping at the first error.
+    Batch(Vec<String>),
     Describe,
+    /// Every palette colour, with its material when not plain diffuse.
+    Palette,
     /// The current image: the editor view, or the path tracer once it has
     /// `samples`; scaled to fit `max_size` pixels.
     Capture { render: bool, samples: u32, max_size: u32 },
@@ -136,6 +140,14 @@ struct CommandArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct BatchArgs {
+    /// Console lines, run in order as one undo step. Running stops at the
+    /// first line that fails; the result says which. Lines that write files
+    /// are not accepted here: use save_file.
+    commands: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct VoxelArgs {
     /// Voxels as [x, y, z, colour] in the selected model's own cells,
     /// z up; colour is a palette index 1-255, or 0 to erase.
@@ -193,6 +205,21 @@ impl Editor {
         Ok(self.ask(Op::Command(a.command)).await)
     }
 
+    #[tool(description = "Run several console lines in order as one undo step: much faster than \
+        one run_command per line. Stops at the first line that fails. Returns each line's output.")]
+    async fn run_commands(&self, Parameters(a): Parameters<BatchArgs>) -> Result<CallToolResult, ErrorData> {
+        if a.commands.is_empty() {
+            return Ok(error("no commands given"));
+        }
+        Ok(self.ask(Op::Batch(a.commands)).await)
+    }
+
+    #[tool(description = "List the palette: each index 1-255 with its colour as hex, and its \
+        material when it is not plain diffuse. Use it to pick colours before building.")]
+    async fn get_palette(&self) -> Result<CallToolResult, ErrorData> {
+        Ok(self.ask(Op::Palette).await)
+    }
+
     #[tool(description = "Describe the open document as JSON: file, models with their sizes and \
         voxel counts, placed instances, layers, the colours in use, the selected model, the \
         animation frame and whether there are unsaved changes.")]
@@ -247,7 +274,8 @@ impl ServerHandler for Editor {
             .with_server_info(Implementation::new("voxferro", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Voxferro, a voxel editor compatible with the reference editor's .vox files. \
-                 Start with describe_scene; edit with run_command (send `help` first) or \
+                 Start with describe_scene and get_palette; send `help` to run_command for the \
+                 command list. Build with run_commands (many lines, one call, one undo step) or \
                  set_voxels; look at the result with capture_view. Everything can be undone \
                  with the `undo` command.",
             )

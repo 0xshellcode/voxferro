@@ -176,6 +176,9 @@ struct App {
     screenshot: Option<String>,
     /// Write the screenshot as the app icon (`--icon`).
     write_icon: bool,
+    /// The viewport's size in pixels at its last draw, for drawing while
+    /// the window is hidden.
+    last_view_size: [u32; 2],
     /// The guide lines last uploaded (see `model_guides`).
     guide_lines: Vec<renderer::LineVertex>,
     /// The MCP server, while switched on, and the port it takes.
@@ -242,6 +245,7 @@ impl App {
             screenshot: None,
             write_icon: false,
             guide_lines: Vec::new(),
+            last_view_size: [1024, 768],
             mcp: None,
             mcp_port: mcp::DEFAULT_PORT,
             mcp_write: None,
@@ -1102,6 +1106,59 @@ impl App {
         format!("gpu {shape_name}: {count} voxels in {elapsed:.1?}")
     }
 
+    /// Draws the scene into its offscreen target at `size` pixels: one
+    /// more sample of the path tracer in Render mode, else the raster view
+    /// with its guide lines. Returns the egui texture holding the image.
+    /// Painting it is the caller's: the viewport shows it, and an agent's
+    /// capture reads it back while the window is hidden.
+    pub fn draw_scene(&mut self, state: &egui_wgpu::RenderState, size: [u32; 2]) -> Option<egui::TextureId> {
+        self.last_view_size = size;
+        let view_proj = self.camera.view_proj(size[0] as f32 / size[1] as f32);
+
+        if self.mesh_dirty {
+            self.remesh(state);
+        }
+
+        if self.rendering {
+            let basis = self.camera.basis();
+            let offset = self.volume_offset();
+            let mut egui_renderer = state.renderer.write();
+            return self.path_tracer.render(
+                &state.device,
+                &state.queue,
+                &mut egui_renderer,
+                size,
+                self.camera.eye(),
+                basis,
+                self.camera.fov_y,
+                self.camera.ortho.then(|| self.camera.half_height()),
+                // In focus: the point the camera orbits, which framing and
+                // panning put on the subject.
+                self.camera.distance,
+                &self.environment,
+                offset,
+            );
+        }
+
+        let guides = self.model_guides();
+        if guides != self.guide_lines {
+            self.scene_renderer.set_lines(&state.device, &guides);
+            self.guide_lines = guides;
+        }
+
+        let mut egui_renderer = state.renderer.write();
+        Some(self.scene_renderer.render(
+            &state.device,
+            &state.queue,
+            &mut egui_renderer,
+            size,
+            view_proj,
+            self.light_dir,
+            Vec3::new(0.19, 0.18, 0.26), // the editor's own default ambient
+            [0.16, 0.16, 0.17],
+        ))
+    }
+
     fn viewport(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
@@ -1235,35 +1292,9 @@ impl App {
             ((rect.width() * ppp) as u32).max(1),
             ((rect.height() * ppp) as u32).max(1),
         ];
-        let view_proj = self
-            .camera
-            .view_proj(size[0] as f32 / size[1] as f32);
-
-        if self.mesh_dirty {
-            self.remesh(state);
-        }
+        let id = self.draw_scene(state, size);
 
         if self.rendering {
-            let basis = self.camera.basis();
-            let offset = self.volume_offset();
-            let mut egui_renderer = state.renderer.write();
-            let id = self.path_tracer.render(
-                &state.device,
-                &state.queue,
-                &mut egui_renderer,
-                size,
-                self.camera.eye(),
-                basis,
-                self.camera.fov_y,
-                self.camera.ortho.then(|| self.camera.half_height()),
-                // In focus: the point the camera orbits, which framing and
-                // panning put on the subject.
-                self.camera.distance,
-                &self.environment,
-                offset,
-            );
-            drop(egui_renderer);
-
             if let Some(id) = id {
                 ui.painter().image(
                     id,
@@ -1284,25 +1315,7 @@ impl App {
             pointer.and_then(|pos| self.hover_cell(ray_at(&self.camera, pos)))
         };
 
-        let guides = self.model_guides();
-        if guides != self.guide_lines {
-            self.scene_renderer.set_lines(&state.device, &guides);
-            self.guide_lines = guides;
-        }
-
-        let mut egui_renderer = state.renderer.write();
-        let texture_id = self.scene_renderer.render(
-            &state.device,
-            &state.queue,
-            &mut egui_renderer,
-            size,
-            view_proj,
-            self.light_dir,
-            Vec3::new(0.19, 0.18, 0.26), // the editor's own default ambient
-            [0.16, 0.16, 0.17],
-        );
-        drop(egui_renderer);
-
+        let Some(texture_id) = id else { return };
         ui.painter().image(
             texture_id,
             rect,
@@ -1411,6 +1424,23 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// Runs before every `ui`, and also while the window is hidden or
+    /// covered, whenever something asks for a repaint -- which `ui` is not:
+    /// eframe skips the egui pass for a window nobody can see. Agents' MCP
+    /// requests are taken here so they are answered while the editor sits
+    /// behind the terminal they were sent from.
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let Some(state) = frame.wgpu_render_state().cloned() else { return };
+        self.mcp_poll(ctx, &state);
+        // Hidden, nothing draws the view, so a pending capture draws it
+        // here at the size it last had; a render, one sample per call.
+        let hidden = ctx.input(|i| i.viewport().visible() == Some(false));
+        if hidden && self.mcp_capture.is_some() {
+            self.draw_scene(&state, self.last_view_size);
+            self.mcp_finish_capture(ctx, &state);
+        }
+    }
+
     /// Draws one frame.
     ///
     /// Note the signature: as of eframe 0.36 the `App` trait takes a `&mut Ui`
@@ -1449,7 +1479,6 @@ impl eframe::App for App {
         self.move_input(&ctx);
         self.animate(&ctx);
         self.confirm_ui(&ctx, &state);
-        self.mcp_poll(&ctx, &state);
         self.mcp_confirm_ui(&ctx, &state);
         let title = self.title();
         if title != self.window_title {

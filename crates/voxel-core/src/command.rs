@@ -259,6 +259,8 @@ pub struct History {
     coalescing: bool,
     /// Source of step ids; 0 is the state before any step.
     last_id: u64,
+    /// While a group is open, the undo depth it started at.
+    group_start: Option<usize>,
 }
 
 impl History {
@@ -327,6 +329,38 @@ impl History {
         changed
     }
 
+    /// Starts a group: every step recorded until [`History::end_group`]
+    /// becomes one undo step. For a list of commands run as one action, such
+    /// as an agent's batch.
+    pub fn begin_group(&mut self) {
+        self.end_gesture();
+        self.group_start = Some(self.undo.len());
+    }
+
+    /// Closes the group, folding its steps into one `Batch`. Returns how
+    /// many steps were folded. If an undo inside the group reached below
+    /// where it started, or the history was cleared (a file was opened),
+    /// the steps are left as they are.
+    pub fn end_group(&mut self) -> usize {
+        self.end_gesture();
+        let Some(start) = self.group_start.take() else { return 0 };
+        if self.undo.len() <= start + 1 {
+            return self.undo.len().saturating_sub(start);
+        }
+        let steps: Vec<(u64, Command)> = self.undo.drain(start..).collect();
+        let id = steps.last().map_or(self.last_id, |(id, _)| *id);
+        let count = steps.len();
+        let mut commands = Vec::new();
+        for (_, c) in steps {
+            match c {
+                Command::Batch(inner) => commands.extend(inner),
+                c => commands.push(c),
+            }
+        }
+        self.undo.push((id, Command::Batch(commands)));
+        count
+    }
+
     /// Ends the current gesture, so the next edit starts a fresh undo entry.
     pub fn end_gesture(&mut self) {
         self.coalescing = false;
@@ -336,6 +370,13 @@ impl History {
         self.end_gesture();
         match self.undo.pop() {
             Some((id, c)) => {
+                // Undoing past a group's start: the group cannot fold what
+                // came before it.
+                if let Some(start) = self.group_start
+                    && self.undo.len() < start
+                {
+                    self.group_start = Some(self.undo.len());
+                }
                 c.revert(document);
                 self.redo.push((id, c));
                 true
@@ -405,6 +446,29 @@ mod tests {
 
     fn get(d: &Document, model: usize, x: u32, y: u32, z: u32) -> u8 {
         d.scene.models[model].get(x, y, z)
+    }
+
+    #[test]
+    fn a_group_undoes_as_one_step() {
+        let mut d = doc();
+        let mut h = History::default();
+        h.set_voxels(&mut d, 0, [(IVec3::new(0, 0, 0), 1)]);
+        h.end_gesture();
+        h.begin_group();
+        h.set_voxels(&mut d, 0, [(IVec3::new(1, 0, 0), 2)]);
+        h.end_gesture();
+        h.set_voxels(&mut d, 0, [(IVec3::new(2, 0, 0), 3)]);
+        h.end_gesture();
+        let before = h.revision();
+        assert_eq!(h.end_group(), 2);
+        assert_eq!(h.undo_depth(), 2, "the step before the group stays apart");
+        assert_eq!(h.revision(), before, "the folded step leads to the same state");
+        h.undo(&mut d);
+        assert_eq!(d.scene.models[0].get(1, 0, 0), 0);
+        assert_eq!(d.scene.models[0].get(2, 0, 0), 0);
+        assert_eq!(d.scene.models[0].get(0, 0, 0), 1);
+        h.redo(&mut d);
+        assert_eq!(d.scene.models[0].get(2, 0, 0), 3);
     }
 
     #[test]
