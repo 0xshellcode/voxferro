@@ -675,6 +675,61 @@ fn random_in_sphere(state: ptr<function, u32>) -> vec3<f32> {
 }
 
 // Schlick's approximation of dielectric reflectance.
+// Where a ray travelling inside glass ends up.
+struct GlassWalk {
+    // 0: out into the air, refracted; 1: onto an opaque voxel behind the
+    // glass (`hit`); 2: lost (left the grid, or kept reflecting).
+    outcome: u32,
+    origin: vec3<f32>,
+    direction: vec3<f32>,
+    hit: Hit,
+    // Distance travelled inside, for the absorption.
+    inside: f32,
+};
+
+// Walks a ray through glass from a point inside it. At a boundary with
+// empty space it refracts out (or reflects back in, past the critical
+// angle). At a boundary with an opaque voxel -- water over sand, glass on a
+// table -- it stops: that face is lit like any other surface, through the
+// glass. Treating it as an exit to air, as this used to, pushed the ray
+// into the solid, where it found the voxel at distance 0 with no normal and
+// came back black.
+fn walk_glass(start: vec3<f32>, dir: vec3<f32>, ior: f32, far: f32) -> GlassWalk {
+    var w: GlassWalk;
+    w.outcome = 2u;
+    w.inside = 0.0;
+    var q = start;
+    var d = dir;
+    for (var k = 0; k < 8; k = k + 1) {
+        let out = trace(q, d, far, 1u);
+        w.inside = w.inside + out.distance;
+        if (!out.hit) {
+            return w; // left the grid while inside
+        }
+        if (voxel_at(out.cell) != 0u) {
+            w.outcome = 1u;
+            w.hit = out;
+            w.origin = q;
+            w.direction = d;
+            return w;
+        }
+        // out.normal faces back into the glass, which is the side the ray
+        // arrives from -- what refract() expects.
+        let bent = refract(d, out.normal, ior);
+        if (dot(bent, bent) < 1e-6) {
+            // Total internal reflection: bounce and keep going.
+            d = reflect(d, out.normal);
+            q = out.point + out.normal * 0.001;
+            continue;
+        }
+        w.outcome = 0u;
+        w.origin = out.point - out.normal * 0.001;
+        w.direction = normalize(bent);
+        return w;
+    }
+    return w;
+}
+
 fn fresnel(cos_theta: f32, ior: f32) -> f32 {
     var r0 = (1.0 - ior) / (1.0 + ior);
     r0 = r0 * r0;
@@ -769,20 +824,46 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Scattering events in media and fog so far; they have their own budget.
     var scatters = 0;
     let far = f32(p.volume_size.x + p.volume_size.y + p.volume_size.z) * 2.0;
+    // An opaque voxel reached through glass, to shade next iteration.
+    var forced = false;
+    var forced_hit: Hit;
 
     for (var bounce = 0; bounce <= i32(p.bounces); bounce = bounce + 1) {
-        // No distance cap here: the camera may sit far outside the grid,
-        // and trace() clips to the grid box itself.
-        let hit = trace(origin, direction, 1e30, 0u);
+        // A ray that starts inside glass (a bounce off a voxel under water)
+        // first walks out of it, or onto the next opaque voxel.
+        var from_glass = forced;
+        var hit = forced_hit;
+        forced = false;
+        let start_cell = vec3<i32>(floor(origin));
+        if (!from_glass && is_glass(start_cell)) {
+            let g = voxel_at(start_cell);
+            let w = walk_glass(origin, direction, materials[g].ior, far);
+            throughput = throughput * absorb(palette[g].rgb, materials[g].emission.w, w.inside);
+            if (w.outcome == 2u) {
+                break;
+            }
+            origin = w.origin;
+            direction = w.direction;
+            if (w.outcome == 1u) {
+                hit = w.hit;
+                from_glass = true;
+            }
+        }
+        if (!from_glass) {
+            // No distance cap here: the camera may sit far outside the
+            // grid, and trace() clips to the grid box itself.
+            hit = trace(origin, direction, 1e30, 0u);
+        }
 
         // The ground wins when it is nearer than any voxel, or when the ray
-        // left the grid without hitting one.
-        let t_ground = ground_distance(origin, direction);
+        // left the grid without hitting one. Not from inside glass: the
+        // voxel reached there is already the nearest thing.
+        let t_ground = select(ground_distance(origin, direction), -1.0, from_glass);
 
         // Fog: a homogeneous medium everywhere. Sample how far the ray goes
         // before it scatters; if that is before whatever it would reach,
         // it scatters there instead.
-        if (p.fog.x > 0.0) {
+        if (p.fog.x > 0.0 && !from_glass) {
             var reach = 1e5;
             if (hit.hit) {
                 reach = hit.distance;
@@ -927,39 +1008,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 continue;
             }
 
-            // Refract in, walk through the glass, refract out.
-            var d = refract(direction, hit.normal, 1.0 / m.ior);
-            var q = surface - hit.normal * 0.001;
-            var escaped = false;
-            var inside = 0.0;
-            for (var k = 0; k < 8; k = k + 1) {
-                let out = trace(q, d, far, 1u);
-                inside = inside + out.distance;
-                if (!out.hit) {
-                    escaped = true; // left the grid while inside
-                    break;
-                }
-                let exit_point = out.point;
-                // out.normal faces back into the glass, which is the side
-                // the ray arrives from -- what refract() expects.
-                let bent = refract(d, out.normal, m.ior);
-                if (dot(bent, bent) < 1e-6) {
-                    // Total internal reflection: bounce and keep going.
-                    d = reflect(d, out.normal);
-                    q = exit_point + out.normal * 0.001;
-                    continue;
-                }
-                d = bent;
-                q = exit_point - out.normal * 0.001;
-                escaped = true;
+            // Refract in, walk through the glass, refract out -- or reach an
+            // opaque voxel behind it, shaded on the next iteration.
+            let refracted = refract(direction, hit.normal, 1.0 / m.ior);
+            let w = walk_glass(surface - hit.normal * 0.001, refracted, m.ior, far);
+            if (w.outcome == 2u) {
                 break;
             }
-            if (!escaped) {
-                break;
+            throughput = throughput * absorb(albedo, m.emission.w, w.inside);
+            origin = w.origin;
+            direction = w.direction;
+            if (w.outcome == 1u) {
+                forced = true;
+                forced_hit = w.hit;
             }
-            throughput = throughput * absorb(albedo, m.emission.w, inside);
-            direction = normalize(d);
-            origin = q;
             specular = true;
             env_sampled = false;
             continue;
