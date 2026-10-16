@@ -597,6 +597,9 @@ struct PostParams {
     film: [f32; 4],
     bloom: [f32; 4],
     star: [f32; 4],
+    /// x: the diagnostic view (`VOXFERRO_TRACE_DEBUG`); 5 makes this pass
+    /// paint a flat magenta without reading the tracer's output.
+    debug: [u32; 4],
 }
 
 impl Environment {
@@ -1255,6 +1258,7 @@ impl PathTracer {
                 2f32.powf(environment.bloom_aspect * 4.0),
             ],
             star: [iterations as f32, angle, step, self.samples as f32],
+            debug: [trace_debug_mode(), 0, 0, 0],
         };
         queue.write_buffer(&self.post_params, 0, bytemuck::bytes_of(&post));
         let post_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1453,7 +1457,8 @@ pub fn exposed_emitters(volume: &Volume, materials: &[vox_format::Material]) -> 
 /// it, to find where a GPU or driver goes wrong without a debugger there
 /// (the CI's software GPUs): 1 a flat grey (the output and post-processing
 /// alone), 2 the primary hit's normal, 3 the primary hit's palette colour,
-/// 4 the sky alone. 0 or unset is the normal render.
+/// 4 the sky alone, 5 a flat magenta from the post-processing pass without
+/// reading the tracer at all. 0 or unset is the normal render.
 fn trace_debug_mode() -> u32 {
     static MODE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *MODE.get_or_init(|| {

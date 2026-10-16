@@ -103,7 +103,9 @@ fn main() -> eframe::Result {
 ///
 /// - inside the macOS `.app` bundle (`Contents/Resources/assets`);
 /// - next to the executable (`assets/` beside `voxferro.exe` in the
-///   Windows zip, or beside the binary in a Linux package);
+///   Windows zip);
+/// - the Linux layout, `<prefix>/share/voxferro/assets` for
+///   `<prefix>/bin/voxferro` (the tarball and the AppImage);
 /// - the source tree's, resolved at compile time so `cargo run` works from
 ///   any directory.
 ///
@@ -113,7 +115,8 @@ fn assets_dir() -> std::path::PathBuf {
     let exe_dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.to_path_buf()));
     let packaged = exe_dir.and_then(|dir| {
         let bundle = dir.parent().map(|contents| contents.join("Resources/assets"));
-        [bundle, Some(dir.join("assets"))].into_iter().flatten().find(|p| p.is_dir())
+        let share = dir.parent().map(|prefix| prefix.join("share/voxferro/assets"));
+        [bundle, Some(dir.join("assets")), share].into_iter().flatten().find(|p| p.is_dir())
     });
     packaged.unwrap_or_else(|| std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets")))
 }
@@ -603,6 +606,17 @@ impl App {
             .doc
             .scene
             .bake(|i| visible.shows(i), 256 * 1024 * 1024)
+            .or_else(|e| match e {
+                // Nothing to trace still has a sky and a ground to render:
+                // an empty one-cell grid at the origin. Without it the
+                // render stayed blank, and a headless `--render` of an
+                // empty model waited forever for its first sample.
+                voxel_core::BakeError::Empty => Ok(voxel_core::Baked {
+                    volume: voxel_core::Volume::new([1, 1, 1]),
+                    origin: glam::IVec3::ZERO,
+                }),
+                other => Err(other),
+            })
             .map_err(|e| e.to_string())
             .and_then(|b| {
                 if b.volume.size().iter().any(|&s| s > max_side) {

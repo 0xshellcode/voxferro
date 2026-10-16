@@ -25,6 +25,8 @@ struct Post {
     bloom: vec4<f32>,
     // x: iterations, y: base angle, z: angle step per iteration, w: seed.
     star: vec4<f32>,
+    // x: diagnostic view; 5 paints magenta without reading the tracer.
+    debug: vec4<u32>,
 };
 
 @group(0) @binding(0) var<uniform> q: Post;
@@ -55,6 +57,10 @@ fn pixel(x: i32, y: i32) -> vec3<f32> {
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= q.resolution.x || gid.y >= q.resolution.y) {
+        return;
+    }
+    if (q.debug.x == 5u) {
+        textureStore(output, vec2<i32>(gid.xy), vec4<f32>(1.0, 0.0, 1.0, 1.0));
         return;
     }
     let index = gid.y * q.resolution.x + gid.x;

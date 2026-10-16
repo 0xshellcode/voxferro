@@ -95,7 +95,7 @@ jobs:
         run: |
           run=""; if [ "$RUNNER_OS" = Linux ]; then run="xvfb-run -a"; fi
           py=python3; if [ "$RUNNER_OS" = Windows ]; then py=python; fi
-          for mode in 1 2 3 4; do
+          for mode in 5 1 2 3; do
             VOXFERRO_TRACE_DEBUG=$mode $run ./target/debug/voxferro --script assets/showcase/shapes.cmds --render 1 --screenshot stage$mode.bmp > stage$mode.log 2>&1 || echo "mode $mode: exit $?"
             echo -n "mode $mode: "; $py scripts/ci/check_image.py stage$mode.bmp --stats || true
           done
