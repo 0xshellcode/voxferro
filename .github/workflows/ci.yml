@@ -88,42 +88,14 @@ jobs:
           $run ./target/debug/voxferro --script assets/showcase/shapes.cmds --screenshot view.bmp 2>&1 | tee view.log
           $py scripts/ci/check_image.py view.bmp
 
-      # Each stage of the path tracer on its own (VOXFERRO_TRACE_DEBUG), to
-      # tell where a GPU goes wrong; informative, never fails the job.
-      - name: Path tracer stages
-        shell: bash
-        timeout-minutes: 15
-        continue-on-error: true
-        env:
-          VOXFERRO_NO_RECENT: "1"
-        run: |
-          run=""; if [ "$RUNNER_OS" = Linux ]; then run="xvfb-run -a"; fi
-          py=python3; if [ "$RUNNER_OS" = Windows ]; then py=python; fi
-          for mode in 5 1 2 3; do
-            VOXFERRO_TRACE_DEBUG=$mode $run ./target/debug/voxferro --script assets/showcase/shapes.cmds --render 1 --screenshot stage$mode.bmp > stage$mode.log 2>&1 || echo "mode $mode: exit $?"
-            echo -n "mode $mode: "; $py scripts/ci/check_image.py stage$mode.bmp --stats || true
-          done
-
-      # Windows: the same, compiling the shaders with DXC (from the Windows
-      # SDK on the runner) instead of the default FXC, to tell a compiler
-      # problem from a backend one.
-      - name: Path tracer stages with DXC (Windows)
+      # Windows renders through DirectX 12 with DXC (src/windows_graphics.rs);
+      # the runner's Windows SDK has the DLLs.
+      - name: DXC next to the binary (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        timeout-minutes: 15
-        continue-on-error: true
-        env:
-          VOXFERRO_NO_RECENT: "1"
-          WGPU_DX12_COMPILER: dxc
         run: |
-          dll=$(find "/c/Program Files (x86)/Windows Kits/10/bin" -path "*x64/dxcompiler.dll" 2>/dev/null | sort | tail -1)
-          echo "dxcompiler: $dll"
-          cp "$dll" target/debug/
-          dxil=$(dirname "$dll")/dxil.dll; [ -f "$dxil" ] && cp "$dxil" target/debug/
-          for mode in 1 0; do
-            VOXFERRO_TRACE_DEBUG=$mode ./target/debug/voxferro --script assets/showcase/shapes.cmds --render 2 --screenshot dxc$mode.bmp > dxc$mode.log 2>&1 || echo "mode $mode: exit $?"
-            echo -n "dxc mode $mode: "; python scripts/ci/check_image.py dxc$mode.bmp --stats || true
-          done
+          dir=$(dirname "$(find "/c/Program Files (x86)/Windows Kits/10/bin" -path "*x64/dxcompiler.dll" | sort | tail -1)")
+          cp "$dir/dxcompiler.dll" "$dir/dxil.dll" target/debug/
 
       - name: Smoke test, path traced render
         shell: bash
@@ -135,6 +107,7 @@ jobs:
           py=python3; if [ "$RUNNER_OS" = Windows ]; then py=python; fi
           $run ./target/debug/voxferro --script assets/showcase/shapes.cmds --render 8 --screenshot smoke.bmp 2>&1 | tee smoke.log
           grep "graphics backend" smoke.log
+          if [ "$RUNNER_OS" = Windows ]; then grep "graphics: DirectX 12 with DXC" smoke.log; fi
           $py scripts/ci/check_image.py smoke.bmp
 
       - name: Smoke test, MCP session
@@ -158,10 +131,6 @@ jobs:
           path: |
             view.bmp
             view.log
-            stage*.bmp
-            stage*.log
-            dxc*.bmp
-            dxc*.log
             smoke.bmp
             smoke.log
             mcp.log
@@ -175,7 +144,7 @@ jobs:
       - name: Package (Windows)
         if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.package
         shell: pwsh
-        run: ./scripts/package-windows.ps1
+        run: ./scripts/package-windows.ps1 -WithDxc
 
       - name: Upload packages
         if: github.event_name == 'workflow_dispatch' && inputs.package

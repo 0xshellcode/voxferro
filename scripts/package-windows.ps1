@@ -7,8 +7,15 @@
 # -WithReferenceEditorAssets, for a package you keep for yourself: do not
 # redistribute them.
 #
-# Usage: powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
-param([switch]$WithReferenceEditorAssets)
+# Render mode on DirectX 12 needs DXC (src/windows_graphics.rs): without it
+# the app uses Vulkan if there is a driver. -WithDxc downloads Microsoft's
+# DirectXShaderCompiler release (pinned, SHA-256 checked) and puts
+# dxcompiler.dll and dxil.dll, with their licences, next to voxferro.exe.
+# dxil.dll is under a Microsoft licence with distribution requirements
+# (see LICENSE-MS.txt): read it before sharing a package that includes it.
+#
+# Usage: powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 [-WithDxc] [-WithReferenceEditorAssets]
+param([switch]$WithReferenceEditorAssets, [switch]$WithDxc)
 
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -33,6 +40,22 @@ if ($WithReferenceEditorAssets) {
             Copy-Item -Recurse "assets\$dir" (Join-Path $app "assets")
         }
     }
+}
+
+if ($WithDxc) {
+    $dxcUrl = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2607/dxc_2026_07_29.zip"
+    $dxcHash = "A1DFB116BA3EEAE6A1582291B53A8E7BF65AD760676BD3194685C8F7367CD241"
+    $dxcZip = Join-Path $dist "dxc_2026_07_29.zip"
+    if (-not (Test-Path $dxcZip)) { Invoke-WebRequest -Uri $dxcUrl -OutFile $dxcZip }
+    $actual = (Get-FileHash -Algorithm SHA256 $dxcZip).Hash
+    if ($actual -ne $dxcHash) { Remove-Item $dxcZip; throw "DXC download hash mismatch: $actual" }
+    $dxcDir = Join-Path $dist "dxc"
+    if (Test-Path $dxcDir) { Remove-Item -Recurse -Force $dxcDir }
+    Expand-Archive -Path $dxcZip -DestinationPath $dxcDir
+    Copy-Item (Join-Path $dxcDir "bin\x64\dxcompiler.dll"), (Join-Path $dxcDir "bin\x64\dxil.dll") $app
+    $licences = Join-Path $app "dxc-licences"
+    New-Item -ItemType Directory -Force -Path $licences | Out-Null
+    Copy-Item (Join-Path $dxcDir "LICENSE-MS.txt"), (Join-Path $dxcDir "LICENSE-LLVM.txt"), (Join-Path $dxcDir "LICENCE-MIT.txt") $licences
 }
 
 $zip = Join-Path $dist "Voxferro-$version-windows-x64.zip"

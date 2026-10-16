@@ -35,6 +35,8 @@ mod scene_ui;
 mod select;
 mod tools;
 mod trace_cache;
+#[cfg(windows)]
+mod windows_graphics;
 
 use camera::OrbitCamera;
 use eframe::{egui, egui_wgpu};
@@ -91,7 +93,9 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     macos_open::install();
 
-    let options = eframe::NativeOptions {
+    // Mutated on Windows only, where the graphics backend is chosen.
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
             .with_title("Voxferro")
@@ -103,6 +107,11 @@ fn main() -> eframe::Result {
             ),
         ..Default::default()
     };
+
+    #[cfg(windows)]
+    if let Some(message) = windows_graphics::configure(&mut options) {
+        eprintln!("[voxferro] {message}");
+    }
 
     eframe::run_native(
         "Voxferro",
