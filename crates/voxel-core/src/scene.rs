@@ -42,6 +42,8 @@ pub struct Scene {
     pub instances: Vec<Instance>,
     pub models: Vec<Volume>,
     pub nodes: Vec<SceneNode>,
+    /// The animation frame `instances` show, and that edits key.
+    pub frame: u32,
 }
 
 impl Scene {
@@ -66,12 +68,12 @@ impl Scene {
             file.nodes.clone()
         };
         let instances = flatten(&nodes, models.len(), frame);
-        Self { instances, models, nodes }
+        Self { instances, models, nodes, frame }
     }
 
     /// Recomputes `instances` after the nodes or the model list changed.
     pub fn rebuild(&mut self) {
-        self.instances = flatten(&self.nodes, self.models.len(), 0);
+        self.instances = flatten(&self.nodes, self.models.len(), self.frame);
     }
 
     /// How many animation frames the file declares, from the largest shape.
@@ -247,8 +249,7 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
 
         match node {
             SceneNode::Transform(t) => {
-                // Frame 0 only: animation playback would pick another.
-                let local = Transform::from_parts(t.rotation_bits(0), t.translation(0));
+                let local = crate::anim::local_at(t, frame);
                 stack.push(Step {
                     id: t.child,
                     transform: local.then(&step.transform),
@@ -272,19 +273,7 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
                 }
             }
             SceneNode::Shape(s) => {
-                // Pick the entry for this frame; fall back to the first when
-                // the shape is not animated.
-                let chosen = s
-                    .models
-                    .iter()
-                    .find(|m| {
-                        m.attributes
-                            .get("_f")
-                            .and_then(|v| v.parse::<u32>().ok())
-                            .is_some_and(|f| f == frame)
-                    })
-                    .or_else(|| s.models.first());
-
+                let chosen = crate::anim::model_at(s, frame);
                 if let Some(m) = chosen {
                     let index = m.model_id as usize;
                     if index < model_count {
@@ -394,6 +383,7 @@ mod tests {
                 })
                 .collect(),
             nodes: Vec::new(),
+            frame: 0,
         }
     }
 

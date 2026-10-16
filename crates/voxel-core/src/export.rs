@@ -169,6 +169,7 @@ mod tests {
                 ..Default::default()
             }],
             nodes: Vec::new(),
+            frame: 0,
         }
     }
 

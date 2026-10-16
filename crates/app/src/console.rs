@@ -39,6 +39,7 @@ pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut Histo
                       move dx dy dz; palette <i> r g b | material <i> <kind> [k=v]; \
                       instance list|select i|move|place|turn|dup|delete|new; \
                       group [i ...] | ungroup | node name|hide|show|move|turn|into; layer list|new|hide|show|name|assign; \
+                      anim play|stop|frame n|fps n|key|unkey|newframe; \
                       camera front|back|left|right|top|bottom|iso|ortho|persp|frame [all|selection|instance]; \
                       open | new | save | export <file.obj>; env …; undo | redo"
                 .to_owned(),

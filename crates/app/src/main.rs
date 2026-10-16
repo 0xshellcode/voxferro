@@ -5,6 +5,7 @@
 //! depth buffer (see `renderer`). On Apple Silicon wgpu emits Metal directly,
 //! so nothing goes through the deprecated OpenGL stack.
 
+mod anim_ui;
 mod camera;
 mod camera_tools;
 mod compute;
@@ -90,6 +91,11 @@ struct App {
     environment: Environment,
     /// Depth of field, for the session: the file format has no key for it.
     dof: bool,
+    /// Animation playback.
+    playing: bool,
+    fps: f32,
+    /// Seconds of playback not yet turned into frames.
+    play_clock: f64,
     /// The render objects `environment` was decoded from.
     environment_source: Vec<vox_format::Dict>,
     /// Environment map names found on disk, listed on first use.
@@ -174,6 +180,9 @@ impl App {
             env_maps: None,
             environment_source: Vec::new(),
             dof: false,
+            playing: false,
+            fps: 10.0,
+            play_clock: 0.0,
             pending_samples: 0,
             status: String::new(),
             selected: 0,
@@ -318,6 +327,7 @@ impl App {
         self.selected = 0;
         self.selection = None;
         self.forget_picks();
+        self.playing = false;
         // Undo steps name models by index: they mean nothing in another
         // file.
         self.history.clear();
@@ -598,6 +608,9 @@ impl App {
         ui.heading("Scene");
         self.scene_ui(ui);
         ui.separator();
+        ui.heading("Animation");
+        self.animation_ui(ui);
+        ui.separator();
         ui.heading("Layers");
         self.layers_ui(ui);
         ui.separator();
@@ -782,6 +795,15 @@ impl App {
             } else {
                 self.group_command(line)
             };
+            self.console_log.push(message);
+            if self.mesh_dirty {
+                self.refresh_document(state);
+            }
+            return;
+        }
+
+        if line.split_whitespace().next() == Some("anim") {
+            let message = self.anim_command(line);
             self.console_log.push(message);
             if self.mesh_dirty {
                 self.refresh_document(state);
@@ -1320,6 +1342,7 @@ impl eframe::App for App {
         self.selection_input(&ctx);
         self.camera_input(&ctx);
         self.move_input(&ctx);
+        self.animate(&ctx);
         self.confirm_ui(&ctx, &state);
         let title = self.title();
         if title != self.window_title {

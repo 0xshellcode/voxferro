@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–27 del [ROADMAP](ROADMAP.md) están completas, con **168 tests
+Las fases 0–28 del [ROADMAP](ROADMAP.md) están completas, con **175 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -27,6 +27,8 @@ verdes**. Funciona hoy:
   (crear, mover, girar, ocultar, disolver, arrastrar en el árbol) y capas con nombre y visibilidad, todo
   guardado en el archivo
 - Paleta y materiales editables desde la interfaz, con undo
+- Animación: reproducir, claves de transformación (interpoladas como en
+  the reference editor a recent version) y fotogramas de forma
 - Exportación a OBJ + MTL + textura de paleta
 - Cámara: encuadrar selección o escena, vistas por eje e isométrica,
   proyección ortográfica (también en el path tracer) y desplazamiento
@@ -81,6 +83,7 @@ Cmd+A, Esc, Supr, Cmd+C/X/V, flechas y Re Pág/Av Pág para moverla.
 | Escena | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
 | Paleta | `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [clave=valor]…` |
 | Grupos y capas | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
+| Animación | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe` |
 | Cámara | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|frame [all\|selection\|instance]` |
 | Render | `env uniform\|atmosphere [elev]\|ibl <mapa> [i] [rot]\|dof [on\|off]\|lens [apertura] [palas] [ángulo]\|bloom [mix] [escala] [aspecto] [umbral]\|vig <v>` |
 

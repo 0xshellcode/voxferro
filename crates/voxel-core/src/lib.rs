@@ -3,6 +3,7 @@
 //! Deliberately free of graphics dependencies: `cargo test -p voxel-core` runs
 //! in under a second instead of rebuilding the wgpu stack.
 
+pub mod anim;
 mod atmosphere;
 pub mod brush;
 mod command;

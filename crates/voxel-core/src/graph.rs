@@ -21,6 +21,8 @@ pub enum GraphError {
     NotAGroup,
     /// A group cannot go inside itself or anything it holds.
     IntoItself,
+    /// No key on this frame, or it is the only one.
+    NoKey,
     /// The root group has nothing above it to dissolve into.
     IsRoot,
 }
@@ -55,6 +57,7 @@ impl std::fmt::Display for GraphError {
             Self::NoGroup => "the scene has no group to add to",
             Self::NotAGroup => "not a group",
             Self::IntoItself => "a group cannot go inside itself",
+            Self::NoKey => "no key on this frame to remove (or it is the only one)",
             Self::IsRoot => "the root group cannot be dissolved",
         })
     }
@@ -103,9 +106,9 @@ impl Scene {
 
     /// The world placement of a transform node: where a group sits.
     pub fn node_world(&self, node: i32) -> Option<Transform> {
-        let parent = parent_transforms(&self.nodes).get(&node).copied()?;
+        let parent = parent_transforms(&self.nodes, self.frame).get(&node).copied()?;
         match find(&self.nodes, node)? {
-            SceneNode::Transform(t) => Some(Transform::from_parts(t.rotation_bits(0), t.translation(0)).then(&parent)),
+            SceneNode::Transform(t) => Some(crate::anim::local_at(t, self.frame).then(&parent)),
             _ => None,
         }
     }
@@ -177,7 +180,7 @@ impl Scene {
         axis: usize,
         times: u32,
     ) -> Result<Vec<SceneNode>, GraphError> {
-        let parents = parent_transforms(&self.nodes);
+        let parents = parent_transforms(&self.nodes, self.frame);
         let parent = parents.get(&node).copied().ok_or(GraphError::NotPlaceable)?;
         let mut nodes = self.nodes.clone();
         let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == node) else {
@@ -187,14 +190,14 @@ impl Scene {
         for _ in 0..times % 4 {
             quarter = quarter_turn(axis) * quarter;
         }
-        let local = Transform::from_parts(t.rotation_bits(0), t.translation(0));
+        let local = crate::anim::local_at(t, self.frame);
         let world = local.then(&parent);
         let turned = Transform {
             rotation: quarter * world.rotation,
             translation: (quarter * (world.translation - centre).as_vec3()).round().as_ivec3() + centre,
         };
         let local = turned.then(&parent.inverse());
-        t.set_placement(local.translation.to_array(), local.rotation_bits());
+        crate::anim::set_local_at(t, self.frame, local);
         Ok(nodes)
     }
 
@@ -203,7 +206,7 @@ impl Scene {
     /// is `None`. Nothing moves in the world: the placement is rewritten
     /// relative to the new parent.
     pub fn with_node_moved_into(&self, node: i32, target: Option<i32>) -> Result<Vec<SceneNode>, GraphError> {
-        let parents = parent_transforms(&self.nodes);
+        let parents = parent_transforms(&self.nodes, self.frame);
         let (group, group_world) = match target {
             Some(target) => {
                 if self.subtree(node).contains(&target) {
@@ -228,9 +231,9 @@ impl Scene {
         let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == node) else {
             return Err(GraphError::NotPlaceable);
         };
-        let world = Transform::from_parts(t.rotation_bits(0), t.translation(0)).then(&parent);
+        let world = crate::anim::local_at(t, self.frame).then(&parent);
         let local = world.then(&group_world.inverse());
-        t.set_placement(local.translation.to_array(), local.rotation_bits());
+        crate::anim::set_local_at(t, self.frame, local);
         for n in &mut nodes {
             if let SceneNode::Group(g) = n {
                 g.children.retain(|&c| c != node);
@@ -242,20 +245,65 @@ impl Scene {
         Ok(compact(nodes))
     }
 
+    /// The nodes with instance `index` showing `model` from `frame` on: a
+    /// shape's frame of animation. A shape that was not animated keeps its
+    /// model as frame 0.
+    pub fn with_shape_frame(&self, index: usize, model: usize, frame: u32) -> Result<Vec<SceneNode>, GraphError> {
+        let node = self.instances.get(index).ok_or(GraphError::NoInstance)?.node.ok_or(GraphError::NotPlaceable)?;
+        let shape = match find(&self.nodes, node) {
+            Some(SceneNode::Transform(t)) => t.child,
+            _ => return Err(GraphError::NotPlaceable),
+        };
+        let mut nodes = self.nodes.clone();
+        let Some(SceneNode::Shape(s)) = nodes.iter_mut().find(|n| n.id() == shape) else {
+            return Err(GraphError::NotPlaceable);
+        };
+        for m in &mut s.models {
+            if m.attributes.get("_f").is_none() {
+                m.attributes.set("_f", "0");
+            }
+        }
+        let keyed = |m: &ShapeModel| m.attributes.get("_f").and_then(|v| v.parse::<u32>().ok()) == Some(frame);
+        match s.models.iter_mut().find(|m| keyed(m)) {
+            Some(m) => m.model_id = model as i32,
+            None => {
+                s.models.push(ShapeModel {
+                    model_id: model as i32,
+                    attributes: Dict(vec![("_f".into(), frame.to_string())]),
+                });
+                s.models.sort_by_key(|m| m.attributes.get("_f").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0));
+            }
+        }
+        Ok(nodes)
+    }
+
+    /// The nodes without the key transform node `node` has on the current
+    /// frame. Its only key cannot go.
+    pub fn with_key_removed(&self, node: i32) -> Result<Vec<SceneNode>, GraphError> {
+        let mut nodes = self.nodes.clone();
+        let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == node) else {
+            return Err(GraphError::NotPlaceable);
+        };
+        if !crate::anim::remove_key(t, self.frame) {
+            return Err(GraphError::NoKey);
+        }
+        Ok(nodes)
+    }
+
     /// The nodes with transform node `node` moved by a world offset. For a
     /// group this moves everything in it.
     pub fn with_node_moved(&self, node: i32, delta: IVec3) -> Result<Vec<SceneNode>, GraphError> {
-        let parents = parent_transforms(&self.nodes);
+        let parents = parent_transforms(&self.nodes, self.frame);
         let parent = parents.get(&node).copied().ok_or(GraphError::NotPlaceable)?;
         let mut nodes = self.nodes.clone();
         let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == node) else {
             return Err(GraphError::NotPlaceable);
         };
-        let local = Transform::from_parts(t.rotation_bits(0), t.translation(0));
+        let local = crate::anim::local_at(t, self.frame);
         let mut world = local.then(&parent);
         world.translation += delta;
         let local = world.then(&parent.inverse());
-        t.set_placement(local.translation.to_array(), local.rotation_bits());
+        crate::anim::set_local_at(t, self.frame, local);
         Ok(nodes)
     }
 
@@ -308,7 +356,7 @@ impl Scene {
         for instance in &instances {
             let local = instance.transform.then(&container_world.inverse());
             if let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| Some(n.id()) == instance.node) {
-                t.set_placement(local.translation.to_array(), local.rotation_bits());
+                crate::anim::set_local_at(t, self.frame, local);
             }
         }
 
@@ -345,7 +393,7 @@ impl Scene {
         let (local, group, layer) = match find(&self.nodes, node) {
             Some(SceneNode::Transform(t)) => match find(&self.nodes, t.child) {
                 Some(SceneNode::Group(g)) => {
-                    (Transform::from_parts(t.rotation_bits(0), t.translation(0)), g.clone(), t.layer)
+                    (crate::anim::local_at(t, self.frame), g.clone(), t.layer)
                 }
                 _ => return Err(GraphError::NotAGroup),
             },
@@ -356,9 +404,9 @@ impl Scene {
         let mut nodes = self.nodes.clone();
         for child in &group.children {
             if let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == *child) {
-                let own = Transform::from_parts(t.rotation_bits(0), t.translation(0));
+                let own = crate::anim::local_at(t, self.frame);
                 let folded = own.then(&local);
-                t.set_placement(folded.translation.to_array(), folded.rotation_bits());
+                crate::anim::set_local_at(t, self.frame, folded);
                 if t.layer < 0 {
                     t.layer = layer;
                 }
@@ -380,7 +428,7 @@ impl Scene {
     pub fn with_instance_placed(&self, index: usize, world: Transform) -> Result<Vec<SceneNode>, GraphError> {
         let instance = self.instances.get(index).ok_or(GraphError::NoInstance)?;
         let mut nodes = self.nodes.clone();
-        place(&mut nodes, instance, world)?;
+        place(&mut nodes, instance, world, self.frame)?;
         Ok(nodes)
     }
 
@@ -412,7 +460,7 @@ impl Scene {
             world.translation += (world.rotation * delta.as_vec3()).round().as_ivec3();
             // An instance without its own node cannot move; skip it rather
             // than fail the whole operation.
-            let _ = place(&mut nodes, instance, world);
+            let _ = place(&mut nodes, instance, world, self.frame);
         }
         nodes
     }
@@ -540,7 +588,7 @@ pub fn quarter_turn(axis: usize) -> Mat3 {
 
 /// The world transform above every reachable transform node: what its own
 /// placement is relative to.
-fn parent_transforms(nodes: &[SceneNode]) -> std::collections::HashMap<i32, Transform> {
+fn parent_transforms(nodes: &[SceneNode], frame: u32) -> std::collections::HashMap<i32, Transform> {
     let mut out = std::collections::HashMap::new();
     let Some(root) = nodes.first().map(SceneNode::id) else { return out };
     let mut stack = vec![(root, Transform::default())];
@@ -553,7 +601,7 @@ fn parent_transforms(nodes: &[SceneNode]) -> std::collections::HashMap<i32, Tran
                 if out.insert(t.id, above).is_some() {
                     continue;
                 }
-                let local = Transform::from_parts(t.rotation_bits(0), t.translation(0));
+                let local = crate::anim::local_at(t, frame);
                 stack.push((t.child, local.then(&above)));
             }
             Some(SceneNode::Group(g)) => stack.extend(g.children.iter().map(|&c| (c, above))),
@@ -567,12 +615,12 @@ fn find(nodes: &[SceneNode], id: i32) -> Option<&SceneNode> {
     nodes.iter().find(|n| n.id() == id)
 }
 
-fn place(nodes: &mut [SceneNode], instance: &Instance, world: Transform) -> Result<(), GraphError> {
+fn place(nodes: &mut [SceneNode], instance: &Instance, world: Transform, frame: u32) -> Result<(), GraphError> {
     let node = instance.node.ok_or(GraphError::NotPlaceable)?;
     let local = world.then(&instance.parent.inverse());
     match nodes.iter_mut().find(|n| n.id() == node) {
         Some(SceneNode::Transform(t)) => {
-            t.set_placement(local.translation.to_array(), local.rotation_bits());
+            crate::anim::set_local_at(t, frame, local);
             Ok(())
         }
         _ => Err(GraphError::NotPlaceable),
@@ -635,7 +683,7 @@ mod tests {
         if let SceneNode::Transform(t) = &mut nodes[0] {
             t.set_placement([100, 0, 0], 0b0000_0100);
         }
-        let mut s = Scene { models, nodes, instances: Vec::new() };
+        let mut s = Scene { models, nodes, instances: Vec::new(), frame: 0 };
         s.rebuild();
         s
     }
@@ -986,6 +1034,32 @@ mod tests {
         assert_eq!(path.len(), 2);
         assert_eq!(path[0], outer);
         assert_eq!(s.groups_above(1), vec![outer]);
+    }
+
+    #[test]
+    fn frames_of_a_shape_and_keys_of_a_transform() {
+        let mut s = scene();
+        let nodes = s.with_shape_frame(0, 1, 3).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(s.instances[0].model_index, 0, "frame 0 keeps its model");
+        s.frame = 5;
+        s.rebuild();
+        assert_eq!(s.instances[0].model_index, 1, "from frame 3 on, the new one");
+
+        // Moving at frame 5 keys the transform there; removing the key undoes it.
+        let before = s.instances[0].transform.translation;
+        let nodes = s.with_instance_moved(0, IVec3::X).unwrap();
+        apply(&mut s, nodes);
+        s.frame = 0;
+        s.rebuild();
+        assert_eq!(s.instances[0].transform.translation, before, "frame 0 unchanged");
+        s.frame = 5;
+        s.rebuild();
+        assert_eq!(s.instances[0].transform.translation, before + IVec3::X);
+        let node = s.instances[0].node.unwrap();
+        let nodes = s.with_key_removed(node).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(s.instances[0].transform.translation, before);
     }
 }
 
