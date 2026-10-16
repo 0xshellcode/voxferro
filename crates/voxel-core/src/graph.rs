@@ -19,6 +19,8 @@ pub enum GraphError {
     NoGroup,
     /// Not a transform node holding a group.
     NotAGroup,
+    /// A group cannot go inside itself or anything it holds.
+    IntoItself,
     /// The root group has nothing above it to dissolve into.
     IsRoot,
 }
@@ -52,6 +54,7 @@ impl std::fmt::Display for GraphError {
             Self::NotPlaceable => "this instance has no transform node of its own",
             Self::NoGroup => "the scene has no group to add to",
             Self::NotAGroup => "not a group",
+            Self::IntoItself => "a group cannot go inside itself",
             Self::IsRoot => "the root group cannot be dissolved",
         })
     }
@@ -105,6 +108,102 @@ impl Scene {
             SceneNode::Transform(t) => Some(Transform::from_parts(t.rotation_bits(0), t.translation(0)).then(&parent)),
             _ => None,
         }
+    }
+
+    /// Transform nodes in the subtree under `node`, itself included.
+    fn subtree(&self, node: i32) -> Vec<i32> {
+        let mut out = Vec::new();
+        let mut stack = vec![node];
+        while let Some(id) = stack.pop() {
+            if out.len() > self.nodes.len() {
+                break; // a cycle in a malformed file
+            }
+            match find(&self.nodes, id) {
+                Some(SceneNode::Transform(t)) => {
+                    out.push(t.id);
+                    stack.push(t.child);
+                }
+                Some(SceneNode::Group(g)) => stack.extend(g.children.iter().copied()),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// The instances under transform node `node`: what a group holds, or
+    /// the instance itself.
+    pub fn instances_under(&self, node: i32) -> Vec<usize> {
+        let ids = self.subtree(node);
+        (0..self.instances.len())
+            .filter(|&i| self.instances[i].node.is_some_and(|n| ids.contains(&n)))
+            .collect()
+    }
+
+    /// The nodes with transform node `node` given a quarter turn about the
+    /// world z axis, around `centre`. For a group that is the middle of what
+    /// it holds, so it turns in place instead of swinging around an origin
+    /// that may be far away.
+    pub fn with_node_turned(&self, node: i32, centre: IVec3) -> Result<Vec<SceneNode>, GraphError> {
+        let parents = parent_transforms(&self.nodes);
+        let parent = parents.get(&node).copied().ok_or(GraphError::NotPlaceable)?;
+        let mut nodes = self.nodes.clone();
+        let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == node) else {
+            return Err(GraphError::NotPlaceable);
+        };
+        let quarter = Mat3::from_cols(glam::Vec3::Y, -glam::Vec3::X, glam::Vec3::Z);
+        let local = Transform::from_parts(t.rotation_bits(0), t.translation(0));
+        let world = local.then(&parent);
+        let turned = Transform {
+            rotation: quarter * world.rotation,
+            translation: (quarter * (world.translation - centre).as_vec3()).round().as_ivec3() + centre,
+        };
+        let local = turned.then(&parent.inverse());
+        t.set_placement(local.translation.to_array(), local.rotation_bits());
+        Ok(nodes)
+    }
+
+    /// Moves transform node `node` (an instance or a group) into the group
+    /// under transform node `target`, or into the root group when `target`
+    /// is `None`. Nothing moves in the world: the placement is rewritten
+    /// relative to the new parent.
+    pub fn with_node_moved_into(&self, node: i32, target: Option<i32>) -> Result<Vec<SceneNode>, GraphError> {
+        let parents = parent_transforms(&self.nodes);
+        let (group, group_world) = match target {
+            Some(target) => {
+                if self.subtree(node).contains(&target) {
+                    return Err(GraphError::IntoItself);
+                }
+                let world = self.node_world(target).ok_or(GraphError::NotAGroup)?;
+                match find(&self.nodes, target) {
+                    Some(SceneNode::Transform(t)) => match find(&self.nodes, t.child) {
+                        Some(SceneNode::Group(g)) => (g.id, world),
+                        _ => return Err(GraphError::NotAGroup),
+                    },
+                    _ => return Err(GraphError::NotAGroup),
+                }
+            }
+            None => {
+                let root = self.nodes.first().map(SceneNode::id).ok_or(GraphError::NoGroup)?;
+                (root_group(&self.nodes).ok_or(GraphError::NoGroup)?, self.node_world(root).unwrap_or_default())
+            }
+        };
+        let parent = parents.get(&node).copied().ok_or(GraphError::NotPlaceable)?;
+        let mut nodes = self.nodes.clone();
+        let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == node) else {
+            return Err(GraphError::NotPlaceable);
+        };
+        let world = Transform::from_parts(t.rotation_bits(0), t.translation(0)).then(&parent);
+        let local = world.then(&group_world.inverse());
+        t.set_placement(local.translation.to_array(), local.rotation_bits());
+        for n in &mut nodes {
+            if let SceneNode::Group(g) = n {
+                g.children.retain(|&c| c != node);
+                if g.id == group {
+                    g.children.push(node);
+                }
+            }
+        }
+        Ok(compact(nodes))
     }
 
     /// The nodes with transform node `node` moved by a world offset. For a
@@ -723,6 +822,68 @@ mod tests {
         let nodes = s.with_node_attribute(node, "_name", Some("car")).unwrap();
         apply(&mut s, nodes);
         assert_eq!(s.tree()[1].name.as_deref(), Some("car"));
+    }
+
+    fn world_of(s: &Scene) -> Vec<(usize, Transform)> {
+        let mut v: Vec<_> = s.instances.iter().map(|i| (i.model_index, i.transform)).collect();
+        v.sort_by_key(|a| a.0);
+        v
+    }
+
+    #[test]
+    fn moving_into_and_out_of_a_group_moves_nothing() {
+        let mut s = scene();
+        let nodes = s.with_grouped(&[0]).unwrap();
+        apply(&mut s, nodes);
+        let group = s.tree().iter().find(|r| r.kind == TreeKind::Group).unwrap().node;
+        // Give the group a placement of its own, so the rewrite matters.
+        let nodes = s.with_node_moved(group, IVec3::new(3, 4, 5)).unwrap();
+        apply(&mut s, nodes);
+        let before = world_of(&s);
+
+        let other = s.instances.iter().position(|i| i.model_index == 1).unwrap();
+        let node = s.instances[other].node.unwrap();
+        let group = s.tree().iter().find(|r| r.kind == TreeKind::Group).unwrap().node;
+        let nodes = s.with_node_moved_into(node, Some(group)).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(world_of(&s), before, "into the group");
+        assert!(s.tree().iter().filter(|r| r.depth == 1).count() == 2);
+        assert_depth_first(&s.nodes);
+
+        let other = s.instances.iter().position(|i| i.model_index == 1).unwrap();
+        let nodes = s.with_node_moved_into(s.instances[other].node.unwrap(), None).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(world_of(&s), before, "back to the root");
+        assert_depth_first(&s.nodes);
+    }
+
+    #[test]
+    fn a_group_cannot_go_into_itself() {
+        let mut s = scene();
+        let nodes = s.with_grouped(&[0, 1]).unwrap();
+        apply(&mut s, nodes);
+        let group = s.tree()[0].node;
+        assert_eq!(s.with_node_moved_into(group, Some(group)), Err(GraphError::IntoItself));
+    }
+
+    #[test]
+    fn turning_a_group_turns_its_contents_around_the_centre() {
+        let mut s = scene();
+        let nodes = s.with_grouped(&[0, 1]).unwrap();
+        apply(&mut s, nodes);
+        let group = s.tree()[0].node;
+        let held = s.instances_under(group);
+        assert_eq!(held.len(), 2);
+        let centre = IVec3::new(100, 0, 0);
+        let before = world_of(&s);
+        let nodes = s.with_node_turned(group, centre).unwrap();
+        apply(&mut s, nodes);
+        let quarter = Mat3::from_cols(glam::Vec3::Y, -glam::Vec3::X, glam::Vec3::Z);
+        for ((_, b), (_, a)) in before.iter().zip(world_of(&s).iter()) {
+            assert_eq!(a.rotation, quarter * b.rotation);
+            let expected = (quarter * (b.translation - centre).as_vec3()).round().as_ivec3() + centre;
+            assert_eq!(a.translation, expected);
+        }
     }
 }
 

@@ -65,11 +65,41 @@ impl App {
                     ("name", words) => scene.with_node_attribute(node, "_name", Some(&words.join(" "))),
                     ("hide", []) => scene.with_node_attribute(node, "_hidden", Some("1")),
                     ("show", []) => scene.with_node_attribute(node, "_hidden", None),
+                    ("turn", []) => {
+                        // Around the middle of what it holds: for a group, the
+                        // mean of its instances' placements, on the grid.
+                        let held = scene.instances_under(node);
+                        if held.is_empty() {
+                            return "nothing to turn".to_owned();
+                        }
+                        let sum = held.iter().fold(glam::Vec3::ZERO, |a, &i| a + scene.instances[i].transform.translation.as_vec3());
+                        let centre = (sum / held.len() as f32).round().as_ivec3();
+                        scene.with_node_turned(node, centre)
+                    }
+                    ("into", [target]) => {
+                        let groups: Vec<i32> =
+                            scene.tree().iter().filter(|r| r.kind == TreeKind::Group).map(|r| r.node).collect();
+                        let target = match *target {
+                            "root" => None,
+                            n => match n.parse::<usize>().ok().and_then(|n| groups.get(n)) {
+                                Some(&g) => Some(g),
+                                None => return format!("there are {} groups", groups.len()),
+                            },
+                        };
+                        let result = scene.with_node_moved_into(node, target);
+                        return match self.exec_graph(result, false) {
+                            Ok(()) => {
+                                self.forget_picks();
+                                "moved in the tree".to_owned()
+                            }
+                            Err(e) => format!("error: {e}"),
+                        };
+                    }
                     ("move", [x, y, z]) => match (x.parse(), y.parse(), z.parse()) {
                         (Ok(x), Ok(y), Ok(z)) => scene.with_node_moved(node, IVec3::new(x, y, z)),
                         _ => return "node move <dx> <dy> <dz>".to_owned(),
                     },
-                    _ => return "node name [text] | hide | show | move dx dy dz".to_owned(),
+                    _ => return "node name [text] | hide | show | move dx dy dz | turn | into <group>|root".to_owned(),
                 };
                 (nodes, false)
             }
@@ -171,7 +201,17 @@ impl App {
         let models: Vec<usize> = loaded.doc.scene.instances.iter().map(|i| i.model_index).collect();
 
         let mut clicked: Option<(TreeRow, bool)> = None;
-        egui::ScrollArea::vertical().max_height(140.0).id_salt("outline").show(ui, |ui| {
+        // A row dragged onto a group (or onto the root line) moves there.
+        let mut dropped: Option<(i32, Option<i32>)> = None;
+        // The scene itself heads the tree, as the drop target for taking
+        // things out of every group.
+        let root = ui.label(egui::RichText::new("scene").italics());
+        if let Some(dragged) = drop_onto(ui, &root) {
+            dropped = Some((dragged, None));
+        }
+        // No scroll area of its own: nested in the panel's, egui sized it to
+        // a few rows and hid the rest. The panel scrolls instead.
+        ui.vertical(|ui| {
             for row in &rows {
                 let (label, on) = match row.kind {
                     TreeKind::Group => (
@@ -196,14 +236,35 @@ impl App {
                     if row.hidden {
                         text = text.weak();
                     }
-                    let response = ui.selectable_label(on, text);
+                    let response = ui.selectable_label(on, text).interact(egui::Sense::click_and_drag());
                     if response.clicked() {
                         let additive = ui.input(|i| i.modifiers.command);
                         clicked = Some((row.clone(), additive));
                     }
+                    if response.drag_started() {
+                        response.dnd_set_drag_payload(TreeDrag(row.node));
+                    }
+                    if row.kind == TreeKind::Group {
+                        if let Some(dragged) = drop_onto(ui, &response) {
+                            dropped = Some((dragged, Some(row.node)));
+                        }
+                    }
                 });
             }
         });
+        if let Some((node, target)) = dropped {
+            if Some(node) != target {
+                let nodes = self.scene.as_ref().map(|s| s.doc.scene.with_node_moved_into(node, target));
+                if let Some(nodes) = nodes {
+                    let message = match self.exec_graph(nodes, false) {
+                        Ok(()) => "moved in the tree".to_owned(),
+                        Err(e) => format!("error: {e}"),
+                    };
+                    self.forget_picks();
+                    self.console_log.push(message);
+                }
+            }
+        }
         if let Some((row, additive)) = clicked {
             match row.kind {
                 TreeKind::Group => {
@@ -271,10 +332,16 @@ impl App {
                     }
                 });
             }
-            if ui.small_button("Ungroup").clicked() {
-                let message = self.group_command("ungroup");
-                log(self, message);
-            }
+            ui.horizontal(|ui| {
+                if ui.small_button("Turn").on_hover_text("A quarter turn about z, around its middle").clicked() {
+                    let message = self.group_command("node turn");
+                    log(self, message);
+                }
+                if ui.small_button("Ungroup").clicked() {
+                    let message = self.group_command("ungroup");
+                    log(self, message);
+                }
+            });
         } else {
             self.instance_ui(ui);
             let count = if self.picked.is_empty() { 1 } else { self.picked.len() };
@@ -402,3 +469,21 @@ impl App {
         }
     }
 }
+
+/// What a dragged outline row carries: its transform node.
+struct TreeDrag(i32);
+
+/// The node dropped on `response` this frame, if any, outlining the target
+/// while something hovers over it.
+fn drop_onto(ui: &egui::Ui, response: &egui::Response) -> Option<i32> {
+    if response.dnd_hover_payload::<TreeDrag>().is_some() {
+        ui.painter().rect_stroke(
+            response.rect,
+            2.0,
+            egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 180, 255)),
+            egui::StrokeKind::Outside,
+        );
+    }
+    response.dnd_release_payload::<TreeDrag>().map(|d| d.0)
+}
+

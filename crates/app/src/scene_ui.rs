@@ -60,6 +60,8 @@ impl App {
             ["select", n] => match n.parse::<usize>() {
                 Ok(n) if n < scene.instances.len() => {
                     self.selected = n;
+                    // An instance is now the target, not a group.
+                    self.selected_group = None;
                     return format!("instance {n} selected");
                 }
                 _ => return format!("instance select <0-{}>", scene.instances.len().saturating_sub(1)),
