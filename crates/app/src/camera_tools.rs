@@ -75,6 +75,14 @@ impl App {
                 self.camera.set_view(View::parse(name).unwrap_or(View::Front));
                 format!("view {name}")
             }
+            ["zoom", f] => match f.parse::<f32>() {
+                Ok(f) if f > 0.0 => {
+                    // Above 1 steps back, below 1 moves in.
+                    self.camera.zoom(f);
+                    format!("zoom {f}")
+                }
+                _ => return "camera zoom <factor>".to_owned(),
+            },
             ["ortho"] => {
                 self.camera.ortho = true;
                 "orthographic".to_owned()
@@ -106,7 +114,7 @@ impl App {
                     None => format!("nothing to frame ({name})"),
                 }
             }
-            _ => return "camera front|back|left|right|top|bottom|iso | ortho | persp | frame [all|selection|group|instance]".to_owned(),
+            _ => return "camera front|back|left|right|top|bottom|iso | ortho | persp | zoom <f> | frame [all|selection|group|instance]".to_owned(),
         };
         self.path_tracer.reset();
         message

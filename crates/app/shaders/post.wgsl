@@ -18,7 +18,8 @@ struct Post {
     sample_count: u32,
     reset: u32,
 
-    // x: exposure, y: vignette, z: gamma, w: ACES on (1) or off (0).
+    // x: exposure, y: vignette exponent (`_vig^2 * 5`), z: gamma, w: ACES
+    // on (1) or off (0).
     film: vec4<f32>,
     // x: mix, y: threshold, z: radius in pixels, w: stretch along the axis.
     bloom: vec4<f32>,
@@ -89,11 +90,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     color = color * q.film.x;
 
-    // Vignette: darken toward the corners, by the square of the distance
-    // from the centre over the half diagonal.
-    let uv = (vec2<f32>(gid.xy) + vec2<f32>(0.5)) / vec2<f32>(q.resolution) * 2.0 - vec2<f32>(1.0);
-    let corner = dot(uv, uv) * 0.5;
-    color = color * max(1.0 - q.film.y * corner, 0.0);
+    // Vignette. The editor uploads `vig = _vig^2 * 5` (EvalPost); a 0..5
+    // range reads as an exponent, so it shapes the usual 16uv(1-u)(1-v)
+    // falloff -- 1 in the middle, 0 at the corners. The form is this
+    // renderer's reading; the uniform's scale is the editor's.
+    let uv = (vec2<f32>(gid.xy) + vec2<f32>(0.5)) / vec2<f32>(q.resolution);
+    let falloff = 16.0 * uv.x * uv.y * (1.0 - uv.x) * (1.0 - uv.y);
+    if (q.film.y > 0.0) {
+        color = color * pow(max(falloff, 0.0), q.film.y);
+    }
 
     if (q.film.w > 0.5) {
         // ACES filmic tone curve, the editor's default.

@@ -92,7 +92,7 @@ impl Default for Environment {
             sky_color: Vec3::ONE,
             sky_intensity: 1.0,
             sun_angular_radius: 0.07,
-            exposure: 0.35,
+            exposure: EXPOSURE_SCALE,
             // `_bounce._diffuse` in a file the editor saved with defaults.
             bounces: 2,
             ground_enabled: true,
@@ -214,7 +214,7 @@ impl Environment {
                         env.sky_color = Vec3::from_array(k) / 255.0;
                     }
                     if let Some(i) = object.get("_i").and_then(|v| v.parse::<f32>().ok()) {
-                        env.sky_intensity = i.max(0.0);
+                        env.sky_intensity = (i * SKY_SCALE_UNIFORM).max(0.0);
                     }
                 }
                 Some("_ground") => {
@@ -291,7 +291,7 @@ impl Environment {
                     let number = |k: &str| object.get(k).and_then(|v| v.parse::<f32>().ok());
                     if let Some(e) = number("_expo") {
                         // The editor's exposure is an EV-like stop value.
-                        env.exposure = (e / 3.0).clamp(0.05, 20.0);
+                        env.exposure = (e * EXPOSURE_SCALE).clamp(0.01, 20.0);
                     }
                     if let Some(v) = number("_vig") {
                         env.vignette = v.clamp(0.0, 1.0);
@@ -377,7 +377,7 @@ impl Environment {
         sun.set("_area", num(self.sun_angular_radius));
 
         let sky = object(&mut out, "_uni");
-        sky.set("_i", num(self.sky_intensity));
+        sky.set("_i", num(self.sky_intensity / SKY_SCALE_UNIFORM));
         sky.set("_k", rgb255(self.sky_color));
 
         let mode = if self.ibl_enabled {
@@ -425,7 +425,7 @@ impl Environment {
         }
 
         let film = object(&mut out, "_film");
-        film.set("_expo", num(self.exposure * 3.0));
+        film.set("_expo", num(self.exposure / EXPOSURE_SCALE));
         film.set("_vig", num(self.vignette));
         film.set("_aces", if self.aces { "1" } else { "0" });
         film.set("_gam", num(self.gamma));
@@ -494,6 +494,22 @@ struct GpuMaterial {
 pub fn emission_strength(emission: f32, flux: f32) -> f32 {
     1.0 + 3.0 * emission * 10f32.powf(flux)
 }
+
+/// `_film._expo` to the multiplier applied before the tone curve.
+///
+/// The editor uploads `_expo` unchanged (`the reference renderer`, uniform
+/// `expo`); how its shader applies it is not in the binary, and this
+/// tracer's light units are its own. Measured instead: a white box on the
+/// default ground under the default sun and sky, rendered in the editor and
+/// here, read in linear light (tone curve and gamma undone) -- the editor
+/// was 1.55 times brighter than the earlier `_expo / 3`.
+pub const EXPOSURE_SCALE: f32 = 0.54;
+
+/// `_uni._i` to the uniform sky's radiance. From the same measurement: with
+/// the exposure matched, the editor's sky pixel was 1.12 times this one's,
+/// and its shadowed ground (lit by the sky alone) brighter by about as much
+/// more than its sunlit ground.
+pub const SKY_SCALE_UNIFORM: f32 = 1.12;
 
 /// A medium's `_d` as extinction per voxel.
 ///
@@ -1189,12 +1205,14 @@ impl PathTracer {
             reset: reset as u32,
             film: [
                 environment.exposure,
-                environment.vignette,
+                // As the reference renderer uploads them: `vig` is
+                // `_vig^2 * 5`, `bloom` is `_mix * 0.7`.
+                environment.vignette * environment.vignette * 5.0,
                 environment.gamma,
                 environment.aces as u32 as f32,
             ],
             bloom: [
-                environment.bloom_mix,
+                environment.bloom_mix * 0.7,
                 environment.bloom_threshold,
                 environment.bloom_scale * 200.0 + 1.0,
                 2f32.powf(environment.bloom_aspect * 4.0),
@@ -1518,7 +1536,7 @@ mod tests {
     fn defaults_match_the_editor() {
         let d = Environment::default();
         assert_eq!(d.sky_color, Vec3::ONE, "white sky, as the editor opens");
-        assert!((d.sky_intensity - 0.7).abs() < 1e-6);
+        assert!((d.sky_intensity - 0.7 * SKY_SCALE_UNIFORM).abs() < 1e-6);
         // _angle 50 50: azimuth 50, elevation 50 degrees.
         assert!((d.sun_direction.z - 50f32.to_radians().sin()).abs() < 1e-5);
     }
@@ -1556,7 +1574,8 @@ mod tests {
         assert!((back.sun_direction - env.sun_direction).length() < 1e-3);
         assert!((back.sun_intensity - env.sun_intensity).abs() < 1e-3);
         assert!((back.sun_color - env.sun_color).length() < 0.01);
-        assert!((back.sky_intensity - 0.4).abs() < 1e-6);
+        // The file keeps four decimals of `_i`, scaled back on reading.
+        assert!((back.sky_intensity - 0.4).abs() < 1e-3);
         assert!(back.atmosphere_enabled && !back.ibl_enabled);
         assert!((back.atmosphere.mie_g - 0.7).abs() < 1e-6);
         assert!(!back.ground_enabled, "the _setting switch was updated too");
