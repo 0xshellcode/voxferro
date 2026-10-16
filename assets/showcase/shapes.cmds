@@ -1,0 +1,34 @@
+# Shapes from Voxferro's GPU kernels, with metal, glass and emissive materials.
+new 112 80 2
+palette 20 230 180 80
+palette 21 200 225 255
+palette 22 255 150 60
+palette 23 200 60 70
+palette 24 225 225 230
+palette 25 90 110 140
+material 20 metal metal=1 rough=0.08
+material 21 glass rough=0.02 ior=1.5 density=0.2
+material 22 emit emit=0.6 flux=1
+material 23 metal metal=0.3 rough=0.3
+box 0 0 0 111 79 1 24
+# A gold torus.
+instance new 44 44 14
+gpu torus 20 17 5
+instance place -30 -8 14
+instance turn x
+# A glass shell with a glowing core.
+instance new 34 34 34
+gpu shell 21 15 2
+instance place 4 4 18
+instance new 34 34 34
+gpu sphere 22 6
+instance place 4 4 18
+# A rounded box.
+instance new 26 26 26
+gpu box 23 11 3
+instance place 38 14 14
+env atmosphere 50
+camera iso
+camera persp
+camera frame all
+camera zoom 0.75
