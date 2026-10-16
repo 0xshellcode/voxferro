@@ -47,10 +47,10 @@ impl App {
         self.environment.dof = self.dof;
         // The render camera's field of view is a lens setting.
         self.camera.fov_y = self.environment.lens_fov.to_radians();
-        if let Some(message) = self.ensure_env_map(state) {
-            if message.contains("not found") {
-                self.console_log.push(message);
-            }
+        if let Some(message) = self.ensure_env_map(state)
+            && message.contains("not found")
+        {
+            self.console_log.push(message);
         }
         self.path_tracer.reset();
     }

@@ -188,6 +188,15 @@ impl Volume {
         any.then_some((min, max))
     }
 
+    /// How many voxels use each palette index (slot 0 counts empty cells).
+    pub fn histogram(&self) -> [u64; 256] {
+        let mut counts = [0u64; 256];
+        for &v in &self.voxels {
+            counts[v as usize] += 1;
+        }
+        counts
+    }
+
     /// Number of non-empty voxels.
     pub fn filled_count(&self) -> usize {
         self.voxels.iter().filter(|&&v| v != 0).count()

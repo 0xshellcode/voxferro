@@ -55,10 +55,10 @@ impl App {
     /// group when it holds the instance, otherwise the instance's own node.
     fn move_target(&self, index: usize) -> Option<i32> {
         let scene = &self.scene.as_ref()?.doc.scene;
-        if let Some(group) = self.selected_group {
-            if scene.instances_under(group).contains(&index) {
-                return Some(group);
-            }
+        if let Some(group) = self.selected_group
+            && scene.instances_under(group).contains(&index)
+        {
+            return Some(group);
         }
         scene.instances.get(index)?.node
     }

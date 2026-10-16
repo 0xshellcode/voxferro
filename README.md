@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–34 del [ROADMAP](ROADMAP.md) están completas, con **185 tests
+Las fases 0–35 del [ROADMAP](ROADMAP.md) están completas, con **189 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -58,6 +58,14 @@ cargo run -p voxferro -- --run "gpu torus 166 40 14 replace" --run "save out.vox
 cargo run -p voxferro -- assets/vox/monu1.vox --render-mode           # abre en modo Render
 cargo run -p voxferro -- assets/vox/monu1.vox --render 200 --screenshot out.bmp
 cargo run -p voxferro -- --run "new 16" --run "brush attach box" --drag 0.3 0.7 0.6 0.8 --screenshot out.bmp
+```
+
+Para que un agente use el editor por MCP (solo en `127.0.0.1`, apagado por
+defecto; también se enciende desde la sección *Agents (MCP)* del panel):
+
+```bash
+cargo run -p voxferro -- --mcp                          # escucha en 127.0.0.1:47800
+claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp
 ```
 
 Como aplicación de macOS, con su icono:

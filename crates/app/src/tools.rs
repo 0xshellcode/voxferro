@@ -61,10 +61,10 @@ impl App {
         let Some(stroke) = &self.stroke else { return };
         match self.brush_shape {
             BrushShape::Box | BrushShape::Line => {
-                if let Some(end) = self.project_to_stroke_plane(ray) {
-                    if end != stroke.end {
-                        self.update_preview(end);
-                    }
+                if let Some(end) = self.project_to_stroke_plane(ray)
+                    && end != stroke.end
+                {
+                    self.update_preview(end);
                 }
             }
             BrushShape::Voxel => {
@@ -72,16 +72,16 @@ impl App {
                 // afresh would hit the voxel just added and stack toward the
                 // camera. Erasing and painting follow the surface.
                 if self.brush_mode == BrushMode::Attach {
-                    if let Some(cell) = self.project_to_stroke_plane(ray) {
-                        if cell != stroke.end {
-                            let hit = stroke.hit;
-                            self.apply_at(hit, cell);
-                        }
+                    if let Some(cell) = self.project_to_stroke_plane(ray)
+                        && cell != stroke.end
+                    {
+                        let hit = stroke.hit;
+                        self.apply_at(hit, cell);
                     }
-                } else if let Some((instance, hit)) = self.pick_visible(ray) {
-                    if instance == stroke.instance && hit.voxel != stroke.end {
-                        self.apply_at(hit, hit.voxel);
-                    }
+                } else if let Some((instance, hit)) = self.pick_visible(ray)
+                    && instance == stroke.instance && hit.voxel != stroke.end
+                {
+                    self.apply_at(hit, hit.voxel);
                 }
             }
             // One click does the whole job.

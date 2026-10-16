@@ -47,9 +47,59 @@ pub fn write_bmp(path: &str, width: u32, height: u32, rgba: &[u8]) -> std::io::R
     out.flush()
 }
 
+/// Scales RGBA pixels down so neither side exceeds `max`, averaging the
+/// source pixels each output pixel covers. Smaller images are returned as
+/// they are.
+pub fn fit(width: u32, height: u32, rgba: &[u8], max: u32) -> (u32, u32, Vec<u8>) {
+    let scale = (width.max(height) as f32 / max as f32).max(1.0);
+    if scale == 1.0 {
+        return (width, height, rgba.to_vec());
+    }
+    let (w, h) = (((width as f32 / scale) as u32).max(1), ((height as f32 / scale) as u32).max(1));
+    let mut out = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        let (y0, y1) = ((y as f32 * scale) as u32, (((y + 1) as f32 * scale) as u32).min(height));
+        for x in 0..w {
+            let (x0, x1) = ((x as f32 * scale) as u32, (((x + 1) as f32 * scale) as u32).min(width));
+            let mut sum = [0u32; 4];
+            for sy in y0..y1.max(y0 + 1) {
+                for sx in x0..x1.max(x0 + 1) {
+                    let i = ((sy * width + sx) * 4) as usize;
+                    for c in 0..4 {
+                        sum[c] += rgba[i + c] as u32;
+                    }
+                }
+            }
+            let n = (y1.max(y0 + 1) - y0) * (x1.max(x0 + 1) - x0);
+            let o = ((y * w + x) * 4) as usize;
+            for c in 0..4 {
+                out[o + c] = (sum[c] / n) as u8;
+            }
+        }
+    }
+    (w, h, out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fit_halves_by_averaging() {
+        // 4x2: left half black, right half white.
+        let mut rgba = Vec::new();
+        for _ in 0..2 {
+            for x in 0..4 {
+                let v = if x < 2 { 0 } else { 200 };
+                rgba.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let (w, h, out) = fit(4, 2, &rgba, 2);
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(&out[..4], &[0, 0, 0, 255]);
+        assert_eq!(&out[4..], &[200, 200, 200, 255]);
+        assert_eq!(fit(4, 2, &rgba, 8).2, rgba, "small enough already");
+    }
 
     type Pixel = (u8, u8, u8);
     type Decoded = (u32, u32, Vec<Vec<Pixel>>);

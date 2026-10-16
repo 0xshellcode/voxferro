@@ -277,25 +277,25 @@ impl App {
                     if response.drag_started() {
                         response.dnd_set_drag_payload(TreeDrag(row.node));
                     }
-                    if row.kind == TreeKind::Group {
-                        if let Some(dragged) = drop_onto(ui, &response) {
-                            dropped = Some((dragged, Some(row.node)));
-                        }
+                    if row.kind == TreeKind::Group
+                        && let Some(dragged) = drop_onto(ui, &response)
+                    {
+                        dropped = Some((dragged, Some(row.node)));
                     }
                 });
             }
         });
-        if let Some((node, target)) = dropped {
-            if Some(node) != target {
-                let nodes = self.scene.as_ref().map(|s| s.doc.scene.with_node_moved_into(node, target));
-                if let Some(nodes) = nodes {
-                    let message = match self.exec_graph(nodes, false) {
-                        Ok(()) => "moved in the tree".to_owned(),
-                        Err(e) => format!("error: {e}"),
-                    };
-                    self.forget_picks();
-                    self.console_log.push(message);
-                }
+        if let Some((node, target)) = dropped
+            && Some(node) != target
+        {
+            let nodes = self.scene.as_ref().map(|s| s.doc.scene.with_node_moved_into(node, target));
+            if let Some(nodes) = nodes {
+                let message = match self.exec_graph(nodes, false) {
+                    Ok(()) => "moved in the tree".to_owned(),
+                    Err(e) => format!("error: {e}"),
+                };
+                self.forget_picks();
+                self.console_log.push(message);
             }
         }
         if let Some((row, additive)) = clicked {
@@ -357,10 +357,10 @@ impl App {
                             .scene
                             .as_ref()
                             .map(|s| s.doc.scene.with_node_moved(group, p - world.translation));
-                        if let Some(nodes) = nodes {
-                            if let Err(e) = self.exec_graph(nodes, true) {
-                                log(self, format!("error: {e}"));
-                            }
+                        if let Some(nodes) = nodes
+                            && let Err(e) = self.exec_graph(nodes, true)
+                        {
+                            log(self, format!("error: {e}"));
                         }
                     }
                 });

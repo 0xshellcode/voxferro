@@ -14,6 +14,8 @@ mod edit;
 mod files;
 mod icon;
 mod image_out;
+mod mcp;
+mod mcp_ui;
 mod palette_ui;
 mod move_tool;
 mod outline;
@@ -174,6 +176,13 @@ struct App {
     screenshot: Option<String>,
     /// Write the screenshot as the app icon (`--icon`).
     write_icon: bool,
+    /// The MCP server, while switched on, and the port it takes.
+    mcp: Option<mcp::Server>,
+    mcp_port: u16,
+    /// An agent's write over an existing file, waiting for the user.
+    mcp_write: Option<mcp_ui::PendingWrite>,
+    /// An agent's capture, waiting for its frame.
+    mcp_capture: Option<mcp_ui::PendingCapture>,
     /// Strokes given on the command line (`--click`, `--drag`), as press and
     /// release points in fractions of the viewport. They run on the first
     /// frame, once the viewport's size is known, through the same calls a
@@ -230,6 +239,10 @@ impl App {
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
             screenshot: None,
             write_icon: false,
+            mcp: None,
+            mcp_port: mcp::DEFAULT_PORT,
+            mcp_write: None,
+            mcp_capture: None,
             scripted_strokes: Vec::new(),
             saved_revision: 0,
             confirm: None,
@@ -258,7 +271,7 @@ impl App {
 
         // Usage: voxferro [model.vox] [--run "<command>"]... [--render-mode]
         //           [--camera azimuth elevation] [--render N]
-        //           [--screenshot out.bmp] [--icon out.png]
+        //           [--screenshot out.bmp] [--icon out.png] [--mcp [port]]
         let args: Vec<String> = std::env::args().skip(1).collect();
         let screenshot = args
             .iter()
@@ -352,6 +365,14 @@ impl App {
         // --render-mode opens straight into the path tracer, interactively.
         if args.iter().any(|a| a == "--render-mode") {
             app.rendering = true;
+        }
+
+        // --mcp [port]: let agents use the editor from the start.
+        if let Some(i) = args.iter().position(|a| a == "--mcp") {
+            if let Some(port) = args.get(i + 1).and_then(|p| p.parse::<u16>().ok()) {
+                app.mcp_port = port;
+            }
+            app.start_mcp(&cc.egui_ctx);
         }
 
         if let Some(samples) = render_samples {
@@ -566,28 +587,26 @@ impl App {
                 self.request(files::Discarding::Open(None), &ctx, state);
             }
             let has_doc = self.scene.is_some();
-            if ui.add_enabled(has_doc, egui::Button::new("Save")).on_hover_text("Cmd+S").clicked() {
-                if let Some(m) = self.save() {
-                    self.console_log.push(m);
-                }
+            if ui.add_enabled(has_doc, egui::Button::new("Save")).on_hover_text("Cmd+S").clicked()
+                && let Some(m) = self.save()
+            {
+                self.console_log.push(m);
             }
             if ui
                 .add_enabled(has_doc, egui::Button::new("Save as…"))
                 .on_hover_text("Cmd+Shift+S")
                 .clicked()
+                && let Some(m) = self.save_as()
             {
-                if let Some(m) = self.save_as() {
-                    self.console_log.push(m);
-                }
+                self.console_log.push(m);
             }
             if ui
                 .add_enabled(has_doc, egui::Button::new("Export OBJ…"))
                 .on_hover_text("Merged faces, Y up, with a palette texture")
                 .clicked()
+                && let Some(m) = self.export_obj(None)
             {
-                if let Some(m) = self.export_obj(None) {
-                    self.console_log.push(m);
-                }
+                self.console_log.push(m);
             }
         });
         ui.label(&self.status);
@@ -709,6 +728,7 @@ impl App {
 
         ui.separator();
         self.console_ui(ui, state);
+        self.mcp_panel(ui);
 
         ui.separator();
         ui.label("Drag on the model to edit, elsewhere (or right-drag) to orbit.");
@@ -817,7 +837,10 @@ impl App {
         if line.trim().is_empty() {
             return;
         }
-        self.console_log.push(format!("> {line}"));
+        // A long line (an agent's list of voxels) is shortened in the log.
+        let shown: String = line.chars().take(120).collect();
+        let more = if shown.len() < line.len() { " …" } else { "" };
+        self.console_log.push(format!("> {shown}{more}"));
 
         if line.split_whitespace().next() == Some("env") {
             let message = self.env_command(line, state);
@@ -1160,18 +1183,18 @@ impl App {
                     });
                 self.orbiting = !hit;
             }
-            if down && (self.stroke.is_some() || self.select_drag.is_some() || self.move_drag.is_some()) {
-                if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                    let ray = ray_at(&self.camera, pos);
-                    if self.move_drag.is_some() {
-                        self.update_move(ray, pos.x);
-                    } else if self.select_drag.is_some() {
+            if down && (self.stroke.is_some() || self.select_drag.is_some() || self.move_drag.is_some())
+                && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+            {
+                let ray = ray_at(&self.camera, pos);
+                if self.move_drag.is_some() {
+                self.update_move(ray, pos.x);
+            } else if self.select_drag.is_some() {
                         self.update_select(ray, pos);
                     } else {
                         self.update_stroke(ray);
                     }
                 }
-            }
             // The factor turns pixels into a comfortable radians-per-pixel
             // rate.
             // Shift turns an orbit into a pan, and the middle button always
@@ -1278,16 +1301,16 @@ impl App {
             egui::Color32::WHITE,
         );
 
-        if let Some(drag) = &self.select_drag {
-            if self.brush_shape == voxel_core::BrushShape::Box {
-                let marquee = egui::Rect::from_two_pos(drag.from, drag.to);
-                ui.painter().rect_stroke(
-                    marquee,
-                    0.0,
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 180, 255)),
-                    egui::StrokeKind::Inside,
-                );
-            }
+        if let Some(drag) = &self.select_drag
+            && self.brush_shape == voxel_core::BrushShape::Box
+        {
+            let marquee = egui::Rect::from_two_pos(drag.from, drag.to);
+            ui.painter().rect_stroke(
+                marquee,
+                0.0,
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 180, 255)),
+                egui::StrokeKind::Inside,
+            );
         }
 
         // The selected group's box, so a group picked with Option+click (or in
@@ -1332,6 +1355,7 @@ fn positional_args(args: &[String]) -> Vec<String> {
     while i < args.len() {
         let skip = match args[i].as_str() {
             "--run" | "--script" | "--screenshot" | "--icon" | "--render" => 1,
+            "--mcp" if args.get(i + 1).is_some_and(|p| p.parse::<u16>().is_ok()) => 1,
             "--camera" | "--click" => 2,
             "--drag" => 4,
             a if a.starts_with("--") => 0,
@@ -1416,6 +1440,8 @@ impl eframe::App for App {
         self.move_input(&ctx);
         self.animate(&ctx);
         self.confirm_ui(&ctx, &state);
+        self.mcp_poll(&ctx, &state);
+        self.mcp_confirm_ui(&ctx, &state);
         let title = self.title();
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
@@ -1432,6 +1458,7 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ui, |ui| self.viewport(ui, &state));
         self.export_step(&ctx, &state);
+        self.mcp_finish_capture(&ctx, &state);
 
         // Releasing the button ends whatever gesture was being merged: a
         // colour or material slider drag, as well as a stroke.

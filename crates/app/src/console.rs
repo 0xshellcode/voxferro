@@ -32,7 +32,7 @@ pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut Histo
     // Keep verbs aligned with the editor's own vocabulary where they overlap.
     match verb {
         "help" => Outcome::Ok {
-            message: "model: fill <c> | clear | box <x0..z1 c> | sphere <c> | gpu <shape> | \
+            message: "model: fill <c> | clear | box <x0..z1 c> | voxels <x y z c>... | sphere <c> | gpu <shape> | \
                       rotate|mirror x|y|z | crop | resize x y z; \
                       brush [attach|erase|paint|select] [voxel|box|line|face|fill] | color <n>; \
                       select all|none|invert|color [n] | delete | paint | copy | cut | paste | \
@@ -92,6 +92,34 @@ pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut Histo
                 }
             }
             apply(doc, model, history, writes, "box")
+        }
+
+        // Single voxels, four numbers each: x y z colour (0 erases). One
+        // undo step for the whole list; what agents use to build by hand.
+        "voxels" => {
+            if args.is_empty() || !args.len().is_multiple_of(4) {
+                return Outcome::Error("voxels needs x y z colour, repeated".to_owned());
+            }
+            let [sx, sy, sz] = volume.size();
+            let mut writes = Vec::with_capacity(args.len() / 4);
+            for v in args.chunks(4) {
+                let p: Result<Vec<i32>, _> = v[..3].iter().map(|a| a.parse::<i32>()).collect();
+                let Ok(p) = p else {
+                    return Outcome::Error(format!("'{}' is not a voxel position", v[..3].join(" ")));
+                };
+                if p[0] < 0 || p[1] < 0 || p[2] < 0 || p[0] as u32 >= sx || p[1] as u32 >= sy || p[2] as u32 >= sz {
+                    return Outcome::Error(format!(
+                        "voxel {} {} {} is outside the {sx}x{sy}x{sz} model",
+                        p[0], p[1], p[2]
+                    ));
+                }
+                let color = match parse_color(v.get(3)) {
+                    Ok(c) => c,
+                    Err(e) => return Outcome::Error(e),
+                };
+                writes.push((IVec3::new(p[0], p[1], p[2]), color));
+            }
+            apply(doc, model, history, writes, "voxels")
         }
 
         "sphere" => {
@@ -222,6 +250,19 @@ mod tests {
             Outcome::Error(_)
         ));
         assert!(matches!(run("box 1 2", &mut d, &mut h), Outcome::Error(_)));
+    }
+
+    #[test]
+    fn voxels_sets_each_cell_and_rejects_cells_outside() {
+        let (mut d, mut h) = setup();
+        run("voxels 0 0 0 5 7 7 7 6 1 1 1 0", &mut d, &mut h);
+        assert_eq!(get(&d, 0, 0, 0), 5);
+        assert_eq!(get(&d, 7, 7, 7), 6);
+        assert_eq!(get(&d, 1, 1, 1), 0, "colour 0 erases");
+        assert!(matches!(run("voxels 8 0 0 1", &mut d, &mut h), Outcome::Error(_)));
+        assert!(matches!(run("voxels 1 2 3", &mut d, &mut h), Outcome::Error(_)));
+        h.undo(&mut d);
+        assert_eq!(get(&d, 1, 1, 1), 3, "one undo step for the list");
     }
 
     #[test]

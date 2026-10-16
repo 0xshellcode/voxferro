@@ -177,15 +177,15 @@ impl App {
                 cmd && i.key_pressed(egui::Key::N),
             )
         });
-        if save {
-            if let Some(m) = self.save() {
-                self.console_log.push(m);
-            }
+        if save
+            && let Some(m) = self.save()
+        {
+            self.console_log.push(m);
         }
-        if save_as {
-            if let Some(m) = self.save_as() {
-                self.console_log.push(m);
-            }
+        if save_as
+            && let Some(m) = self.save_as()
+        {
+            self.console_log.push(m);
         }
         if open {
             self.request(Discarding::Open(None), ctx, state);

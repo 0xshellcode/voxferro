@@ -3,7 +3,8 @@ name = "voxferro"
 description = "Voxel editor built on wgpu and egui"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# rmcp 3.5 needs 1.88; the other crates keep the workspace minimum.
+rust-version = "1.88"
 
 [[bin]]
 name = "voxferro"
@@ -25,3 +26,13 @@ wgpu = "30"
 # Native open/save panels (NSOpenPanel on macOS). Default features only pull
 # Linux portal support, which does not build anything on macOS.
 rfd = "0.17"
+
+# Control by MCP (src/mcp.rs): the official Rust SDK, served over
+# streamable HTTP with axum on a tokio runtime of its own thread.
+rmcp = { version = "3.5.1", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+tokio = { version = "1", features = ["rt", "net", "sync", "time"] }
+tokio-util = "0.7"
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"

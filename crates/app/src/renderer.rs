@@ -431,7 +431,7 @@ impl SceneRenderer {
             self.color_format,
             wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
         ) {
-            for pixel in out.chunks_exact_mut(4) {
+            for pixel in out.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
             }
         }

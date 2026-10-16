@@ -73,10 +73,10 @@ impl App {
         if matches!(self.brush_shape, BrushShape::Voxel | BrushShape::Line) {
             let instance = drag.instance;
             let combine = if drag.combine == Combine::Subtract { Combine::Subtract } else { Combine::Add };
-            if let Some((i, hit)) = self.pick_any(ray) {
-                if i == instance {
-                    self.combine_selection(instance, vec![hit.voxel], combine);
-                }
+            if let Some((i, hit)) = self.pick_any(ray)
+                && i == instance
+            {
+                self.combine_selection(instance, vec![hit.voxel], combine);
             }
         }
     }

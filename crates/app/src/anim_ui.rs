@@ -303,13 +303,13 @@ impl App {
                     let to = frame_at(pos.x);
                     let moved = self.scene.as_ref().map(|s| s.doc.scene.with_key_moved(node, from, to, shape));
                     // Onto a taken frame it simply waits; past it, it moves.
-                    if let Some(Ok(nodes)) = moved {
-                        if self.exec_graph(Ok(nodes), true).is_ok() {
-                            if let Some(drag) = &mut self.key_drag {
-                                drag.frame = to;
-                            }
-                            self.set_frame(to);
+                    if let Some(Ok(nodes)) = moved
+                        && self.exec_graph(Ok(nodes), true).is_ok()
+                    {
+                        if let Some(drag) = &mut self.key_drag {
+                            drag.frame = to;
                         }
+                        self.set_frame(to);
                     }
                 }
             } else if response.clicked() || response.dragged() {
@@ -395,10 +395,10 @@ impl App {
                     }
                 }
                 None => {
-                    if ui.small_button("Export frames…").on_hover_text("Path trace every frame of the range to PNG files").clicked() {
-                        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                            lines.push(format!("anim export {} {}", dir.display(), self.export_samples));
-                        }
+                    if ui.small_button("Export frames…").on_hover_text("Path trace every frame of the range to PNG files").clicked()
+                        && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                    {
+                        lines.push(format!("anim export {} {}", dir.display(), self.export_samples));
                     }
                     ui.add(egui::DragValue::new(&mut self.export_samples).range(1..=4096).suffix(" samples"));
                 }

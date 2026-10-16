@@ -418,10 +418,10 @@ impl Environment {
         ground.set("_enable", if self.ground_enabled { "1" } else { "0" });
         // Version 150 switches the ground in `_setting`; when that object
         // carries the switch it must agree, or it would win on reading.
-        if let Some(setting) = out.iter_mut().find(|o| o.get("_type") == Some("_setting")) {
-            if setting.get("_ground").is_some() {
-                setting.set("_ground", if self.ground_enabled { "1" } else { "0" });
-            }
+        if let Some(setting) = out.iter_mut().find(|o| o.get("_type") == Some("_setting"))
+            && setting.get("_ground").is_some()
+        {
+            setting.set("_ground", if self.ground_enabled { "1" } else { "0" });
         }
 
         let film = object(&mut out, "_film");
@@ -608,7 +608,7 @@ impl Environment {
     pub fn bloom_star(&self) -> (u32, f32, f32) {
         let n = self.blades;
         let (directions, step) = if n > 2 {
-            let d = if n % 2 == 0 { n / 2 } else { n };
+            let d = if n.is_multiple_of(2) { n / 2 } else { n };
             (d, std::f32::consts::PI / d as f32)
         } else {
             (1, 0.0)
