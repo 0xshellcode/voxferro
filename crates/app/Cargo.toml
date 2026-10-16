@@ -3,6 +3,7 @@ name = "voxferro"
 description = "Voxel editor built on wgpu and egui"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 # rmcp 3.5 needs 1.88; the other crates keep the workspace minimum.
 rust-version = "1.88"
 

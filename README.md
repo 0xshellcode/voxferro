@@ -1,6 +1,8 @@
 # Voxferro
 
-Editor de voxels en Rust, nativo para Apple Silicon, compatible con el formato
+![Icono de Voxferro](assets/icon/icon.png)
+
+Editor de voxels en Rust (antes *Voxferro*), nativo para Apple Silicon, compatible con el formato
 `.vox` de the reference editor.
 
 Proyecto de aprendizaje: el objetivo es entender gráficos modernos y Rust
@@ -151,3 +153,13 @@ Implementación independiente. El formato `.vox` está documentado públicamente
 por su autor, its author. Este repositorio no contiene código ni assets de
 the reference editor; los modelos de prueba se mantienen fuera del control de versiones
 (ver `assets/README.md`).
+
+## Licencia
+
+Doble licencia, a elección de quien lo use: [MIT](LICENSE-MIT) o
+[Apache 2.0](LICENSE-APACHE).
+
+the reference editor es obra de its author. Voxferro no está afiliado a the reference editor ni
+contiene su código: lee y escribe su formato `.vox`. Los modelos de ejemplo y
+los mapas de entorno de the reference editor no se incluyen en el repositorio (ver
+[assets/README.md](assets/README.md)).

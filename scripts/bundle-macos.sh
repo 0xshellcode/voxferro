@@ -34,7 +34,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleName</key><string>Voxferro</string>
     <key>CFBundleDisplayName</key><string>Voxferro</string>
-    <key>CFBundleIdentifier</key><string>dev.voxferro.voxferro</string>
+    <key>CFBundleIdentifier</key><string>io.github.0xshellcode.voxferro</string>
     <key>CFBundleExecutable</key><string>voxferro</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
