@@ -10,12 +10,13 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–31 del [ROADMAP](ROADMAP.md) están completas, con **180 tests
+Las fases 0–33 del [ROADMAP](ROADMAP.md) están completas, con **184 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
   corpus real y contra `dot_vox`
-- Visor con mallado voraz (caras coplanares fusionadas), paleta y cámara orbital
+- Visor con mallado voraz (caras coplanares fusionadas) por trozos en caché:
+  editar un modelo de 256³ rehace solo lo tocado (~8 ms en release)
 - Grafo de escena con transformaciones y frames de animación; edición y render
   de escenas con varios modelos, rotados incluidos
 - Abrir, nuevo, guardar como, y aviso de cambios sin guardar

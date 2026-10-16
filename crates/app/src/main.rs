@@ -23,6 +23,7 @@ mod scene;
 mod scene_ui;
 mod select;
 mod tools;
+mod trace_cache;
 
 use camera::OrbitCamera;
 use eframe::{egui, egui_wgpu};
@@ -91,6 +92,12 @@ struct App {
     environment: Environment,
     /// Depth of field, for the session: the file format has no key for it.
     dof: bool,
+    /// `--timings`: report how long each rebuild takes.
+    timings: bool,
+    /// Meshes per model chunk, so an edit re-meshes only what it touched.
+    mesh_cache: voxel_core::mesh_cache::MeshCache,
+    /// The tracer's grid as last baked, to update it in place.
+    trace_cache: Option<trace_cache::TraceCache>,
     /// Animation playback.
     playing: bool,
     fps: f32,
@@ -185,6 +192,9 @@ impl App {
             env_maps: None,
             environment_source: Vec::new(),
             dof: false,
+            timings: std::env::args().any(|a| a == "--timings"),
+            mesh_cache: Default::default(),
+            trace_cache: None,
             playing: false,
             fps: 10.0,
             play_clock: 0.0,
@@ -335,6 +345,9 @@ impl App {
         self.selected = 0;
         self.selection = None;
         self.forget_picks();
+        // Model indices in the caches belong to the old file.
+        self.mesh_cache = Default::default();
+        self.trace_cache = None;
         self.playing = false;
         // Undo steps name models by index: they mean nothing in another
         // file.
@@ -377,21 +390,33 @@ impl App {
         if self.scene.is_none() {
             return;
         }
+        let started = std::time::Instant::now();
         let mesh = self.build_mesh();
+        let meshed = started.elapsed();
         self.scene_renderer.set_mesh(&state.device, &mesh);
-        self.upload_trace_volume(state);
+        let uploaded = started.elapsed();
+        self.sync_trace_volume(state);
+        if self.timings {
+            eprintln!(
+                "[voxferro] remesh: mesh {:.1?} ({} chunks), upload {:.1?}, trace grid {:.1?}",
+                meshed,
+                self.mesh_cache.last_rebuilt,
+                uploaded - meshed,
+                started.elapsed() - uploaded
+            );
+        }
         self.mesh_dirty = false;
     }
 
     /// The viewport mesh: visible layers only, selected voxels flagged.
-    fn build_mesh(&self) -> Mesh {
+    fn build_mesh(&mut self) -> Mesh {
         let Some(loaded) = &self.scene else { return Mesh::default() };
         let visible = self.visibility();
         let selection = self.selection.as_ref();
-        Mesh::from_scene_marked(
+        self.mesh_cache.build(
             &loaded.doc.scene,
             |i| visible.shows(i),
-            |model, p| selection.is_some_and(|s| s.model == model && s.contains(p)),
+            |model| selection.filter(|s| s.model == model).map(|s| s.cells()),
         )
     }
 
@@ -435,9 +460,11 @@ impl App {
                 self.path_tracer
                     .set_emitters(&state.device, &baked.volume, &loaded.doc.materials);
                 self.trace_origin = baked.origin;
+                self.remember_bake(baked);
             }
             Err(e) => {
                 self.path_tracer.clear_volume();
+                self.trace_cache = None;
                 eprintln!("[voxferro] path tracer: {e}");
             }
         }

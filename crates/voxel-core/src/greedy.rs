@@ -28,7 +28,15 @@ pub struct Quad {
 /// Merged quads for a volume. `value` gives each voxel's face value: its
 /// palette index, possibly flagged; faces merge only when values match.
 pub fn greedy_quads(volume: &Volume, value: impl Fn(u32, u32, u32) -> u16) -> Vec<Quad> {
-    let size = volume.size();
+    greedy_quads_in(volume, [0; 3], volume.size(), value)
+}
+
+/// [`greedy_quads`] over the box `lo..hi` of the volume only: one chunk.
+/// Faces are still culled against voxels outside the box, so the chunks of
+/// a volume together give the same surface as the whole; rectangles just do
+/// not merge across chunk borders.
+pub fn greedy_quads_in(volume: &Volume, lo: [u32; 3], hi: [u32; 3], value: impl Fn(u32, u32, u32) -> u16) -> Vec<Quad> {
+    let size = [hi[0].saturating_sub(lo[0]), hi[1].saturating_sub(lo[1]), hi[2].saturating_sub(lo[2])];
     let mut quads = Vec::new();
 
     for face in Face::ALL {
@@ -45,9 +53,9 @@ pub fn greedy_quads(volume: &Volume, value: impl Fn(u32, u32, u32) -> u16) -> Ve
             for j in 0..nv {
                 for i in 0..nu {
                     let mut p = [0u32; 3];
-                    p[axis] = slice;
-                    p[u] = i as u32;
-                    p[v] = j as u32;
+                    p[axis] = slice + lo[axis];
+                    p[u] = i as u32 + lo[u];
+                    p[v] = j as u32 + lo[v];
                     let solid = volume.get(p[0], p[1], p[2]) != 0;
                     let n = [p[0] as i32 + step[0], p[1] as i32 + step[1], p[2] as i32 + step[2]];
                     let open = volume.get_i(n[0], n[1], n[2]) == 0;
@@ -84,12 +92,12 @@ pub fn greedy_quads(volume: &Volume, value: impl Fn(u32, u32, u32) -> u16) -> Ve
                         }
                     }
 
-                    let plane = slice as f32 + if positive { 1.0 } else { 0.0 };
+                    let plane = (slice + lo[axis]) as f32 + if positive { 1.0 } else { 0.0 };
                     let corner = |a: usize, b: usize| {
                         let mut c = Vec3::ZERO;
                         c[axis] = plane;
-                        c[u] = a as f32;
-                        c[v] = b as f32;
+                        c[u] = (a as u32 + lo[u]) as f32;
+                        c[v] = (b as u32 + lo[v]) as f32;
                         c
                     };
                     let (u0, u1, v0, v1) = (i, i + w, j, j + h);
@@ -178,4 +186,35 @@ mod tests {
         let quads = greedy_quads(&v, |x, _, _| if x == 0 { 1 + 256 } else { 1 });
         assert_eq!(quads.len(), 4 * 2 + 2);
     }
+
+    #[test]
+    fn chunked_meshing_covers_the_same_surface() {
+        // A shape crossing chunk borders: the chunks together must give the
+        // same area as meshing the whole at once.
+        let mut v = Volume::new([70, 40, 33]);
+        for z in 0..33 {
+            for y in 5..37 {
+                for x in 10..66 {
+                    if (x + y + z) % 7 != 0 {
+                        v.set(x, y, z, 1 + (x / 20) as u8);
+                    }
+                }
+            }
+        }
+        let whole: f32 = greedy_quads(&v, index_of(&v)).iter().map(area).sum();
+        let [cx, cy, cz] = v.chunk_dims();
+        let size = v.size();
+        let mut chunked = 0.0;
+        for k in 0..cz {
+            for j in 0..cy {
+                for i in 0..cx {
+                    let lo = [i * crate::volume::CHUNK, j * crate::volume::CHUNK, k * crate::volume::CHUNK];
+                    let hi = [0, 1, 2].map(|a| (lo[a] + crate::volume::CHUNK).min(size[a]));
+                    chunked += greedy_quads_in(&v, lo, hi, index_of(&v)).iter().map(area).sum::<f32>();
+                }
+            }
+        }
+        assert_eq!(chunked, whole);
+    }
 }
+

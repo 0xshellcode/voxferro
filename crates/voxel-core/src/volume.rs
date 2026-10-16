@@ -1,25 +1,72 @@
 //! Dense voxel volume.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use vox_format::Model;
+
+/// Side of the chunks a volume is versioned in.
+pub const CHUNK: u32 = 32;
+
+/// Source of chunk versions. Global, so a version is never reused: two
+/// chunks with the same version hold the same voxels (one is a clone of the
+/// other, untouched since), whatever volume they are in.
+static NEXT_VERSION: AtomicU64 = AtomicU64::new(1);
+
+fn fresh_version() -> u64 {
+    NEXT_VERSION.fetch_add(1, Ordering::Relaxed)
+}
 
 /// A dense voxel grid. Each cell holds a palette index, where 0 means empty.
 ///
 /// Dense rather than sparse: the editor caps volumes at 256³, so the worst
 /// case is 16 MB — cheap enough that constant-time random access is the better
 /// trade. Sparsity belongs in the GPU-side acceleration structure, not here.
-#[derive(Debug, Clone, Default, PartialEq)]
+///
+/// Each 32³ chunk carries a version that changes whenever one of its voxels
+/// does. Caches of derived data -- the mesh, the traced grid -- compare
+/// versions to redo only the chunks an edit touched, whatever path the edit
+/// took (brush, console, kernel, undo).
+#[derive(Debug, Clone, Default)]
 pub struct Volume {
     size: [u32; 3],
     voxels: Vec<u8>,
+    versions: Vec<u64>,
+}
+
+/// Equal voxels, whatever the versions.
+impl PartialEq for Volume {
+    fn eq(&self, other: &Self) -> bool {
+        self.size == other.size && self.voxels == other.voxels
+    }
 }
 
 impl Volume {
     pub fn new(size: [u32; 3]) -> Self {
         let count = (size[0] as usize) * (size[1] as usize) * (size[2] as usize);
+        let chunks = Self::chunk_dims_of(size);
+        let chunk_count = (chunks[0] * chunks[1] * chunks[2]) as usize;
         Self {
             size,
             voxels: vec![0; count],
+            versions: (0..chunk_count).map(|_| fresh_version()).collect(),
         }
+    }
+
+    fn chunk_dims_of(size: [u32; 3]) -> [u32; 3] {
+        size.map(|s| s.div_ceil(CHUNK))
+    }
+
+    /// How many chunks along each axis.
+    pub fn chunk_dims(&self) -> [u32; 3] {
+        Self::chunk_dims_of(self.size)
+    }
+
+    /// The version of chunk `c` (in chunk coordinates), or 0 outside.
+    pub fn chunk_version(&self, c: [i32; 3]) -> u64 {
+        let d = self.chunk_dims();
+        if c.iter().zip(d).any(|(&c, d)| c < 0 || c as u32 >= d) {
+            return 0;
+        }
+        self.versions[(c[0] as u32 + c[1] as u32 * d[0] + c[2] as u32 * d[0] * d[1]) as usize]
     }
 
     /// Builds a volume from a parsed model's sparse voxel list.
@@ -74,7 +121,12 @@ impl Volume {
 
     pub fn set(&mut self, x: u32, y: u32, z: u32, value: u8) {
         if let Some(i) = self.index(x, y, z) {
-            self.voxels[i] = value;
+            if self.voxels[i] != value {
+                self.voxels[i] = value;
+                let d = self.chunk_dims();
+                let (cx, cy, cz) = (x / CHUNK, y / CHUNK, z / CHUNK);
+                self.versions[(cx + cy * d[0] + cz * d[0] * d[1]) as usize] = fresh_version();
+            }
         }
     }
 
@@ -193,4 +245,21 @@ mod tests {
         assert!(v.is_empty_at(0, 0, 9));
         assert_eq!(v.get_i(-1, 0, 0), 0);
     }
+
+    #[test]
+    fn chunk_versions_follow_edits_and_clones() {
+        let mut v = Volume::new([40, 8, 8]);
+        let (a, b) = (v.chunk_version([0, 0, 0]), v.chunk_version([1, 0, 0]));
+        assert_ne!(a, b, "every chunk starts distinct");
+        v.set(35, 0, 0, 3);
+        assert_eq!(v.chunk_version([0, 0, 0]), a, "the other chunk is untouched");
+        assert_ne!(v.chunk_version([1, 0, 0]), b);
+        let c = v.chunk_version([1, 0, 0]);
+        v.set(35, 0, 0, 3);
+        assert_eq!(v.chunk_version([1, 0, 0]), c, "rewriting the same value is no change");
+        let copy = v.clone();
+        assert_eq!(copy.chunk_version([1, 0, 0]), c, "a clone shares versions");
+        assert_eq!(copy, v);
+    }
 }
+

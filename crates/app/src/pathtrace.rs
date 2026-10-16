@@ -654,6 +654,8 @@ pub struct PathTracer {
     env_cdf: wgpu::Buffer,
     env_map: Option<LoadedEnvMap>,
     volume: Option<(wgpu::TextureView, [u32; 3])>,
+    /// The volume's texture, kept to update parts of it in place.
+    volume_texture: Option<wgpu::Texture>,
     target: Option<Target>,
     /// Frames accumulated since the last reset.
     pub samples: u32,
@@ -815,6 +817,7 @@ impl PathTracer {
             env_cdf: placeholder_buffer(device, 4),
             env_map: None,
             volume: None,
+            volume_texture: None,
             target: None,
             samples: 0,
             reset_pending: true,
@@ -830,8 +833,41 @@ impl PathTracer {
 
     /// Drops the volume, so the tracer shows nothing rather than a stale
     /// scene when the current one cannot be baked.
+    /// Rewrites the cells `lo..=hi` of the resident volume from `volume`,
+    /// which must have the size it was uploaded with: an edit uploads the
+    /// box it touched instead of the whole grid.
+    pub fn update_volume_region(&mut self, queue: &wgpu::Queue, volume: &Volume, lo: [u32; 3], hi: [u32; 3]) {
+        let Some(texture) = &self.volume_texture else { return };
+        let extent = [hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1];
+        let mut data = Vec::with_capacity((extent[0] * extent[1] * extent[2]) as usize);
+        for z in lo[2]..=hi[2] {
+            for y in lo[1]..=hi[1] {
+                for x in lo[0]..=hi[0] {
+                    data.push(volume.get(x, y, z));
+                }
+            }
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: lo[0], y: lo[1], z: lo[2] },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(extent[0]),
+                rows_per_image: Some(extent[1]),
+            },
+            wgpu::Extent3d { width: extent[0], height: extent[1], depth_or_array_layers: extent[2] },
+        );
+        self.reset();
+    }
+
     pub fn clear_volume(&mut self) {
         self.volume = None;
+        self.volume_texture = None;
         self.reset();
     }
 
@@ -876,6 +912,7 @@ impl PathTracer {
         );
 
         self.volume = Some((texture.create_view(&Default::default()), [sx, sy, sz]));
+        self.volume_texture = Some(texture);
         self.reset();
     }
 
@@ -1380,6 +1417,10 @@ pub fn exposed_emitters(volume: &Volume, materials: &[vox_format::Material]) -> 
         }
     }
     emissive[0] = false;
+    // Most scenes have no lamps: skip scanning millions of cells for none.
+    if !emissive.iter().any(|&e| e) {
+        return Vec::new();
+    }
 
     let [sx, sy, sz] = volume.size();
     let mut out = Vec::new();

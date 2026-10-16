@@ -42,6 +42,11 @@ impl Selection {
         self.cells.len()
     }
 
+    /// The selected cells, for caches that fingerprint them.
+    pub fn cells(&self) -> &BTreeSet<[i32; 3]> {
+        &self.cells
+    }
+
     pub fn contains(&self, p: IVec3) -> bool {
         self.cells.contains(&p.to_array())
     }

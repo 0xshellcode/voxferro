@@ -13,12 +13,13 @@ mod env_map;
 pub mod export;
 pub mod greedy;
 mod mesh;
+pub mod mesh_cache;
 pub mod ops;
 mod raycast;
 mod scene;
 mod selection;
 mod transform;
-mod volume;
+pub mod volume;
 
 pub use brush::{BrushMode, BrushShape};
 pub use atmosphere::{Atmosphere, AtmosphereSettings, PLANET_RADIUS, SKY_SCALE};
