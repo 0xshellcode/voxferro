@@ -73,6 +73,17 @@ jobs:
       # The app itself, run for real. CI machines have no GPU: Linux uses
       # lavapipe (Vulkan in software) under a virtual X display, Windows
       # WARP (DirectX 12 in software); macOS runners have Metal.
+      - name: Smoke test, editor view
+        shell: bash
+        timeout-minutes: 10
+        env:
+          VOXFERRO_NO_RECENT: "1"
+        run: |
+          run=""; if [ "$RUNNER_OS" = Linux ]; then run="xvfb-run -a"; fi
+          py=python3; if [ "$RUNNER_OS" = Windows ]; then py=python; fi
+          $run ./target/debug/voxferro --script assets/showcase/shapes.cmds --screenshot view.bmp 2>&1 | tee view.log
+          $py scripts/ci/check_image.py view.bmp
+
       - name: Smoke test, path traced render
         shell: bash
         timeout-minutes: 15
@@ -104,6 +115,8 @@ jobs:
         with:
           name: smoke-${{ matrix.os }}
           path: |
+            view.bmp
+            view.log
             smoke.bmp
             smoke.log
             mcp.log
