@@ -23,6 +23,8 @@ pub enum GraphError {
     IntoItself,
     /// No key on this frame, or it is the only one.
     NoKey,
+    /// Moving a key onto a frame that already has one.
+    FrameTaken,
     /// The root group has nothing above it to dissolve into.
     IsRoot,
 }
@@ -57,7 +59,8 @@ impl std::fmt::Display for GraphError {
             Self::NoGroup => "the scene has no group to add to",
             Self::NotAGroup => "not a group",
             Self::IntoItself => "a group cannot go inside itself",
-            Self::NoKey => "no key on this frame to remove (or it is the only one)",
+            Self::NoKey => "no key on that frame (or it is the only one)",
+            Self::FrameTaken => "that frame already has a key",
             Self::IsRoot => "the root group cannot be dissolved",
         })
     }
@@ -275,6 +278,41 @@ impl Scene {
             }
         }
         Ok(nodes)
+    }
+
+    /// The nodes with the key of transform node `node` moved from frame
+    /// `from` to frame `to` -- or, with `shape`, the model its shape shows
+    /// from `from`.
+    pub fn with_key_moved(&self, node: i32, from: u32, to: u32, shape: bool) -> Result<Vec<SceneNode>, GraphError> {
+        let mut nodes = self.nodes.clone();
+        let child = match find(&nodes, node) {
+            Some(SceneNode::Transform(t)) => t.child,
+            _ => return Err(GraphError::NotPlaceable),
+        };
+        let moved = if shape {
+            match nodes.iter_mut().find(|n| n.id() == child) {
+                Some(SceneNode::Shape(s)) => crate::anim::move_shape_frame(s, from, to),
+                _ => false,
+            }
+        } else {
+            match nodes.iter_mut().find(|n| n.id() == node) {
+                Some(SceneNode::Transform(t)) => crate::anim::move_key(t, from, to),
+                _ => false,
+            }
+        };
+        if moved {
+            return Ok(nodes);
+        }
+        // Say why: the usual refusal is a frame already keyed.
+        let taken = match find(&self.nodes, node) {
+            Some(SceneNode::Transform(t)) if !shape => crate::anim::keyframes(t).iter().any(|k| k.0 == to),
+            Some(SceneNode::Transform(t)) => match find(&self.nodes, t.child) {
+                Some(SceneNode::Shape(s)) => s.models.iter().any(|m| m.attributes.get("_f").and_then(|v| v.parse().ok()) == Some(to)),
+                _ => false,
+            },
+            _ => false,
+        };
+        Err(if taken { GraphError::FrameTaken } else { GraphError::NoKey })
     }
 
     /// The nodes without the key transform node `node` has on the current

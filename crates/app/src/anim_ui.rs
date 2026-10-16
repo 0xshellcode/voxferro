@@ -10,6 +10,15 @@ use crate::App;
 use eframe::{egui, egui_wgpu};
 use voxel_core::Command;
 
+/// A key being dragged along the timeline.
+pub struct KeyDrag {
+    node: i32,
+    /// A shape frame (blue) rather than a transform key (yellow).
+    shape: bool,
+    /// The frame it is on now.
+    frame: u32,
+}
+
 /// Rendering every frame of the range to numbered PNG files.
 pub struct ExportJob {
     dir: std::path::PathBuf,
@@ -111,6 +120,18 @@ impl App {
                 }
             }
             ["newframe"] => self.new_shape_frame(),
+            [verb @ ("movekey" | "moveframe"), from, to] => {
+                let (Ok(from), Ok(to)) = (from.parse::<u32>(), to.parse::<u32>()) else {
+                    return format!("anim {verb} <from> <to>");
+                };
+                let Some(node) = self.target_node() else { return "nothing selected".to_owned() };
+                let Some(loaded) = &self.scene else { return "nothing open".to_owned() };
+                let nodes = loaded.doc.scene.with_key_moved(node, from, to, *verb == "moveframe");
+                match self.exec_graph(nodes, false) {
+                    Ok(()) => format!("moved from frame {from} to {to}"),
+                    Err(e) => format!("error: {e}"),
+                }
+            }
             ["range", a, b] => match (a.parse::<u32>(), b.parse::<u32>()) {
                 (Ok(a), Ok(b)) if b >= a => {
                     self.set_anim_range(a, b, false);
@@ -122,7 +143,7 @@ impl App {
                 let samples = rest.first().and_then(|s| s.parse::<u32>().ok()).unwrap_or(self.export_samples);
                 self.start_export(std::path::PathBuf::from(dir), samples)
             }
-            _ => "anim play | stop | frame <n> | fps <n> | key | unkey | newframe | range <a> <b> | export <dir> [samples]"
+            _ => "anim play | stop | frame <n> | fps <n> | key | unkey | newframe | movekey <a> <b> | moveframe <a> <b> | range <a> <b> | export <dir> [samples]"
                 .to_owned(),
         }
     }
@@ -232,6 +253,7 @@ impl App {
                 _ => None,
             }
         });
+        let markers = target.clone();
         if let Some((keys, shape_frames)) = target {
             if keys.len() > 1 {
                 for f in keys {
@@ -249,12 +271,53 @@ impl App {
         let now = x_of(self.frame());
         painter.line_segment([egui::pos2(now, rect.top()), egui::pos2(now, rect.bottom())], egui::Stroke::new(2.0, egui::Color32::WHITE));
 
-        if let Some(pos) = response.interact_pointer_pos() {
-            if response.clicked() || response.dragged() {
-                let t = ((pos.x - rect.left() - 4.0) / (rect.width() - 8.0)).clamp(0.0, 1.0);
-                let f = first + (t * span).round() as u32;
-                self.set_frame(f);
+        let frame_at = |x: f32| {
+            let t = ((x - rect.left() - 4.0) / (rect.width() - 8.0)).clamp(0.0, 1.0);
+            first + (t * span).round() as u32
+        };
+        // Pressing on a marker grabs it: keys along the top half, shape
+        // frames along the bottom. Anywhere else scrubs.
+        if response.drag_started() {
+            // Where the button went down, not where the drag was recognised:
+            // by then the pointer has moved past the marker's few pixels.
+            let pressed_at = ui.input(|i| i.pointer.press_origin());
+            if let (Some(pos), Some((keys, shape_frames)), Some(node)) = (pressed_at, &markers, node) {
+                let shape = pos.y > rect.center().y;
+                let candidates = if shape { shape_frames } else { keys };
+                let grabbed = candidates
+                    .iter()
+                    .copied()
+                    .filter(|_| candidates.len() > 1)
+                    .min_by_key(|f| (x_of(*f) - pos.x).abs() as i32)
+                    .filter(|f| (x_of(*f) - pos.x).abs() <= 6.0);
+                if let Some(frame) = grabbed {
+                    self.history.end_gesture();
+                    self.key_drag = Some(KeyDrag { node, shape, frame });
+                }
             }
+        }
+        if let Some(pos) = response.interact_pointer_pos() {
+            if let Some(drag) = &self.key_drag {
+                if response.dragged() {
+                    let (node, shape, from) = (drag.node, drag.shape, drag.frame);
+                    let to = frame_at(pos.x);
+                    let moved = self.scene.as_ref().map(|s| s.doc.scene.with_key_moved(node, from, to, shape));
+                    // Onto a taken frame it simply waits; past it, it moves.
+                    if let Some(Ok(nodes)) = moved {
+                        if self.exec_graph(Ok(nodes), true).is_ok() {
+                            if let Some(drag) = &mut self.key_drag {
+                                drag.frame = to;
+                            }
+                            self.set_frame(to);
+                        }
+                    }
+                }
+            } else if response.clicked() || response.dragged() {
+                self.set_frame(frame_at(pos.x));
+            }
+        }
+        if response.drag_stopped() {
+            self.key_drag = None;
         }
     }
 

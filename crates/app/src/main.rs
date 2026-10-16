@@ -96,6 +96,8 @@ struct App {
     fps: f32,
     /// Seconds of playback not yet turned into frames.
     play_clock: f64,
+    /// A key being dragged on the timeline.
+    key_drag: Option<anim_ui::KeyDrag>,
     /// Frames being rendered to files, and the samples a frame gets.
     export: Option<anim_ui::ExportJob>,
     export_samples: u32,
@@ -187,6 +189,7 @@ impl App {
             fps: 10.0,
             play_clock: 0.0,
             export: None,
+            key_drag: None,
             export_samples: 64,
             pending_samples: 0,
             status: String::new(),

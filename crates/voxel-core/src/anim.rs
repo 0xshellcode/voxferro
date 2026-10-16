@@ -130,6 +130,35 @@ pub fn remove_key(node: &mut TransformNode, frame: u32) -> bool {
     node.frames.len() != before
 }
 
+/// Moves the key on frame `from` to frame `to`. Refused (false) when there
+/// is no key on `from` or one already on `to`: a key never overwrites
+/// another.
+pub fn move_key(node: &mut TransformNode, from: u32, to: u32) -> bool {
+    if from == to || node.frames.iter().any(|d| frame_of(d) == to) {
+        return false;
+    }
+    // A static node has nothing to move in time.
+    if node.frames.len() < 2 {
+        return false;
+    }
+    let Some(d) = node.frames.iter_mut().find(|d| frame_of(d) == from) else { return false };
+    d.set("_f", to.to_string());
+    node.frames.sort_by_key(frame_of);
+    true
+}
+
+/// Moves a shape's model keyed on frame `from` to frame `to`, under the same
+/// rule as [`move_key`].
+pub fn move_shape_frame(shape: &mut ShapeNode, from: u32, to: u32) -> bool {
+    if from == to || shape.models.len() < 2 || shape.models.iter().any(|m| frame_of(&m.attributes) == to) {
+        return false;
+    }
+    let Some(m) = shape.models.iter_mut().find(|m| frame_of(&m.attributes) == from) else { return false };
+    m.attributes.set("_f", to.to_string());
+    shape.models.sort_by_key(|m| frame_of(&m.attributes));
+    true
+}
+
 /// The model a shape shows at `frame`: the latest one keyed at or before it,
 /// with `_loop` wrapping the frame around the shape's own length.
 pub fn model_at(shape: &ShapeNode, frame: u32) -> Option<&ShapeModel> {
@@ -239,4 +268,28 @@ mod tests {
         shape.attributes = Dict::default();
         assert_eq!(model_at(&shape, 5).map(|m| m.model_id), Some(3), "without _loop the last holds");
     }
+
+    #[test]
+    fn keys_move_but_never_onto_each_other() {
+        let mut t = walk();
+        assert!(move_key(&mut t, 11, 7));
+        assert_eq!(keyframes(&t).iter().map(|k| k.0).collect::<Vec<_>>(), vec![0, 7, 19]);
+        assert_eq!(local_at(&t, 7).translation, IVec3::new(44, 0, 13), "the key's placement moved with it");
+        assert!(!move_key(&mut t, 7, 19), "19 is taken");
+        assert!(!move_key(&mut t, 3, 4), "no key on 3");
+        // Moving past a neighbour reorders the keys.
+        assert!(move_key(&mut t, 0, 25));
+        assert_eq!(keyframes(&t).iter().map(|k| k.0).collect::<Vec<_>>(), vec![7, 19, 25]);
+    }
+
+    #[test]
+    fn shape_frames_move_too() {
+        let model = |id: i32, f: &str| ShapeModel { model_id: id, attributes: dict(&[("_f", f)]) };
+        let mut shape = ShapeNode { id: 3, attributes: Dict::default(), models: vec![model(0, "0"), model(1, "4")] };
+        assert!(move_shape_frame(&mut shape, 4, 9));
+        assert_eq!(model_at(&shape, 8).map(|m| m.model_id), Some(0));
+        assert_eq!(model_at(&shape, 9).map(|m| m.model_id), Some(1));
+        assert!(!move_shape_frame(&mut shape, 9, 0), "0 is taken");
+    }
 }
+
