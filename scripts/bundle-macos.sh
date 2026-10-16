@@ -12,8 +12,14 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/voxferro "$app/Contents/MacOS/voxferro"
 # Sample models and environment maps travel inside the bundle, so the app
 # never reads the source tree (which macOS may guard, as in Documents).
+# They are third-party and not in git (see assets/README.md): copied when a
+# local copy exists, skipped otherwise.
 mkdir -p "$app/Contents/Resources/assets"
-cp -R assets/vox assets/ibl "$app/Contents/Resources/assets/"
+for dir in vox ibl; do
+    if [ -d "assets/$dir" ]; then
+        cp -R "assets/$dir" "$app/Contents/Resources/assets/"
+    fi
+done
 
 iconset=target/AppIcon.iconset
 rm -rf "$iconset"

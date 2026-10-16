@@ -107,6 +107,12 @@ open target/Voxferro.app
 ./scripts/make-icon.sh             # re-renders the icon
 ```
 
+On Windows (prepared, not yet tested on a Windows machine):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1   # target\dist\Voxferro-<version>-windows-x64.zip
+```
+
 **Mouse:** clicking on the model edits with the brush; clicking on empty space
 (or dragging with the right button) orbits; Shift + drag or the middle
 button pans; the scroll wheel zooms in.

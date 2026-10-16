@@ -93,6 +93,51 @@ pub fn write(path: &str, width: u32, height: u32, rgba: &[u8]) -> std::io::Resul
     std::fs::write(square, png(false))
 }
 
+/// Sizes an `.ico` carries, largest first: what Windows picks from for the
+/// taskbar, Explorer and title bars at every display scale.
+pub const ICO_SIZES: [u32; 6] = [256, 128, 64, 48, 32, 16];
+
+/// A Windows `.ico` from square RGBA pixels: one PNG-compressed image per
+/// size in `ICO_SIZES` (PNG entries are valid in icons since Vista).
+pub fn ico_bytes(side: u32, rgba: &[u8]) -> Vec<u8> {
+    let images: Vec<(u32, Vec<u8>)> = ICO_SIZES
+        .iter()
+        .map(|&size| {
+            let (w, h, px) = crate::image_out::fit(side, side, rgba, size);
+            (w.max(h), voxel_core::export::png_rgba(w, h, &px))
+        })
+        .collect();
+    let mut out = Vec::new();
+    out.extend_from_slice(&[0, 0, 1, 0]); // reserved, type 1 = icon
+    out.extend_from_slice(&(images.len() as u16).to_le_bytes());
+    let mut offset = 6 + 16 * images.len() as u32;
+    for (size, png) in &images {
+        // A dimension of 256 is written as 0.
+        let d = if *size >= 256 { 0 } else { *size as u8 };
+        out.extend_from_slice(&[d, d, 0, 0]); // width, height, colours, reserved
+        out.extend_from_slice(&1u16.to_le_bytes()); // planes
+        out.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
+        out.extend_from_slice(&(png.len() as u32).to_le_bytes());
+        out.extend_from_slice(&offset.to_le_bytes());
+        offset += png.len() as u32;
+    }
+    for (_, png) in &images {
+        out.extend_from_slice(png);
+    }
+    out
+}
+
+/// `--make-ico <icon.png> <out.ico>`: the `.ico` for the Windows build,
+/// from the shaped icon. Runs before any window opens.
+pub fn make_ico(png_path: &str, out_path: &str) -> Result<(), String> {
+    let bytes = std::fs::read(png_path).map_err(|e| format!("{png_path}: {e}"))?;
+    let icon = eframe::icon_data::from_png_bytes(&bytes).map_err(|e| format!("{png_path}: {e}"))?;
+    if icon.width != icon.height {
+        return Err(format!("{png_path} is not square"));
+    }
+    std::fs::write(out_path, ico_bytes(icon.width, &icon.rgba)).map_err(|e| format!("{out_path}: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +152,11 @@ mod tests {
         assert_eq!(alpha(50, 512), 0, "margin");
         assert_eq!(alpha(102, 102), 0, "rounded corner");
         assert_eq!(icon[(512 * SIZE + 512) as usize * 4], 200);
+        let ico = ico_bytes(SIZE, &icon);
+        assert_eq!(&ico[..6], &[0, 0, 1, 0, 6, 0], "icon type, six images");
+        assert_eq!(ico[6], 0, "the first entry is 256 px, written as 0");
+        let first_offset = u32::from_le_bytes(ico[18..22].try_into().unwrap()) as usize;
+        assert_eq!(&ico[first_offset..first_offset + 4], b"\x89PNG");
         let square = icon_rgba(300, 200, &frame, false);
         assert!(square.chunks(4).all(|p| p[3] == 255), "full bleed");
     }

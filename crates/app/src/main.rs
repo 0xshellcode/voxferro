@@ -1,3 +1,8 @@
+// A release build on Windows is a GUI app: no console window opens with
+// it. `attach_parent_console` below keeps the output of headless runs
+// started from a terminal.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 //! Entry point for the voxel editor.
 //!
 //! eframe owns the window and the event loop. The scene is rendered with wgpu
@@ -38,7 +43,38 @@ use renderer::SceneRenderer;
 use pathtrace::{Environment, PathTracer};
 use voxel_core::{History, Mesh};
 
+/// On Windows, a GUI-subsystem program has no console. When it was started
+/// from one (`voxferro --run ... --screenshot out.bmp` in a terminal),
+/// attach to it so `eprintln!` reaches the user; from Explorer there is no
+/// parent console and this does nothing.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+    // SAFETY: a plain Win32 call with a constant argument.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
 fn main() -> eframe::Result {
+    #[cfg(windows)]
+    attach_parent_console();
+
+    // Tools that need no window.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [flag, png, ico] = args.as_slice()
+        && flag == "--make-ico"
+    {
+        match icon::make_ico(png, ico) {
+            Ok(()) => eprintln!("[voxferro] wrote {ico}"),
+            Err(e) => {
+                eprintln!("[voxferro] {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     // Before the event loop, so a file that launches the app is caught.
     #[cfg(target_os = "macos")]
     macos_open::install();
@@ -63,17 +99,23 @@ fn main() -> eframe::Result {
     )
 }
 
-/// The `assets` folder: inside the `.app` bundle when run from one
-/// (`Contents/Resources/assets`), else the source tree's, resolved at
-/// compile time so `cargo run` works from any directory. A bundle never
-/// reaches back into the source tree, which may sit in a folder macOS
-/// guards (Documents) and would ask for permission.
+/// The `assets` folder, first found of:
+///
+/// - inside the macOS `.app` bundle (`Contents/Resources/assets`);
+/// - next to the executable (`assets/` beside `voxferro.exe` in the
+///   Windows zip, or beside the binary in a Linux package);
+/// - the source tree's, resolved at compile time so `cargo run` works from
+///   any directory.
+///
+/// A packaged app never reaches back into the source tree, which may sit in
+/// a folder macOS guards (Documents) and would ask for permission.
 fn assets_dir() -> std::path::PathBuf {
-    let bundled = std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.parent()?.join("Resources/assets")))
-        .filter(|p| p.is_dir());
-    bundled.unwrap_or_else(|| std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets")))
+    let exe_dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.to_path_buf()));
+    let packaged = exe_dir.and_then(|dir| {
+        let bundle = dir.parent().map(|contents| contents.join("Resources/assets"));
+        [bundle, Some(dir.join("assets"))].into_iter().flatten().find(|p| p.is_dir())
+    });
+    packaged.unwrap_or_else(|| std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets")))
 }
 
 /// Where the bundled sample models live.
@@ -83,11 +125,20 @@ fn sample_dir() -> std::path::PathBuf {
 
 /// Where environment maps are looked for, in order. A file names its map
 /// relative to the editor's own `ibl/` folder, so after the bundled copies
-/// the search falls back to a local the reference editor install.
+/// the search falls back to a local the reference editor install:
+///
+/// - `reference_editor_DIR`, if set: one install's folder (the one holding
+///   `ibl/`), on any system;
+/// - every folder in `~/Applications/the reference editor` -- the home being `HOME`,
+///   or `USERPROFILE` on Windows -- where several versions can sit side by
+///   side.
 fn env_map_dirs() -> Vec<std::path::PathBuf> {
     let mut dirs = vec![assets_dir().join("ibl")];
-    if let Some(home) = std::env::var_os("HOME") {
-        let apps = std::path::Path::new(&home).join("Applications/the reference editor");
+    if let Some(dir) = std::env::var_os("reference_editor_DIR") {
+        dirs.push(std::path::PathBuf::from(dir).join("ibl"));
+    }
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let apps = std::path::Path::new(&home).join("Applications").join("the reference editor");
         if let Ok(entries) = std::fs::read_dir(apps) {
             dirs.extend(entries.flatten().map(|e| e.path().join("ibl")));
         }
@@ -371,6 +422,12 @@ impl App {
             || std::env::var_os("VOXFERRO_NO_RECENT").is_some();
         app.remember_files = !scripted;
         app.load(state, &path);
+        // No model to start from -- a fresh clone has no the reference editor
+        // samples, or the file named is gone: start with an empty one, so
+        // there is something to draw in. The load error stays in the log.
+        if app.scene.is_none() {
+            app.install(state, scene::LoadedScene::new_empty(files::NEW_MODEL_SIZE));
+        }
         // A file named on the command line (or by the Explorer, or a
         // .desktop file) is one the user opened; the bundled sample is not.
         if positional_args(&args).iter().any(|a| a == &path) && app.scene.is_some() {
