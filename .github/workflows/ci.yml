@@ -1,0 +1,64 @@
+# Build, lint and test on every push to master, on Linux and Windows.
+# macOS (whose runner minutes count ten times in a private repo) runs only
+# when started by hand: Actions > CI > Run workflow.
+name: CI
+
+on:
+  push:
+    branches: [master]
+    # Documentation and images alone do not need a build.
+    paths-ignore:
+      - "**.md"
+      - "assets/showcase/**"
+      - "assets/icon/*.png"
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      macos:
+        description: "Also run on macOS"
+        type: boolean
+        default: true
+
+# A newer push replaces a run still in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        exclude:
+          # macOS only on a manual run that asks for it.
+          - os: ${{ (github.event_name == 'workflow_dispatch' && inputs.macos) && 'none' || 'macos-latest' }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # What eframe/winit link against on Linux (X11 and Wayland).
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Builds the app too (on Windows, build.rs embeds the icon). The
+      # the reference editor sample corpus is not in git; tests that need it skip.
+      - name: Tests
+        run: cargo test --workspace
