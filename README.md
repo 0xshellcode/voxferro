@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–26 del [ROADMAP](ROADMAP.md) están completas, con **166 tests
+Las fases 0–27 del [ROADMAP](ROADMAP.md) están completas, con **168 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -62,6 +62,10 @@ central desplazan; la rueda acerca.
 **Opción+clic** en un modelo selecciona su grupo (otra vez: un nivel más
 adentro).
 
+**Herramienta Move:** arrastrar mueve el modelo (o su grupo seleccionado) por
+el suelo; Mayúsculas+arrastre, arriba y abajo; Cmd+arrastre gira sobre z;
+X, Y, Z dan un cuarto de vuelta.
+
 **Teclado:** F encuadra (Mayúsculas+F todo), 1–7 vistas fijas, O ortográfica;
 Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z; con selección,
 Cmd+A, Esc, Supr, Cmd+C/X/V, flechas y Re Pág/Av Pág para moverla.
@@ -71,7 +75,7 @@ Cmd+A, Esc, Supr, Cmd+C/X/V, flechas y Re Pág/Av Pág para moverla.
 | Grupo | Comandos |
 |---|---|
 | Archivos | `open [ruta]`, `new [n \| x y z]`, `save [ruta]`, `export <ruta.obj>` |
-| Pincel | `brush [attach\|erase\|paint\|select] [voxel\|box\|line\|face\|fill]`, `color <n>` |
+| Pincel | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|face\|fill]`, `color <n>` |
 | Selección | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz` |
 | Modelo | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
 | Escena | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |

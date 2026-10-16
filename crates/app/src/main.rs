@@ -13,6 +13,7 @@ mod edit;
 mod files;
 mod image_out;
 mod palette_ui;
+mod move_tool;
 mod outline;
 mod pathtrace;
 mod render_ui;
@@ -118,6 +119,9 @@ struct App {
     orbiting: bool,
     /// The Select tool is active instead of a brush.
     selecting: bool,
+    /// The Move tool is active instead of a brush.
+    moving: bool,
+    move_drag: Option<move_tool::MoveDrag>,
     selection: Option<voxel_core::Selection>,
     select_drag: Option<select::SelectDrag>,
     clipboard: voxel_core::Clipboard,
@@ -190,6 +194,8 @@ impl App {
             stroke: None,
             orbiting: false,
             selecting: false,
+            moving: false,
+            move_drag: None,
             selection: None,
             select_drag: None,
             clipboard: voxel_core::Clipboard::default(),
@@ -549,10 +555,11 @@ impl App {
         ui.heading("Brush");
         ui.horizontal(|ui| {
             for (mode, name) in voxel_core::BrushMode::ALL {
-                let on = !self.selecting && self.brush_mode == mode;
+                let on = !self.selecting && !self.moving && self.brush_mode == mode;
                 if ui.selectable_label(on, capitalised(name)).clicked() {
                     self.brush_mode = mode;
                     self.selecting = false;
+                    self.moving = false;
                 }
             }
             if ui
@@ -561,6 +568,15 @@ impl App {
                 .clicked()
             {
                 self.selecting = true;
+                self.moving = false;
+            }
+            if ui
+                .selectable_label(self.moving, "Move")
+                .on_hover_text("Drag a model (or its selected group). Shift: up and down. Cmd: turn. X/Y/Z: quarter turn.")
+                .clicked()
+            {
+                self.moving = true;
+                self.selecting = false;
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -992,7 +1008,12 @@ impl App {
         if !self.scripted_strokes.is_empty() {
             for (from, to) in std::mem::take(&mut self.scripted_strokes) {
                 let at = |f: egui::Vec2| rect.min + f * view_size;
-                if self.selecting {
+                if self.moving {
+                    if self.begin_move(ray_at(&self.camera, at(from)), at(from).x, egui::Modifiers::default()) {
+                        self.update_move(ray_at(&self.camera, at(to)), at(to).x);
+                        self.finish_move();
+                    }
+                } else if self.selecting {
                     let mods = egui::Modifiers::default();
                     if self.begin_select(ray_at(&self.camera, at(from)), at(from), mods) {
                         self.update_select(ray_at(&self.camera, at(to)), at(to));
@@ -1037,16 +1058,20 @@ impl App {
                             // Option+click picks groups instead of painting
                             // (Option subtracts only in the Select tool).
                             self.select_group_at(ray)
+                        } else if self.moving {
+                            self.begin_move(ray, pos.x, modifiers)
                         } else {
                             self.begin_stroke(ray)
                         }
                     });
                 self.orbiting = !hit;
             }
-            if down && (self.stroke.is_some() || self.select_drag.is_some()) {
+            if down && (self.stroke.is_some() || self.select_drag.is_some() || self.move_drag.is_some()) {
                 if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
                     let ray = ray_at(&self.camera, pos);
-                    if self.select_drag.is_some() {
+                    if self.move_drag.is_some() {
+                        self.update_move(ray, pos.x);
+                    } else if self.select_drag.is_some() {
                         self.update_select(ray, pos);
                     } else {
                         self.update_stroke(ray);
@@ -1068,6 +1093,7 @@ impl App {
                 self.path_tracer.reset();
             }
             if released {
+                self.finish_move();
                 self.finish_stroke();
                 self.finish_select(self.camera.view_proj(aspect), rect);
                 self.orbiting = false;
@@ -1132,7 +1158,7 @@ impl App {
         }
 
         // Outline the cell the brush would act on.
-        let hover = if headless || self.stroke.is_some() || self.orbiting || self.selecting {
+        let hover = if headless || self.stroke.is_some() || self.orbiting || self.selecting || self.moving {
             None
         } else {
             pointer.and_then(|pos| self.hover_cell(ray_at(&self.camera, pos)))
@@ -1172,7 +1198,7 @@ impl App {
 
         // The selected group's box, so a group picked with Option+click (or in
         // the outline) shows what it holds.
-        let group_box = self.bounds_group();
+        let group_box = self.move_target_bounds().or_else(|| self.bounds_group());
         let vp = self.camera.view_proj(aspect);
         let project = |p: Vec3| {
             let c = vp * p.extend(1.0);
@@ -1293,6 +1319,7 @@ impl eframe::App for App {
         self.file_input(&ctx, &state);
         self.selection_input(&ctx);
         self.camera_input(&ctx);
+        self.move_input(&ctx);
         self.confirm_ui(&ctx, &state);
         let title = self.title();
         if title != self.window_title {

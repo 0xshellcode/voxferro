@@ -165,13 +165,28 @@ impl Scene {
     /// middle of what it holds, so it turns in place instead of swinging
     /// around an origin that may be far away.
     pub fn with_node_turned(&self, node: i32, centre: IVec3, axis: usize) -> Result<Vec<SceneNode>, GraphError> {
+        self.with_node_turned_times(node, centre, axis, 1)
+    }
+
+    /// Like [`Scene::with_node_turned`], by `times` quarter turns; 3 is a
+    /// clockwise quarter.
+    pub fn with_node_turned_times(
+        &self,
+        node: i32,
+        centre: IVec3,
+        axis: usize,
+        times: u32,
+    ) -> Result<Vec<SceneNode>, GraphError> {
         let parents = parent_transforms(&self.nodes);
         let parent = parents.get(&node).copied().ok_or(GraphError::NotPlaceable)?;
         let mut nodes = self.nodes.clone();
         let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == node) else {
             return Err(GraphError::NotPlaceable);
         };
-        let quarter = quarter_turn(axis);
+        let mut quarter = Mat3::IDENTITY;
+        for _ in 0..times % 4 {
+            quarter = quarter_turn(axis) * quarter;
+        }
         let local = Transform::from_parts(t.rotation_bits(0), t.translation(0));
         let world = local.then(&parent);
         let turned = Transform {

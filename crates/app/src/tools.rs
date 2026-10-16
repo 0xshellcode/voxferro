@@ -211,16 +211,27 @@ impl App {
                 for word in words {
                     if word == "select" {
                         self.selecting = true;
+                        self.moving = false;
+                    } else if word == "move" {
+                        self.moving = true;
+                        self.selecting = false;
                     } else if let Some(mode) = BrushMode::parse(word) {
                         self.brush_mode = mode;
                         self.selecting = false;
+                        self.moving = false;
                     } else if let Some(shape) = BrushShape::parse(word) {
                         self.brush_shape = shape;
                     } else {
-                        return format!("unknown brush '{word}': attach, erase, paint; voxel, box, line, face, fill");
+                        return format!("unknown brush '{word}': attach, erase, paint, select, move; voxel, box, line, face, fill");
                     }
                 }
-                let mode = if self.selecting { "select" } else { self.brush_mode.name() };
+                let mode = if self.moving {
+                    "move"
+                } else if self.selecting {
+                    "select"
+                } else {
+                    self.brush_mode.name()
+                };
                 format!("brush {mode} {}", self.brush_shape.name())
             }
         }
