@@ -66,6 +66,10 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+      # `cargo test` builds the test harness, not the binary itself.
+      - name: Build the app
+        run: cargo build -p voxferro
+
       # The app itself, run for real. CI machines have no GPU: Linux uses
       # lavapipe (Vulkan in software) under a virtual X display, Windows
       # WARP (DirectX 12 in software); macOS runners have Metal.
