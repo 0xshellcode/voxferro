@@ -155,6 +155,8 @@ struct App {
     mirror: [bool; 3],
     /// The next click takes its colour from a voxel instead of editing.
     picking: bool,
+    /// The saved-camera slot the camera panel acts on.
+    camera_slot: usize,
     brush_shape: voxel_core::BrushShape,
     /// The brush stroke under way, while the button is held.
     stroke: Option<tools::Stroke>,
@@ -265,6 +267,7 @@ impl App {
             brush_mode: voxel_core::BrushMode::Attach,
             mirror: [false; 3],
             picking: false,
+            camera_slot: 0,
             brush_shape: voxel_core::BrushShape::Voxel,
             stroke: None,
             orbiting: false,
@@ -659,6 +662,18 @@ impl App {
                 self.path_tracer.samples,
                 self.path_tracer.emitter_count()
             ));
+            if ui.button("Save image…").on_hover_text("The render as it is now, as PNG").clicked() {
+                let stem = self.scene.as_ref().and_then(|s| {
+                    std::path::Path::new(&s.name).file_stem().map(|n| n.to_string_lossy().into_owned())
+                });
+                let dialog = rfd::FileDialog::new()
+                    .add_filter("PNG image", &["png"])
+                    .set_file_name(format!("{}.png", stem.unwrap_or_else(|| "render".to_owned())));
+                if let Some(path) = dialog.save_file() {
+                    let message = self.save_render(&path.to_string_lossy(), state);
+                    self.console_log.push(message);
+                }
+            }
             self.render_settings_ui(ui, state);
             ui.separator();
         }
@@ -941,6 +956,12 @@ impl App {
             return;
         }
 
+        if let ["render", "save", path] = line.split_whitespace().collect::<Vec<_>>().as_slice() {
+            let message = self.save_render(path, state);
+            self.console_log.push(message);
+            return;
+        }
+
         if line.split_whitespace().next() == Some("camera") {
             let message = self.camera_command(line);
             self.console_log.push(message);
@@ -1132,6 +1153,21 @@ impl App {
         self.mesh_dirty = true;
 
         format!("gpu {shape_name}: {count} voxels in {elapsed:.1?}")
+    }
+
+    /// Writes the path traced image as it is now -- tone mapped, as shown
+    /// -- to a PNG.
+    fn save_render(&mut self, path: &str, state: &egui_wgpu::RenderState) -> String {
+        if !self.rendering || self.path_tracer.samples == 0 {
+            return "error: nothing rendered: switch to Render first".to_owned();
+        }
+        let Some((w, h, rgba)) = self.path_tracer.read_frame(&state.device, &state.queue) else {
+            return "error: nothing rendered yet".to_owned();
+        };
+        match std::fs::write(path, voxel_core::export::png_rgba(w, h, &rgba)) {
+            Ok(()) => format!("saved {path} ({w}x{h}, {} samples)", self.path_tracer.samples),
+            Err(e) => format!("error: could not write {path}: {e}"),
+        }
     }
 
     /// Draws the scene into its offscreen target at `size` pixels: one

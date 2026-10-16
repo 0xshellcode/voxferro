@@ -56,6 +56,7 @@ impl LoadedScene {
                 render: file.render_objects.clone(),
                 layers: layers_for(&file),
                 meta: file.meta.clone(),
+                cameras: file.cameras.clone(),
             },
             source: file,
             path,
@@ -98,6 +99,7 @@ impl LoadedScene {
         file.render_objects = self.doc.render.clone();
         file.layers = self.doc.layers.clone();
         file.meta = self.doc.meta.clone();
+        file.cameras = self.doc.cameras.clone();
 
         let bytes = file.to_bytes();
 

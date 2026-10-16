@@ -311,6 +311,7 @@ pub fn write_target(line: &str, current: Option<&str>) -> Option<Result<std::pat
         ["export"] => Some(Err("export needs a path".to_owned())),
         ["export", p, ..] => Some(Ok(path(p).with_extension("obj"))),
         ["anim", "export", dir, ..] => Some(Ok(path(dir))),
+        ["render", "save", p, ..] => Some(Ok(path(p))),
         _ => None,
     }
 }
@@ -341,6 +342,7 @@ mod tests {
         assert_eq!(write_target("save b.vox", None), Some(Ok("b.vox".into())));
         assert_eq!(write_target("export m", None), Some(Ok("m.obj".into())));
         assert_eq!(write_target("anim export out 8", None), Some(Ok("out".into())));
+        assert_eq!(write_target("render save r.png", None), Some(Ok("r.png".into())));
         assert_eq!(write_target("box 0 0 0 1 1 1 2", None), None);
         assert!(needs_path("open"));
         assert!(!needs_path("open a.vox"));

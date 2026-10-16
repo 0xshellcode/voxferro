@@ -4,6 +4,7 @@ use crate::camera::View;
 use crate::App;
 use eframe::egui;
 use glam::Vec3;
+use voxel_core::saved_camera;
 
 impl App {
     /// World bounds of every visible voxel.
@@ -83,6 +84,54 @@ impl App {
                 }
                 _ => return "camera zoom <factor>".to_owned(),
             },
+            ["slots"] => {
+                let Some(loaded) = &self.scene else { return "no document".to_owned() };
+                let slots = saved_camera::slots(&loaded.doc.cameras);
+                let used: Vec<String> = slots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, v)| v.map(|v| format!("{i} ({})", if v.ortho { "ortho" } else { "persp" })))
+                    .collect();
+                if used.is_empty() { "no saved cameras".to_owned() } else { format!("saved cameras: {}", used.join(", ")) }
+            }
+            ["load", n] => match n.parse::<usize>().ok().filter(|n| *n < saved_camera::SLOTS) {
+                Some(slot) => {
+                    let Some(loaded) = &self.scene else { return "no document".to_owned() };
+                    match saved_camera::slots(&loaded.doc.cameras)[slot] {
+                        Some(view) => {
+                            self.camera.target = view.target;
+                            self.camera.yaw = view.yaw;
+                            self.camera.pitch = view.pitch;
+                            self.camera.distance = view.distance;
+                            self.camera.fov_y = view.fov_y;
+                            self.camera.ortho = view.ortho;
+                            self.camera_slot = slot;
+                            format!("camera {slot} loaded")
+                        }
+                        None => format!("camera slot {slot} is empty"),
+                    }
+                }
+                None => return "camera load <0-9>".to_owned(),
+            },
+            ["save", n] => match n.parse::<usize>().ok().filter(|n| *n < saved_camera::SLOTS) {
+                Some(slot) => {
+                    let view = saved_camera::SavedView {
+                        ortho: self.camera.ortho,
+                        target: self.camera.target,
+                        yaw: self.camera.yaw,
+                        pitch: self.camera.pitch,
+                        distance: self.camera.distance,
+                        fov_y: self.camera.fov_y,
+                    };
+                    let Some(loaded) = self.scene.as_mut() else { return "no document".to_owned() };
+                    let after = saved_camera::with_slot(&loaded.doc.cameras, slot as i32, &view);
+                    let command = voxel_core::Command::SetCameras { before: loaded.doc.cameras.clone(), after };
+                    self.history.exec_alone(&mut loaded.doc, command);
+                    self.camera_slot = slot;
+                    format!("camera {slot} saved")
+                }
+                None => return "camera save <0-9>".to_owned(),
+            },
             ["ortho"] => {
                 self.camera.ortho = true;
                 "orthographic".to_owned()
@@ -114,7 +163,7 @@ impl App {
                     None => format!("nothing to frame ({name})"),
                 }
             }
-            _ => return "camera front|back|left|right|top|bottom|iso | ortho | persp | zoom <f> | frame [all|selection|group|instance]".to_owned(),
+            _ => return "camera front|back|left|right|top|bottom|iso | ortho | persp | zoom <f> | frame [all|selection|group|instance] | slots | save <0-9> | load <0-9>".to_owned(),
         };
         self.path_tracer.reset();
         message
@@ -181,6 +230,33 @@ impl App {
             let mut ortho = self.camera.ortho;
             if ui.checkbox(&mut ortho, "Ortho").on_hover_text("O").changed() {
                 lines.push(if ortho { "camera ortho" } else { "camera persp" }.to_owned());
+            }
+        });
+        // The file's saved cameras, as the editor's ten slots: a filled
+        // slot is shown strong; clicking one selects it, Load goes there
+        // and Save stores the current view in it.
+        let filled = self
+            .scene
+            .as_ref()
+            .map(|s| saved_camera::slots(&s.doc.cameras).map(|v| v.is_some()))
+            .unwrap_or([false; saved_camera::SLOTS]);
+        ui.horizontal(|ui| {
+            ui.label("Slot");
+            for (slot, has) in filled.iter().enumerate() {
+                let text = egui::RichText::new(slot.to_string());
+                let text = if *has { text.strong() } else { text.weak() };
+                if ui.selectable_label(self.camera_slot == slot, text).clicked() {
+                    self.camera_slot = slot;
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.small_button("Save").on_hover_text("Store this view in the slot (saved in the file)").clicked() {
+                lines.push(format!("camera save {}", self.camera_slot));
+            }
+            let has = filled[self.camera_slot];
+            if ui.add_enabled(has, egui::Button::new("Load").small()).clicked() {
+                lines.push(format!("camera load {}", self.camera_slot));
             }
         });
         for line in lines {

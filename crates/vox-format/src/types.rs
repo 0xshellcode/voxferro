@@ -505,7 +505,7 @@ impl Default for ResolvedMaterial {
 }
 
 /// `rCAM`: a saved camera. Only written by format version 200 and later.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Camera {
     pub id: i32,
     pub attributes: Dict,

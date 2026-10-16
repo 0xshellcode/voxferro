@@ -22,6 +22,8 @@ pub struct Document {
     pub layers: Vec<Layer>,
     /// `META` objects, such as `_anim_range`.
     pub meta: Vec<Dict>,
+    /// `rCAM` saved cameras (see `saved_camera`).
+    pub cameras: Vec<vox_format::Camera>,
 }
 
 impl Document {
