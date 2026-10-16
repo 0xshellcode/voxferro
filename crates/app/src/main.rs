@@ -1541,6 +1541,13 @@ impl eframe::App for App {
             self.draw_scene(&state, self.last_view_size);
             self.mcp_finish_capture(ctx, &state);
         }
+        // A headless render must not stall behind another window either.
+        let headless = self.pending_samples > 0 || self.screenshot.is_some();
+        if hidden && headless && self.scripted_strokes.is_empty() {
+            self.draw_scene(&state, self.last_view_size);
+            ctx.request_repaint();
+            self.headless_capture(ctx, &state);
+        }
     }
 
     /// Draws one frame.
@@ -1606,6 +1613,14 @@ impl eframe::App for App {
             self.history.end_gesture();
         }
 
+        self.headless_capture(&ctx, &state);
+    }
+}
+
+impl App {
+    /// The end of a headless run (`--render`, `--screenshot`, `--icon`):
+    /// once the sample budget is reached, writes the image and exits.
+    fn headless_capture(&mut self, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
         // Reads back the 3D target. egui's own ViewportCommand::Screenshot
         // would also capture the panels, but this eframe/wgpu backend never
         // delivers the resulting event here, so the viewport is what we can
@@ -1613,7 +1628,7 @@ impl eframe::App for App {
         // In --render mode, wait for the sample budget before capturing.
         if self.pending_samples > 0 {
             if self.path_tracer.samples < self.pending_samples {
-                ui.ctx().request_repaint();
+                ctx.request_repaint();
                 return;
             }
             eprintln!("[voxferro] path traced {} samples", self.path_tracer.samples);
@@ -1658,6 +1673,7 @@ impl eframe::App for App {
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::positional_args;
