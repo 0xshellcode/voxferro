@@ -107,11 +107,31 @@ open target/Voxferro.app
 ./scripts/make-icon.sh             # re-renders the icon
 ```
 
-On Windows (prepared, not yet tested on a Windows machine):
+On Windows (built and smoke-tested in CI on a software GPU; not yet tried on
+a Windows machine):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1   # target\dist\Voxferro-<version>-windows-x64.zip
+powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 -WithDxc   # target\dist\Voxferro-<version>-windows-x64.zip
 ```
+
+Render mode on DirectX 12 needs Microsoft's DXC shader compiler
+(`dxcompiler.dll` and `dxil.dll` next to `voxferro.exe`; `-WithDxc` downloads
+a pinned release). Without it Voxferro uses Vulkan if the GPU driver offers
+it, and otherwise says that Render mode needs DXC. `dxil.dll` comes under a
+Microsoft licence with distribution requirements: read `LICENSE-MS.txt`
+before sharing a package that includes it.
+
+On Linux:
+
+```bash
+./scripts/package-linux.sh                         # target/dist/voxferro-<version>-linux-<arch>.tar.gz
+tar -xzf target/dist/voxferro-*-linux-*.tar.gz -C ~/.local
+```
+
+The tarball holds `bin/` and `share/` (the `.desktop` entry, icons, the
+`.vox` MIME type and the assets); with `appimagetool` on the `PATH` the
+script also builds an AppImage. File dialogs use the XDG desktop portal;
+without one, `open <path>` in the console always works.
 
 **Mouse:** clicking on the model edits with the brush; clicking on empty space
 (or dragging with the right button) orbits; Shift + drag or the middle

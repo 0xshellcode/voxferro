@@ -153,7 +153,7 @@ jobs:
           name: package-${{ matrix.os }}
           path: |
             target/dist/*.tar.gz
-            target/dist/*.zip
+            target/dist/Voxferro-*.zip
             target/dist/*.AppImage
           if-no-files-found: ignore
 
