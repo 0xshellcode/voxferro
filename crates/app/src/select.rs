@@ -13,7 +13,7 @@ use voxel_core::{Combine, Command, Selection, ops};
 const CLIPBOARD_MARKER: &str = "Voxferro voxels";
 
 /// What a model operation keeps fixed in the world.
-enum Anchor {
+pub(crate) enum Anchor {
     /// Voxels keep their place; the new box's cell 0 was this old cell.
     Cell(IVec3),
     /// The box's centre: for operations that turn or flip the contents.
@@ -186,7 +186,7 @@ impl App {
     /// A model is placed by its pivot, `floor(size / 2)`, so any change of
     /// size moves it unless the placement compensates. `anchor` says which
     /// point must not move.
-    fn replace_model(
+    pub(crate) fn replace_model(
         &mut self,
         what: &str,
         anchor: Anchor,
@@ -444,7 +444,7 @@ impl App {
                     run(self, &format!("rotate {a}"));
                 }
             }
-            ui.label("Mirror");
+            ui.label("Flip");
             for a in ["x", "y", "z"] {
                 if ui.small_button(a).clicked() {
                     run(self, &format!("mirror {a}"));

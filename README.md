@@ -41,7 +41,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43 of the [ROADMAP](ROADMAP.md) are complete, with **206 tests
+Phases 0–40, 43 and 44 of the [ROADMAP](ROADMAP.md) are complete, with **220 tests
 passing**. Working today:
 
 - Reading **and writing** `.vox` (versions 150 and 200), validated against the
@@ -55,6 +55,9 @@ passing**. Working today:
   fill shapes, with preview and one-step undo/redo per stroke
 - Selection (box, face, color), copy/cut/paste, move; rotate, mirror,
   crop and resize the model
+- the reference editor's Edit panel: full, reverse, double and halve, loop, scale,
+  shear, any-angle rotation, repeat, mirror and diagonal symmetry, shapes,
+  hull, flood, dilation and erosion, with the formulas of its own kernels
 - Editable scene: move, turn, duplicate, add and remove models; groups
   (create, move, turn, hide, dissolve, drag in the tree) and named layers with visibility, all
   saved in the file
@@ -164,6 +167,7 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]` |
 | Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|frame [all\|selection\|instance]` |
+| Edit | `full`, `zero`, `rev`, `x2`, `xh`, `loop <axis> <n>`, `scale <axes> <f>`, `shear <axis> <a> <b>`, `rot <axis> <deg>`, `repeat <axes> <n>`, `mir <axis>`, `dia <axis>`, `prim elli\|cyli\|pyra\|cone`, `flood [c]`, `hull`, `dil\|ero [6\|18\|26]` |
 | Scripts | `xs [-n passes] [-c c1,c2,…] <script> [args…]`, `xs list` |
 | Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>` |
 

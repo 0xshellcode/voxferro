@@ -12,6 +12,7 @@ pub mod graph;
 mod env_map;
 pub mod export;
 pub mod greedy;
+pub mod kernels;
 mod mesh;
 pub mod mesh_cache;
 pub mod ops;

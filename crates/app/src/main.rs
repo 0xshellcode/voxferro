@@ -21,6 +21,7 @@ mod icon;
 mod image_out;
 mod mcp;
 mod mcp_ui;
+mod model_edit;
 #[cfg(target_os = "macos")]
 mod macos_open;
 mod recent;
@@ -278,6 +279,8 @@ struct App {
     clipboard: voxel_core::Clipboard,
     /// The Resize fields, and which model and size they were filled from.
     resize_to: [u32; 3],
+    /// The Edit panel's text fields.
+    edit_fields: model_edit::Fields,
     resize_for: Option<(usize, [u32; 3])>,
     /// Set when the scene changed and the GPU mesh is stale.
     mesh_dirty: bool,
@@ -387,6 +390,7 @@ impl App {
             select_drag: None,
             clipboard: voxel_core::Clipboard::default(),
             resize_to: [32; 3],
+            edit_fields: model_edit::Fields::default(),
             resize_for: None,
             mesh_dirty: false,
             console_input: String::new(),
@@ -900,6 +904,9 @@ impl App {
         ui.separator();
         self.selection_ui(ui);
         ui.separator();
+        ui.heading("Edit");
+        self.edit_ui(ui);
+        ui.separator();
 
         ui.horizontal(|ui| {
             if ui
@@ -1038,6 +1045,30 @@ impl App {
         if line.split_whitespace().next() == Some("env") {
             let message = self.env_command(line, state);
             self.console_log.push(message);
+            return;
+        }
+
+        // the reference editor's names for two commands the editor already had.
+        let renamed;
+        let line = match line.split_whitespace().next() {
+            Some("flip") => {
+                renamed = line.trim_start().replacen("flip", "mirror", 1);
+                renamed.as_str()
+            }
+            Some("rot90") => {
+                renamed = line.trim_start().replacen("rot90", "rotate", 1);
+                renamed.as_str()
+            }
+            _ => line,
+        };
+
+        if line.split_whitespace().next().is_some_and(|w| model_edit::WORDS.contains(&w)) {
+            let message = self.edit_command(line);
+            self.console_log.push(message);
+            if self.mesh_dirty {
+                self.revalidate_selection();
+                self.refresh_document(state);
+            }
             return;
         }
 
