@@ -42,6 +42,8 @@ pub enum Command {
     },
     /// Replaces the render settings. Dragging a slider merges into one step.
     SetRender { before: Vec<Dict>, after: Vec<Dict> },
+    /// Replaces the `META` objects: the animation range.
+    SetMeta { before: Vec<Dict>, after: Vec<Dict> },
     /// Replaces the layer table: names, colours, visibility, new layers.
     SetLayers { before: Vec<Layer>, after: Vec<Layer> },
     /// Appends a model to the model list; undone by removing it again.
@@ -110,6 +112,7 @@ impl Command {
             Self::SetGraph { before, after } => before == after,
             Self::SetRender { before, after } => before == after,
             Self::SetLayers { before, after } => before == after,
+            Self::SetMeta { before, after } => before == after,
             Self::PushModel { .. } => false,
             Self::Batch(commands) => commands.iter().all(Command::is_empty),
         }
@@ -137,6 +140,7 @@ impl Command {
             }
             Self::SetRender { after, .. } => document.render = after.clone(),
             Self::SetLayers { after, .. } => document.layers = after.clone(),
+            Self::SetMeta { after, .. } => document.meta = after.clone(),
             Self::PushModel { volume } => {
                 document.scene.models.push(volume.clone());
                 document.scene.rebuild();
@@ -174,6 +178,7 @@ impl Command {
             }
             Self::SetRender { before, .. } => document.render = before.clone(),
             Self::SetLayers { before, .. } => document.layers = before.clone(),
+            Self::SetMeta { before, .. } => document.meta = before.clone(),
             Self::PushModel { .. } => {
                 document.scene.models.pop();
                 document.scene.rebuild();
@@ -216,6 +221,10 @@ impl Command {
                 true
             }
             (Self::SetRender { after, .. }, Self::SetRender { after: newer, .. }) => {
+                after.clone_from(newer);
+                true
+            }
+            (Self::SetMeta { after, .. }, Self::SetMeta { after: newer, .. }) => {
                 after.clone_from(newer);
                 true
             }
@@ -603,6 +612,18 @@ mod tests {
         h.set_voxels(&mut d, 0, [(IVec3::X, 1)]);
         assert_eq!(h.undo_depth(), 1);
         assert_ne!(h.revision(), saved);
+    }
+
+    #[test]
+    fn the_animation_range_is_an_undoable_edit() {
+        let mut d = doc();
+        let mut h = History::default();
+        assert_eq!(d.anim_range(), None);
+        let command = Command::SetMeta { before: d.meta.clone(), after: d.with_anim_range(2, 30) };
+        h.exec_alone(&mut d, command);
+        assert_eq!(d.anim_range(), Some((2, 30)));
+        h.undo(&mut d);
+        assert_eq!(d.anim_range(), None);
     }
 }
 

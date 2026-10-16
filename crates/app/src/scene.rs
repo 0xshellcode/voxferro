@@ -55,6 +55,7 @@ impl LoadedScene {
                 materials: file.materials.clone(),
                 render: file.render_objects.clone(),
                 layers: layers_for(&file),
+                meta: file.meta.clone(),
             },
             source: file,
             path,
@@ -64,11 +65,9 @@ impl LoadedScene {
     /// The animation's frame range: the file's `_anim_range` when it has
     /// one, else from 0 to the last frame anything is keyed on.
     pub fn anim_range(&self) -> (u32, u32) {
-        let saved = self.source.meta.iter().find_map(|m| m.get_parsed::<u32, 2>("_anim_range"));
-        match saved {
-            Some([a, b]) if b >= a => (a, b),
-            _ => (0, voxel_core::anim::last_keyed_frame(&self.doc.scene.nodes)),
-        }
+        self.doc
+            .anim_range()
+            .unwrap_or_else(|| (0, voxel_core::anim::last_keyed_frame(&self.doc.scene.nodes)))
     }
 
     /// Records that the document now lives at `path`, after a save as.
@@ -98,6 +97,7 @@ impl LoadedScene {
         file.materials = self.doc.materials.clone();
         file.render_objects = self.doc.render.clone();
         file.layers = self.doc.layers.clone();
+        file.meta = self.doc.meta.clone();
 
         let bytes = file.to_bytes();
 

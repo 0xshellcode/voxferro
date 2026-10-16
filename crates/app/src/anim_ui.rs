@@ -1,4 +1,5 @@
-//! Animation: choosing the frame, playing, and keying.
+//! Animation: choosing the frame, playing, keying, the timeline, and
+//! exporting the frames as images.
 //!
 //! The scene shows one frame at a time (`Scene::frame`); edits made there
 //! land on that frame. Moving a model at a frame keys its transform there;
@@ -6,8 +7,19 @@
 //! on, to edit frame by frame.
 
 use crate::App;
-use eframe::egui;
+use eframe::{egui, egui_wgpu};
 use voxel_core::Command;
+
+/// Rendering every frame of the range to numbered PNG files.
+pub struct ExportJob {
+    dir: std::path::PathBuf,
+    stem: String,
+    /// The frame being rendered.
+    frame: u32,
+    last: u32,
+    samples: u32,
+    written: usize,
+}
 
 impl App {
     /// Shows `frame`: rebuilds the placements and the meshes for it.
@@ -99,7 +111,150 @@ impl App {
                 }
             }
             ["newframe"] => self.new_shape_frame(),
-            _ => "anim play | stop | frame <n> | fps <n> | key | unkey | newframe".to_owned(),
+            ["range", a, b] => match (a.parse::<u32>(), b.parse::<u32>()) {
+                (Ok(a), Ok(b)) if b >= a => {
+                    self.set_anim_range(a, b, false);
+                    format!("range {a} to {b}")
+                }
+                _ => "anim range <first> <last>, last not before first".to_owned(),
+            },
+            ["export", dir, rest @ ..] => {
+                let samples = rest.first().and_then(|s| s.parse::<u32>().ok()).unwrap_or(self.export_samples);
+                self.start_export(std::path::PathBuf::from(dir), samples)
+            }
+            _ => "anim play | stop | frame <n> | fps <n> | key | unkey | newframe | range <a> <b> | export <dir> [samples]"
+                .to_owned(),
+        }
+    }
+
+    /// Saves the range in the file's `META`, as one undo step (`merge` for
+    /// a dragged field).
+    fn set_anim_range(&mut self, first: u32, last: u32, merge: bool) {
+        let Some(loaded) = self.scene.as_mut() else { return };
+        let command = Command::SetMeta { before: loaded.doc.meta.clone(), after: loaded.doc.with_anim_range(first, last) };
+        if merge {
+            self.history.exec(&mut loaded.doc, command);
+        } else {
+            self.history.exec_alone(&mut loaded.doc, command);
+        }
+    }
+
+    /// Starts rendering the range, `samples` path-traced samples a frame.
+    pub fn start_export(&mut self, dir: std::path::PathBuf, samples: u32) -> String {
+        let Some(loaded) = &self.scene else { return "nothing open".to_owned() };
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return format!("error: cannot use {}: {e}", dir.display());
+        }
+        let (first, last) = loaded.anim_range();
+        let stem = std::path::Path::new(&loaded.name)
+            .file_stem()
+            .map_or("frame".to_owned(), |s| s.to_string_lossy().into_owned());
+        self.playing = false;
+        self.rendering = true;
+        self.set_frame(first);
+        self.path_tracer.reset();
+        let count = last - first + 1;
+        self.export = Some(ExportJob { dir: dir.clone(), stem, frame: first, last, samples: samples.max(1), written: 0 });
+        format!("exporting {count} frames to {} at {samples} samples", dir.display())
+    }
+
+    /// Writes the current frame once it has its samples, and moves on.
+    pub fn export_step(&mut self, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
+        let Some(job) = &self.export else { return };
+        ctx.request_repaint();
+        if self.path_tracer.samples < job.samples {
+            return;
+        }
+        let path = job.dir.join(format!("{}_{:04}.png", job.stem, job.frame));
+        let written = match self.path_tracer.read_frame(&state.device, &state.queue) {
+            Some((w, h, rgba)) => std::fs::write(&path, voxel_core::export::png_rgba(w, h, &rgba)).map_err(|e| e.to_string()),
+            None => Err("nothing rendered".to_owned()),
+        };
+        let Some(job) = &mut self.export else { return };
+        if let Err(e) = written {
+            let message = format!("export stopped at frame {}: {e}", job.frame);
+            self.export = None;
+            self.console_log.push(message);
+            return;
+        }
+        job.written += 1;
+        if job.frame >= job.last {
+            let message = format!("exported {} frames to {}", job.written, job.dir.display());
+            eprintln!("[voxferro] {message}");
+            self.export = None;
+            self.console_log.push(message);
+        } else {
+            job.frame += 1;
+            let next = job.frame;
+            self.set_frame(next);
+            self.path_tracer.reset();
+        }
+    }
+
+    /// The strip of frames: the range, where the selected model or group is
+    /// keyed (yellow) and where its shape changes model (blue), and the
+    /// current frame. Click or drag on it to scrub.
+    fn timeline(&mut self, ui: &mut egui::Ui, first: u32, last: u32) {
+        let width = ui.available_width().max(60.0);
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::click_and_drag());
+        let span = (last - first).max(1) as f32;
+        let x_of = |f: u32| rect.left() + 4.0 + (f.saturating_sub(first) as f32 / span) * (rect.width() - 8.0);
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 3.0, egui::Color32::from_gray(32));
+
+        // Frame ticks; every fifth one taller.
+        let step = if last - first > 60 { 5 } else { 1 };
+        for f in (first..=last).step_by(step as usize) {
+            let tall = f % 5 == 0;
+            let x = x_of(f);
+            let top = if tall { rect.top() + 4.0 } else { rect.top() + 10.0 };
+            painter.line_segment([egui::pos2(x, top), egui::pos2(x, rect.bottom() - 4.0)], egui::Stroke::new(1.0, egui::Color32::from_gray(70)));
+        }
+
+        // Keys of the selected node, and the frames where its shape (if it
+        // has one) changes model.
+        let node = self.target_node();
+        let target = self.scene.as_ref().and_then(|loaded| {
+            let nodes = &loaded.doc.scene.nodes;
+            match nodes.iter().find(|n| Some(n.id()) == node)? {
+                vox_format::SceneNode::Transform(t) => {
+                    let keys: Vec<u32> = voxel_core::anim::keyframes(t).iter().map(|k| k.0).collect();
+                    let shape_frames: Vec<u32> = match nodes.iter().find(|n| n.id() == t.child) {
+                        Some(vox_format::SceneNode::Shape(s)) => s
+                            .models
+                            .iter()
+                            .map(|m| m.attributes.get("_f").and_then(|v| v.parse().ok()).unwrap_or(0))
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                    Some((keys, shape_frames))
+                }
+                _ => None,
+            }
+        });
+        if let Some((keys, shape_frames)) = target {
+            if keys.len() > 1 {
+                for f in keys {
+                    let c = egui::pos2(x_of(f), rect.top() + 9.0);
+                    painter.rect_filled(egui::Rect::from_center_size(c, egui::vec2(6.0, 6.0)), 1.0, egui::Color32::from_rgb(255, 210, 90));
+                }
+            }
+            if shape_frames.len() > 1 {
+                for f in shape_frames {
+                    painter.circle_filled(egui::pos2(x_of(f), rect.bottom() - 7.0), 3.0, egui::Color32::from_rgb(110, 170, 255));
+                }
+            }
+        }
+
+        let now = x_of(self.frame());
+        painter.line_segment([egui::pos2(now, rect.top()), egui::pos2(now, rect.bottom())], egui::Stroke::new(2.0, egui::Color32::WHITE));
+
+        if let Some(pos) = response.interact_pointer_pos() {
+            if response.clicked() || response.dragged() {
+                let t = ((pos.x - rect.left() - 4.0) / (rect.width() - 8.0)).clamp(0.0, 1.0);
+                let f = first + (t * span).round() as u32;
+                self.set_frame(f);
+            }
         }
     }
 
@@ -142,10 +297,21 @@ impl App {
             }
             ui.add(egui::DragValue::new(&mut self.fps).range(1.0..=60.0).suffix(" fps").speed(0.2));
         });
-        ui.add(egui::Slider::new(&mut frame, first..=last.max(first + 1)).text("frame"));
         if frame != self.frame() {
             self.set_frame(frame);
         }
+        self.timeline(ui, first, last);
+        ui.horizontal(|ui| {
+            ui.label(format!("frame {}", self.frame()));
+            ui.label("range");
+            let (mut a, mut b) = (first, last);
+            let ca = ui.add(egui::DragValue::new(&mut a).range(0..=b)).changed();
+            let cb = ui.add(egui::DragValue::new(&mut b).range(a..=9999)).changed();
+            if ca || cb {
+                // Merged until the drag ends.
+                self.set_anim_range(a, b, true);
+            }
+        });
         ui.horizontal(|ui| {
             for (label, line, tip) in [
                 ("Key", "anim key", "Key the selected model or group's placement at this frame"),
@@ -154,6 +320,24 @@ impl App {
             ] {
                 if ui.small_button(label).on_hover_text(tip).clicked() {
                     lines.push(line.to_owned());
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            match &self.export {
+                Some(job) => {
+                    ui.label(format!("exporting frame {} of {}…", job.frame, job.last));
+                    if ui.small_button("Stop").clicked() {
+                        self.export = None;
+                    }
+                }
+                None => {
+                    if ui.small_button("Export frames…").on_hover_text("Path trace every frame of the range to PNG files").clicked() {
+                        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                            lines.push(format!("anim export {} {}", dir.display(), self.export_samples));
+                        }
+                    }
+                    ui.add(egui::DragValue::new(&mut self.export_samples).range(1..=4096).suffix(" samples"));
                 }
             }
         });

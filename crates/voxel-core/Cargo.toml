@@ -9,6 +9,8 @@ rust-version.workspace = true
 bytemuck.workspace = true
 glam.workspace = true
 vox-format = { path = "../vox-format" }
+# DEFLATE for PNG output: rendered frames are megabytes uncompressed.
+miniz_oxide = "0.9"
 
 [dev-dependencies]
 # An independent reader, to check that edited scene graphs read the same.

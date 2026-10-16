@@ -20,6 +20,8 @@ pub struct Document {
     pub render: Vec<Dict>,
     /// `LAYR` entries: name, colour and visibility of each layer.
     pub layers: Vec<Layer>,
+    /// `META` objects, such as `_anim_range`.
+    pub meta: Vec<Dict>,
 }
 
 impl Document {
@@ -31,6 +33,27 @@ impl Document {
     /// is visible, and so is "no layer" (-1).
     pub fn layer_hidden(&self, id: i32) -> bool {
         self.layers.iter().any(|l| l.id == id && l.is_hidden())
+    }
+
+    /// The saved animation range, `_anim_range "first last"`.
+    pub fn anim_range(&self) -> Option<(u32, u32)> {
+        self.meta
+            .iter()
+            .find_map(|m| m.get_parsed::<u32, 2>("_anim_range"))
+            .filter(|[a, b]| b >= a)
+            .map(|[a, b]| (a, b))
+    }
+
+    /// The meta objects with `_anim_range` set, in the object that already
+    /// had it or a new one.
+    pub fn with_anim_range(&self, first: u32, last: u32) -> Vec<Dict> {
+        let mut meta = self.meta.clone();
+        let value = format!("{first} {last}");
+        match meta.iter_mut().find(|m| m.get("_anim_range").is_some()) {
+            Some(m) => m.set("_anim_range", value),
+            None => meta.push(Dict(vec![("_anim_range".into(), value)])),
+        }
+        meta
     }
 
     /// The material of a palette index, if it has one.

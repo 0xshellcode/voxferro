@@ -15,7 +15,7 @@ use vox_format::{Dict, Layer};
 impl App {
     /// The transform node scene commands act on: the selected group, or
     /// the selected instance's own node.
-    fn target_node(&self) -> Option<i32> {
+    pub(crate) fn target_node(&self) -> Option<i32> {
         self.selected_group.or_else(|| {
             let loaded = self.scene.as_ref()?;
             loaded.doc.scene.instances.get(self.selected)?.node

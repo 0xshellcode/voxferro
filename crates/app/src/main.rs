@@ -96,6 +96,9 @@ struct App {
     fps: f32,
     /// Seconds of playback not yet turned into frames.
     play_clock: f64,
+    /// Frames being rendered to files, and the samples a frame gets.
+    export: Option<anim_ui::ExportJob>,
+    export_samples: u32,
     /// The render objects `environment` was decoded from.
     environment_source: Vec<vox_format::Dict>,
     /// Environment map names found on disk, listed on first use.
@@ -183,6 +186,8 @@ impl App {
             playing: false,
             fps: 10.0,
             play_clock: 0.0,
+            export: None,
+            export_samples: 64,
             pending_samples: 0,
             status: String::new(),
             selected: 0,
@@ -1359,6 +1364,7 @@ impl eframe::App for App {
             });
 
         egui::CentralPanel::default().show(ui, |ui| self.viewport(ui, &state));
+        self.export_step(&ctx, &state);
 
         // Releasing the button ends whatever gesture was being merged: a
         // colour or material slider drag, as well as a stroke.
