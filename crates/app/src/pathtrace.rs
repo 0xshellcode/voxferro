@@ -1449,6 +1449,18 @@ pub fn exposed_emitters(volume: &Volume, materials: &[vox_format::Material]) -> 
     out
 }
 
+/// `VOXFERRO_TRACE_DEBUG`: replaces the path traced image with one stage of
+/// it, to find where a GPU or driver goes wrong without a debugger there
+/// (the CI's software GPUs): 1 a flat grey (the output and post-processing
+/// alone), 2 the primary hit's normal, 3 the primary hit's palette colour,
+/// 4 the sky alone. 0 or unset is the normal render.
+fn trace_debug_mode() -> u32 {
+    static MODE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        std::env::var("VOXFERRO_TRACE_DEBUG").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1678,16 +1690,3 @@ mod tests {
         assert!(written.iter().any(|o| o.get("_specular") == Some("5")), "other bounce counts survive");
     }
 }
-
-/// `VOXFERRO_TRACE_DEBUG`: replaces the path traced image with one stage of
-/// it, to find where a GPU or driver goes wrong without a debugger there
-/// (the CI's software GPUs): 1 a flat grey (the output and post-processing
-/// alone), 2 the primary hit's normal, 3 the primary hit's palette colour,
-/// 4 the sky alone. 0 or unset is the normal render.
-fn trace_debug_mode() -> u32 {
-    static MODE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *MODE.get_or_init(|| {
-        std::env::var("VOXFERRO_TRACE_DEBUG").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
-    })
-}
-
