@@ -138,6 +138,24 @@ pub fn make_ico(png_path: &str, out_path: &str) -> Result<(), String> {
     std::fs::write(out_path, ico_bytes(icon.width, &icon.rgba)).map_err(|e| format!("{out_path}: {e}"))
 }
 
+/// Sizes of the freedesktop `hicolor` icon theme a Linux package installs.
+pub const HICOLOR_SIZES: [u32; 7] = [16, 32, 48, 64, 128, 256, 512];
+
+/// `--make-icon-set <icon.png> <dir>`: `<dir>/<n>x<n>/apps/voxferro.png`
+/// for each of `HICOLOR_SIZES`, from the shaped icon.
+pub fn make_icon_set(png_path: &str, dir: &str) -> Result<(), String> {
+    let bytes = std::fs::read(png_path).map_err(|e| format!("{png_path}: {e}"))?;
+    let icon = eframe::icon_data::from_png_bytes(&bytes).map_err(|e| format!("{png_path}: {e}"))?;
+    for size in HICOLOR_SIZES {
+        let (w, h, px) = crate::image_out::fit(icon.width, icon.height, &icon.rgba, size);
+        let folder = std::path::Path::new(dir).join(format!("{size}x{size}/apps"));
+        std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+        let out = folder.join("voxferro.png");
+        std::fs::write(&out, voxel_core::export::png_rgba(w, h, &px)).map_err(|e| format!("{}: {e}", out.display()))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

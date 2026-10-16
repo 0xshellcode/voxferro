@@ -19,6 +19,10 @@ on:
         description: "Also run on macOS"
         type: boolean
         default: true
+      package:
+        description: "Build the Linux tarball and the Windows zip"
+        type: boolean
+        default: false
 
 # A newer push replaces a run still in progress.
 concurrency:
@@ -100,6 +104,27 @@ jobs:
             echo -n "mode $mode: "; $py scripts/ci/check_image.py stage$mode.bmp --stats || true
           done
 
+      # Windows: the same, compiling the shaders with DXC (from the Windows
+      # SDK on the runner) instead of the default FXC, to tell a compiler
+      # problem from a backend one.
+      - name: Path tracer stages with DXC (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        timeout-minutes: 15
+        continue-on-error: true
+        env:
+          VOXFERRO_NO_RECENT: "1"
+          WGPU_DX12_COMPILER: dxc
+        run: |
+          dll=$(find "/c/Program Files (x86)/Windows Kits/10/bin" -path "*x64/dxcompiler.dll" 2>/dev/null | sort | tail -1)
+          echo "dxcompiler: $dll"
+          cp "$dll" target/debug/
+          dxil=$(dirname "$dll")/dxil.dll; [ -f "$dxil" ] && cp "$dxil" target/debug/
+          for mode in 1 0; do
+            VOXFERRO_TRACE_DEBUG=$mode ./target/debug/voxferro --script assets/showcase/shapes.cmds --render 2 --screenshot dxc$mode.bmp > dxc$mode.log 2>&1 || echo "mode $mode: exit $?"
+            echo -n "dxc mode $mode: "; python scripts/ci/check_image.py dxc$mode.bmp --stats || true
+          done
+
       - name: Smoke test, path traced render
         shell: bash
         timeout-minutes: 15
@@ -135,8 +160,31 @@ jobs:
             view.log
             stage*.bmp
             stage*.log
+            dxc*.bmp
+            dxc*.log
             smoke.bmp
             smoke.log
             mcp.log
+          if-no-files-found: ignore
+
+      # Packages, on a manual run that asks for them.
+      - name: Package (Linux)
+        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.package
+        run: ./scripts/package-linux.sh
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.package
+        shell: pwsh
+        run: ./scripts/package-windows.ps1
+
+      - name: Upload packages
+        if: github.event_name == 'workflow_dispatch' && inputs.package
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.os }}
+          path: |
+            target/dist/*.tar.gz
+            target/dist/*.zip
+            target/dist/*.AppImage
           if-no-files-found: ignore
 

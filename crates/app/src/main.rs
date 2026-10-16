@@ -74,6 +74,18 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    if let [flag, png, dir] = args.as_slice()
+        && flag == "--make-icon-set"
+    {
+        match icon::make_icon_set(png, dir) {
+            Ok(()) => eprintln!("[voxferro] wrote icons in {dir}"),
+            Err(e) => {
+                eprintln!("[voxferro] {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
 
     // Before the event loop, so a file that launches the app is caught.
     #[cfg(target_os = "macos")]

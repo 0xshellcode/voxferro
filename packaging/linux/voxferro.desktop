@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Voxferro
+GenericName=Voxel Editor
+Comment=Voxel editor compatible with the reference editor's .vox format
+Exec=voxferro %f
+Icon=voxferro
+Terminal=false
+Categories=Graphics;3DGraphics;
+MimeType=application/x-the reference editor;
+Keywords=voxel;vox;the reference editor;3d;path tracer;
