@@ -41,7 +41,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 of the [ROADMAP](ROADMAP.md) are complete, with **196 tests
+Phases 0–40 and 43 of the [ROADMAP](ROADMAP.md) are complete, with **206 tests
 passing**. Working today:
 
 - Reading **and writing** `.vox` (versions 150 and 200), validated against the
@@ -70,6 +70,8 @@ passing**. Working today:
   file; depth of field with a polygonal aperture
 - Command console
 - Voxel operations as compute kernels in WGSL
+- Voxel scripts (`xs`): the reference editor's GLSL scripts run unchanged, and WGSL
+  ones of our own, from a Scripts panel with a slider per argument
 - Atomic saving that preserves materials, cameras and renderer settings
 - Progressive path tracer (GI, shadows, ACES) with the file's lighting
 - Metal, glass, emissive and cloud materials (media that absorb, scatter
@@ -86,6 +88,7 @@ Native arm64 on Metal: `[voxferro] graphics backend: Metal on Apple M2`.
 cargo run -p voxferro                                  # opens monu1.vox
 cargo run -p voxferro -- assets/vox/castle.vox         # opens another model
 cargo run -p voxferro -- --run "gpu torus 166 40 14 replace" --run "save out.vox"
+cargo run -p voxferro -- --run "new 40" --run "xs menger 3" --run "xs -n 2 grow" --screenshot out.bmp
 cargo run -p voxferro -- assets/vox/monu1.vox --render-mode           # opens in Render mode
 cargo run -p voxferro -- assets/vox/monu1.vox --render 200 --screenshot out.bmp
 cargo run -p voxferro -- --run "new 16" --run "brush attach box" --drag 0.3 0.7 0.6 0.8 --screenshot out.bmp
@@ -152,7 +155,7 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 
 | Group | Commands |
 |---|---|
-| Files | `open [ruta]`, `new [n \| x y z]`, `save [ruta]`, `export <ruta.obj>` |
+| Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `export <path.obj>` |
 | Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|face\|fill]`, `color <n>` |
 | Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz` |
 | Model | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
@@ -161,6 +164,7 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]` |
 | Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|frame [all\|selection\|instance]` |
+| Scripts | `xs [-n passes] [-c c1,c2,…] <script> [args…]`, `xs list` |
 | Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>` |
 
 For testing without a mouse: `--click fx fy` and `--drag fx0 fy0 fx1 fy1`, in

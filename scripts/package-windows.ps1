@@ -31,6 +31,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $app "assets") | Out-Null
 
 Copy-Item (Join-Path "target\release" "voxferro.exe") $app
 Copy-Item -Recurse "assets\showcase" (Join-Path $app "assets")
+Copy-Item -Recurse "assets\scripts" (Join-Path $app "assets")
 Copy-Item "assets\materials_demo.vox" (Join-Path $app "assets")
 Copy-Item "LICENSE-MIT", "LICENSE-APACHE", "README.md" $app
 

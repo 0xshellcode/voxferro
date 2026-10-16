@@ -41,7 +41,7 @@ pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut Histo
                       group [i ...] | ungroup | node name|hide|show|move|turn|into; layer list|new|hide|show|name|assign; \
                       anim play|stop|frame n|fps n|key|unkey|newframe|movekey a b|moveframe a b|range a b|export dir [n]; \
                       camera front|back|left|right|top|bottom|iso|ortho|persp|frame [all|selection|instance]|slots|save n|load n; \
-                      render save <file.png>; \
+                      render save <file.png>; xs [-n passes] [-c c1,c2] <script> [args] | xs list; \
                       open | new | save | export <file.obj>; env …; undo | redo"
                 .to_owned(),
             changed: false,

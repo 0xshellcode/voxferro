@@ -19,3 +19,10 @@ is absent, so a clean checkout still builds and tests green.
 The Radiance `.hdr` files the reference editor ships in its own `ibl/` folder, credited
 in its readme to the HDRI-Hub free samples. Like `vox/`, they are third-party
 and stay out of version control; copy them from a the reference editor install.
+
+## `scripts/` — voxel scripts
+
+Sample scripts for the `xs` command, written for Voxferro in WGSL and
+licensed with it. the reference editor's own GLSL samples (its `shader/` folder) are
+not copied here: the editor finds them in a local install, the same way it
+finds environment maps, and runs them unchanged.

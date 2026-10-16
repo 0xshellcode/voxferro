@@ -30,7 +30,7 @@ cp target/release/voxferro "$root/bin/"
 cp packaging/linux/voxferro.desktop "$root/share/applications/"
 cp packaging/linux/voxferro-mime.xml "$root/share/mime/packages/voxferro.xml"
 target/release/voxferro --make-icon-set assets/icon/icon.png "$root/share/icons/hicolor"
-cp -R assets/showcase assets/materials_demo.vox "$root/share/voxferro/assets/"
+cp -R assets/showcase assets/scripts assets/materials_demo.vox "$root/share/voxferro/assets/"
 if [ "$with_mv" = 1 ]; then
     for dir in vox ibl; do
         [ -d "assets/$dir" ] && cp -R "assets/$dir" "$root/share/voxferro/assets/"

@@ -24,6 +24,10 @@ bytemuck.workspace = true
 eframe = "0.36"
 egui = "0.36"
 wgpu = "30"
+# Voxel scripts (src/xs.rs): the reference editor's GLSL scripts and our WGSL ones
+# are parsed and checked here, for errors with line numbers, before wgpu
+# sees them. The version wgpu 30 already uses.
+naga = { version = "30", features = ["glsl-in", "wgsl-in", "wgsl-out"] }
 # Native open/save panels (NSOpenPanel on macOS). Default features only pull
 # Linux portal support, which does not build anything on macOS.
 rfd = "0.17"

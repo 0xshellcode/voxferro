@@ -37,6 +37,8 @@ mod tools;
 mod trace_cache;
 #[cfg(windows)]
 mod windows_graphics;
+mod xs;
+mod xs_ui;
 
 use camera::OrbitCamera;
 use eframe::{egui, egui_wgpu};
@@ -147,27 +149,42 @@ fn sample_dir() -> std::path::PathBuf {
     assets_dir().join("vox")
 }
 
-/// Where environment maps are looked for, in order. A file names its map
-/// relative to the editor's own `ibl/` folder, so after the bundled copies
-/// the search falls back to a local the reference editor install:
+/// Local the reference editor installs, whose folders (`ibl/`, `shader/`) the
+/// editor falls back to:
 ///
-/// - `reference_editor_DIR`, if set: one install's folder (the one holding
-///   `ibl/`), on any system;
+/// - `reference_editor_DIR`, if set: one install's folder, on any system;
 /// - every folder in `~/Applications/the reference editor` -- the home being `HOME`,
 ///   or `USERPROFILE` on Windows -- where several versions can sit side by
 ///   side.
-fn env_map_dirs() -> Vec<std::path::PathBuf> {
-    let mut dirs = vec![assets_dir().join("ibl")];
+fn reference_editor_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
     if let Some(dir) = std::env::var_os("reference_editor_DIR") {
-        dirs.push(std::path::PathBuf::from(dir).join("ibl"));
+        dirs.push(std::path::PathBuf::from(dir));
     }
     if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         let apps = std::path::Path::new(&home).join("Applications").join("the reference editor");
         if let Ok(entries) = std::fs::read_dir(apps) {
-            dirs.extend(entries.flatten().map(|e| e.path().join("ibl")));
+            let mut installs: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+            // Newest version first, so its copy of a script wins.
+            installs.sort_by(|a, b| b.cmp(a));
+            dirs.extend(installs);
         }
     }
     dirs
+}
+
+/// Where environment maps are looked for, in order. A file names its map
+/// relative to the editor's own `ibl/` folder, so after the bundled copies
+/// the search falls back to a local the reference editor install.
+fn env_map_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = vec![assets_dir().join("ibl")];
+    dirs.extend(reference_editor_dirs().into_iter().map(|d| d.join("ibl")));
+    dirs
+}
+
+/// Where voxel scripts are looked for (see `xs::dirs`).
+fn script_dirs() -> Vec<std::path::PathBuf> {
+    xs::dirs(&assets_dir(), &reference_editor_dirs())
 }
 
 fn find_env_map(name: &str) -> Option<std::path::PathBuf> {
@@ -188,6 +205,8 @@ struct App {
     /// texture), and both cannot be borrowed out of the same map at once.
     scene_renderer: SceneRenderer,
     voxel_compute: compute::VoxelCompute,
+    /// Voxel scripts: the runner and the Scripts panel's state.
+    xs: xs_ui::XsState,
     path_tracer: PathTracer,
     /// Render mode, mirroring the editor's Model/Render tabs.
     rendering: bool,
@@ -314,6 +333,7 @@ impl App {
             scene: None,
             scene_renderer: SceneRenderer::new(&state.device, state.target_format),
             voxel_compute: compute::VoxelCompute::new(&state.device),
+            xs: xs_ui::XsState::new(&state.device),
             path_tracer: PathTracer::new(&state.device),
             rendering: false,
             environment: Environment::default(),
@@ -865,6 +885,10 @@ impl App {
         }
 
         ui.separator();
+        ui.heading("Scripts");
+        self.scripts_ui(ui, state);
+
+        ui.separator();
         ui.heading("Scene");
         self.scene_ui(ui);
         ui.separator();
@@ -1120,6 +1144,12 @@ impl App {
             if !message.is_empty() {
                 self.console_log.push(message);
             }
+            return;
+        }
+
+        if line.split_whitespace().next() == Some("xs") {
+            let message = self.xs_command(line, state);
+            self.console_log.push(message);
             return;
         }
 

@@ -11,7 +11,8 @@ use std::path::PathBuf;
 /// How many paths the list keeps.
 pub const LIMIT: usize = 10;
 
-fn file() -> Option<PathBuf> {
+/// The platform's folder for this app's settings (see the module notes).
+pub fn settings_dir() -> Option<PathBuf> {
     let dir = if cfg!(target_os = "macos") {
         PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/Voxferro")
     } else if cfg!(windows) {
@@ -22,7 +23,11 @@ fn file() -> Option<PathBuf> {
             None => PathBuf::from(std::env::var_os("HOME")?).join(".config/voxferro"),
         }
     };
-    Some(dir.join("recent.txt"))
+    Some(dir)
+}
+
+fn file() -> Option<PathBuf> {
+    Some(settings_dir()?.join("recent.txt"))
 }
 
 /// The list, newest first.
