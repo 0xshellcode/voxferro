@@ -1,6 +1,6 @@
 //! The scene graph: `nTRN` → `nGRP` → `nSHP` turned into a walkable tree.
 
-use crate::{Hit, Transform, Volume, raycast};
+use crate::{Face, Hit, Transform, Volume, raycast};
 use glam::{IVec3, Vec3};
 use vox_format::{SceneNode, VoxFile};
 
@@ -178,6 +178,33 @@ impl Scene {
             }
         }
         best
+    }
+
+    /// Where a ray meets the floor of one instance's box: the plane under
+    /// its bottom layer of cells, inside the box's footprint. What the
+    /// attach brush stands on when it hits no voxel, so an empty model can
+    /// be started with the mouse. The hit names the virtual cell under the
+    /// floor (z = -1) entered through its top face, so `adjacent` is the
+    /// bottom-layer cell above it.
+    pub fn pick_floor(&self, instance: usize, origin: Vec3, direction: Vec3) -> Option<ScenePick> {
+        let inst = self.instances.get(instance)?;
+        let volume = self.models.get(inst.model_index)?;
+        let local_origin = inst.transform.inverse_apply(origin) + volume.pivot();
+        let local_dir = inst.transform.inverse_rotate(direction).normalize_or_zero();
+        if local_dir.z.abs() < 1e-6 {
+            return None;
+        }
+        let t = -local_origin.z / local_dir.z;
+        if t <= 0.0 {
+            return None;
+        }
+        let p = local_origin + local_dir * t;
+        let [sx, sy, _] = volume.size();
+        if p.x < 0.0 || p.y < 0.0 || p.x >= sx as f32 || p.y >= sy as f32 {
+            return None;
+        }
+        let voxel = IVec3::new(p.x.floor() as i32, p.y.floor() as i32, -1);
+        Some(ScenePick { instance, hit: Hit { voxel, face: Face::PosZ }, distance: t })
     }
 
     /// World bounds of every instance's declared box, filled or not: what
@@ -385,6 +412,17 @@ mod tests {
             nodes: Vec::new(),
             frame: 0,
         }
+    }
+
+    #[test]
+    fn the_floor_catches_rays_that_miss_every_voxel() {
+        let mut scene = scene_of(&[([0, 0, 0], 0b0000_0100)]);
+        scene.models[0] = Volume::new([4, 4, 4]);
+        // The box spans -2..2 around its pivot; its floor is world z = -2.
+        let pick = scene.pick_floor(0, Vec3::new(1.5, -0.5, 10.0), Vec3::NEG_Z).unwrap();
+        assert_eq!(pick.hit.adjacent(), IVec3::new(3, 1, 0), "bottom layer, under the ray");
+        assert!(scene.pick_floor(0, Vec3::new(9.0, 0.0, 10.0), Vec3::NEG_Z).is_none(), "outside the footprint");
+        assert!(scene.pick_floor(0, Vec3::new(0.0, 0.0, 10.0), Vec3::Z).is_none(), "pointing away");
     }
 
     #[test]

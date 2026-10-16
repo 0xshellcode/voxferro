@@ -176,6 +176,8 @@ struct App {
     screenshot: Option<String>,
     /// Write the screenshot as the app icon (`--icon`).
     write_icon: bool,
+    /// The guide lines last uploaded (see `model_guides`).
+    guide_lines: Vec<renderer::LineVertex>,
     /// The MCP server, while switched on, and the port it takes.
     mcp: Option<mcp::Server>,
     mcp_port: u16,
@@ -239,6 +241,7 @@ impl App {
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
             screenshot: None,
             write_icon: false,
+            guide_lines: Vec::new(),
             mcp: None,
             mcp_port: mcp::DEFAULT_PORT,
             mcp_write: None,
@@ -1280,6 +1283,12 @@ impl App {
         } else {
             pointer.and_then(|pos| self.hover_cell(ray_at(&self.camera, pos)))
         };
+
+        let guides = self.model_guides();
+        if guides != self.guide_lines {
+            self.scene_renderer.set_lines(&state.device, &guides);
+            self.guide_lines = guides;
+        }
 
         let mut egui_renderer = state.renderer.write();
         let texture_id = self.scene_renderer.render(

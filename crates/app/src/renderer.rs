@@ -30,6 +30,14 @@ struct PaletteUniform {
     colors: [[f32; 4]; 256],
 }
 
+/// A vertex of a guide line, in world space.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LineVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+}
+
 /// The offscreen target and the egui texture pointing at it.
 struct Target {
     size: [u32; 2],
@@ -49,6 +57,11 @@ pub struct SceneRenderer {
     vertex_buffer: Option<wgpu::Buffer>,
     index_buffer: Option<wgpu::Buffer>,
     index_count: u32,
+
+    /// Guide lines: the selected model's box and floor grid.
+    line_pipeline: wgpu::RenderPipeline,
+    line_buffer: Option<wgpu::Buffer>,
+    line_vertices: u32,
 
     target: Option<Target>,
 }
@@ -168,7 +181,54 @@ impl SceneRenderer {
             cache: None,
         });
 
+        let line_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("line shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/lines.wgsl").into()),
+        });
+        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("line pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &line_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<LineVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
+                })],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &line_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            // Hidden behind voxels, but never hiding anything itself.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         Self {
+            line_pipeline,
+            line_buffer: None,
+            line_vertices: 0,
             pipeline,
             bind_group,
             uniform_buffer,
@@ -179,6 +239,18 @@ impl SceneRenderer {
             index_count: 0,
             target: None,
         }
+    }
+
+    /// Replaces the guide lines: pairs of vertices, one segment each.
+    pub fn set_lines(&mut self, device: &wgpu::Device, vertices: &[LineVertex]) {
+        self.line_vertices = vertices.len() as u32;
+        self.line_buffer = (!vertices.is_empty()).then(|| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("guide lines"),
+                contents: bytemuck::cast_slice(vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
     }
 
     /// Uploads a mesh, replacing whatever was there.
@@ -355,6 +427,12 @@ impl SceneRenderer {
                 pass.set_vertex_buffer(0, vb.slice(..));
                 pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..self.index_count, 0, 0..1);
+            }
+            if let Some(lines) = &self.line_buffer {
+                pass.set_pipeline(&self.line_pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.set_vertex_buffer(0, lines.slice(..));
+                pass.draw(0..self.line_vertices, 0..1);
             }
         }
         queue.submit(Some(encoder.finish()));

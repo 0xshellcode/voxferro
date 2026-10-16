@@ -23,18 +23,14 @@ pub struct Stroke {
 }
 
 impl App {
-    /// Starts a stroke if the ray hits a voxel. Returns whether it did, so
+    /// Starts a stroke if the ray hits a voxel (or, attaching, the floor of
+    /// the selected model; see `brush_pick`). Returns whether it did, so
     /// a press on empty space can orbit the camera instead.
     pub fn begin_stroke(&mut self, ray: Ray) -> bool {
-        let visible = self.visibility();
-        let Some(loaded) = &mut self.scene else { return false };
-        let Some(pick) = loaded
-            .doc
-            .scene
-            .pick(ray.origin, ray.direction, 10_000.0, |i| visible.shows(i))
-        else {
+        let Some(pick) = self.brush_pick(ray) else {
             return false;
         };
+        let Some(loaded) = &mut self.scene else { return false };
         self.selected = pick.instance;
         let model = loaded.doc.scene.instances[pick.instance].model_index;
         let anchor = brush::anchor(self.brush_mode, &pick.hit);
@@ -179,11 +175,70 @@ impl App {
         Some((pick.instance, pick.hit))
     }
 
+    /// The selected model's box and the grid on its floor, as line
+    /// segments: where the attach brush lands when it misses every voxel,
+    /// and the only way to see an empty model at all.
+    pub fn model_guides(&self) -> Vec<crate::renderer::LineVertex> {
+        const FRAME: [f32; 4] = [1.0, 1.0, 1.0, 0.35];
+        const GRID: [f32; 4] = [1.0, 1.0, 1.0, 0.08];
+        let Some(loaded) = &self.scene else { return Vec::new() };
+        let scene = &loaded.doc.scene;
+        let visible = self.visibility();
+        let Some(instance) = scene.instances.get(self.selected).filter(|i| visible.shows(i)) else {
+            return Vec::new();
+        };
+        let Some(volume) = scene.models.get(instance.model_index) else { return Vec::new() };
+        let size = Vec3::from_array(volume.size().map(|s| s as f32));
+        let world = |p: Vec3| instance.transform.apply(p - volume.pivot()).to_array();
+        let mut out = Vec::new();
+        let mut segment = |a: Vec3, b: Vec3, color: [f32; 4]| {
+            out.push(crate::renderer::LineVertex { position: world(a), color });
+            out.push(crate::renderer::LineVertex { position: world(b), color });
+        };
+        for x in 1..volume.size()[0] {
+            segment(Vec3::new(x as f32, 0.0, 0.0), Vec3::new(x as f32, size.y, 0.0), GRID);
+        }
+        for y in 1..volume.size()[1] {
+            segment(Vec3::new(0.0, y as f32, 0.0), Vec3::new(size.x, y as f32, 0.0), GRID);
+        }
+        let corner = |i: usize| Vec3::new(
+            if i & 1 == 0 { 0.0 } else { size.x },
+            if i & 2 == 0 { 0.0 } else { size.y },
+            if i & 4 == 0 { 0.0 } else { size.z },
+        );
+        for (a, b) in crate::CUBE_EDGES {
+            segment(corner(a), corner(b), FRAME);
+        }
+        out
+    }
+
+    /// What the brush acts on under a ray: the nearest visible voxel, or,
+    /// missing every voxel, the floor of the selected model's box when
+    /// attaching -- so an empty model can be started with the mouse. Only
+    /// that model's floor, so a click elsewhere still orbits; and only for
+    /// shapes that place cells, not face and fill, which grow from an
+    /// existing voxel.
+    fn brush_pick(&self, ray: Ray) -> Option<voxel_core::ScenePick> {
+        let loaded = self.scene.as_ref()?;
+        let visible = self.visibility();
+        let scene = &loaded.doc.scene;
+        scene.pick(ray.origin, ray.direction, 10_000.0, |i| visible.shows(i)).or_else(|| {
+            let places = matches!(self.brush_shape, BrushShape::Voxel | BrushShape::Box | BrushShape::Line);
+            let shown = scene.instances.get(self.selected).is_some_and(|i| visible.shows(i));
+            if self.brush_mode == BrushMode::Attach && places && shown && !self.selecting && !self.moving {
+                scene.pick_floor(self.selected, ray.origin, ray.direction)
+            } else {
+                None
+            }
+        })
+    }
+
     /// The world-space corners of the cell the brush would act on under the
     /// cursor, for the hover outline.
     pub fn hover_cell(&self, ray: Ray) -> Option<[Vec3; 8]> {
         let loaded = self.scene.as_ref()?;
-        let (instance, hit) = self.pick_visible(ray)?;
+        let pick = self.brush_pick(ray)?;
+        let (instance, hit) = (pick.instance, pick.hit);
         let instance = loaded.doc.scene.instances.get(instance)?;
         let volume = loaded.doc.scene.models.get(instance.model_index)?;
         let cell = brush::anchor(self.brush_mode, &hit).as_vec3();
