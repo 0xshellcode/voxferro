@@ -1,165 +1,165 @@
 # Voxferro
 
-![Icono de Voxferro](assets/icon/icon.png)
+![Voxferro icon](assets/icon/icon.png)
 
-Editor de voxels en Rust (antes *Voxferro*), nativo para Apple Silicon, compatible con el formato
-`.vox` de the reference editor.
+A voxel editor in Rust (formerly *Voxferro*), native on Apple
+Silicon, compatible with the reference editor's `.vox` format.
 
-Proyecto de aprendizaje: el objetivo es entender gráficos modernos y Rust
-construyendo algo real, no clonar the reference editor línea por línea. La
-interoperabilidad de archivos sí es un objetivo; la arquitectura es propia e
-idiomática de Rust.
+A learning project: the goal is to understand modern graphics and Rust by
+building something real, not to clone the reference editor line by line. File
+interoperability is a goal; the architecture is its own and idiomatic
+Rust.
 
-## Estado
+## Status
 
-Las fases 0–40 del [ROADMAP](ROADMAP.md) están completas, con **196 tests
-verdes**. Funciona hoy:
+Phases 0–40 of the [ROADMAP](ROADMAP.md) are complete, with **196 tests
+passing**. Working today:
 
-- Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
-  corpus real y contra `dot_vox`
-- Visor con mallado voraz (caras coplanares fusionadas) por trozos en caché:
-  editar un modelo de 256³ rehace solo lo tocado (~8 ms en release)
-- Grafo de escena con transformaciones y frames de animación; edición y render
-  de escenas con varios modelos, rotados incluidos
-- Abrir, nuevo, guardar como, y aviso de cambios sin guardar
-- Pinceles añadir / borrar / pintar con formas voxel, caja, línea, cara y
-  relleno, con vista previa y undo/redo de un paso por trazo
-- Selección (marco, cara, color), copiar/cortar/pegar, mover; rotar, espejo,
-  recortar y cambiar tamaño del modelo
-- Escena editable: mover, girar, duplicar, añadir y quitar modelos; grupos
-  (crear, mover, girar, ocultar, disolver, arrastrar en el árbol) y capas con nombre y visibilidad, todo
-  guardado en el archivo
-- Paleta y materiales editables desde la interfaz, con undo
-- Animación: reproducir, claves de transformación (interpoladas como en
-  the reference editor a recent version), fotogramas de forma, rango, línea de tiempo (con
-  claves que se arrastran) y exportación de fotogramas renderizados a PNG
-- Exportación a OBJ + MTL + textura de paleta
-- Cámara: encuadrar selección o escena, vistas por eje e isométrica,
-  proyección ortográfica (también en el path tracer) y desplazamiento
-- Ajustes de render (sol, cielo uniforme / atmosférico / HDR, suelo, lente,
-  película, bloom) editables en el panel, con deshacer y guardados en el
-  archivo; profundidad de campo con apertura poligonal
-- Consola de comandos
-- Operaciones de voxel como compute kernels en WGSL
-- Guardado atómico que conserva materiales, cámaras y ajustes del renderer
-- Path tracer progresivo (GI, sombras, ACES) con la iluminación del archivo
-- Materiales metal, vidrio, emisivos y nubes (medios que absorben, dispersan
-  o emiten), con las fórmulas de the reference editor; niebla
-- Plano de suelo infinito con fusión en el horizonte
-- Iluminación con mapas HDR, orientada y normalizada como en the reference editor
-- Cielo atmosférico con dispersión Rayleigh y Mie, y sol que enrojece al atardecer
+- Reading **and writing** `.vox` (versions 150 and 200), validated against the
+  real corpus and against `dot_vox`
+- Viewer with greedy meshing (coplanar faces merged) in cached chunks:
+  editing a 256³ model rebuilds only what was touched (~8 ms in release)
+- Scene graph with transforms and animation frames; editing and rendering
+  of scenes with multiple models, rotated ones included
+- Open, new, save as, and a warning about unsaved changes
+- Attach / erase / paint brushes with voxel, box, line, face and
+  fill shapes, with preview and one-step undo/redo per stroke
+- Selection (box, face, color), copy/cut/paste, move; rotate, mirror,
+  crop and resize the model
+- Editable scene: move, turn, duplicate, add and remove models; groups
+  (create, move, turn, hide, dissolve, drag in the tree) and named layers with visibility, all
+  saved in the file
+- Palette and materials editable from the interface, with undo
+- Animation: playback, transform keys (interpolated as in
+  the reference editor a recent version), shape frames, range, timeline (with
+  draggable keys) and export of rendered frames to PNG
+- Export to OBJ + MTL + palette texture
+- Camera: frame selection or scene, axis and isometric views,
+  orthographic projection (also in the path tracer) and panning
+- Render settings (sun, uniform / atmospheric / HDR sky, ground, lens,
+  film, bloom) editable in the panel, with undo and saved in the
+  file; depth of field with a polygonal aperture
+- Command console
+- Voxel operations as compute kernels in WGSL
+- Atomic saving that preserves materials, cameras and renderer settings
+- Progressive path tracer (GI, shadows, ACES) with the file's lighting
+- Metal, glass, emissive and cloud materials (media that absorb, scatter
+  or emit), with the reference editor's formulas; fog
+- Infinite ground plane that blends into the horizon
+- Lighting with HDR maps, oriented and normalized as in the reference editor
+- Atmospheric sky with Rayleigh and Mie scattering, and a sun that reddens at sunset
 
-Nativo arm64 sobre Metal: `[voxferro] graphics backend: Metal on Apple M2`.
+Native arm64 on Metal: `[voxferro] graphics backend: Metal on Apple M2`.
 
-## Uso
+## Usage
 
 ```bash
-cargo run -p voxferro                                  # abre monu1.vox
-cargo run -p voxferro -- assets/vox/castle.vox         # abre otro modelo
+cargo run -p voxferro                                  # opens monu1.vox
+cargo run -p voxferro -- assets/vox/castle.vox         # opens another model
 cargo run -p voxferro -- --run "gpu torus 166 40 14 replace" --run "save out.vox"
-cargo run -p voxferro -- assets/vox/monu1.vox --render-mode           # abre en modo Render
+cargo run -p voxferro -- assets/vox/monu1.vox --render-mode           # opens in Render mode
 cargo run -p voxferro -- assets/vox/monu1.vox --render 200 --screenshot out.bmp
 cargo run -p voxferro -- --run "new 16" --run "brush attach box" --drag 0.3 0.7 0.6 0.8 --screenshot out.bmp
 ```
 
-Para que un agente use el editor por MCP (solo en `127.0.0.1`, apagado por
-defecto; también se enciende desde la sección *Agents (MCP)* del panel):
+To let an agent use the editor over MCP (only on `127.0.0.1`, off by
+default; it can also be turned on from the *Agents (MCP)* section of the panel):
 
 ```bash
-cargo run -p voxferro -- --mcp                          # escucha en 127.0.0.1:47800
+cargo run -p voxferro -- --mcp                          # listens on 127.0.0.1:47800
 claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp
 ```
 
-Como aplicación de macOS, con su icono:
+As a macOS application, with its icon:
 
 ```bash
-./scripts/bundle-macos.sh          # crea target/Voxferro.app
+./scripts/bundle-macos.sh          # creates target/Voxferro.app
 open target/Voxferro.app
-./scripts/make-icon.sh             # vuelve a renderizar el icono
+./scripts/make-icon.sh             # re-renders the icon
 ```
 
-**Ratón:** pulsar sobre el modelo edita con el pincel; pulsar en el vacío (o
-arrastrar con el botón derecho) orbita; Mayúsculas + arrastre o el botón
-central desplazan; la rueda acerca.
+**Mouse:** clicking on the model edits with the brush; clicking on empty space
+(or dragging with the right button) orbits; Shift + drag or the middle
+button pans; the scroll wheel zooms in.
 
-**Opción+clic** en un modelo selecciona su grupo (otra vez: un nivel más
-adentro).
+**Option+click** on a model selects its group (again: one level further
+in).
 
-**Herramienta Move:** arrastrar mueve el modelo (o su grupo seleccionado) por
-el suelo; Mayúsculas+arrastre, arriba y abajo; Cmd+arrastre gira sobre z;
-X, Y, Z dan un cuarto de vuelta.
+**Move tool:** dragging moves the model (or its selected group) along
+the ground; Shift+drag, up and down; Cmd+drag turns around z;
+X, Y, Z give a quarter turn.
 
-**Teclado:** I cuentagotas, F encuadra (Mayúsculas+F todo), 1–7 vistas fijas, O ortográfica;
-Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z; con selección,
-Cmd+A, Esc, Supr, Cmd+C/X/V, flechas y Re Pág/Av Pág para moverla.
+**Keyboard:** I eyedropper, F frames (Shift+F everything), 1–7 fixed views, O orthographic;
+Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z; with a selection,
+Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 
-**Consola** (panel izquierdo; `help` para los comandos de modelo):
+**Console** (left panel; `help` for the model commands):
 
-| Grupo | Comandos |
+| Group | Commands |
 |---|---|
-| Archivos | `open [ruta]`, `new [n \| x y z]`, `save [ruta]`, `export <ruta.obj>` |
-| Pincel | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|face\|fill]`, `color <n>` |
-| Selección | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz` |
-| Modelo | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
-| Escena | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
-| Paleta | `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [clave=valor]…` |
-| Grupos y capas | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
-| Animación | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [muestras]` |
-| Cámara | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|frame [all\|selection\|instance]` |
-| Render | `env uniform\|atmosphere [elev]\|ibl <mapa> [i] [rot]\|dof [on\|off]\|lens [apertura] [palas] [ángulo]\|bloom [mix] [escala] [aspecto] [umbral]\|vig <v>` |
+| Files | `open [ruta]`, `new [n \| x y z]`, `save [ruta]`, `export <ruta.obj>` |
+| Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|face\|fill]`, `color <n>` |
+| Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz` |
+| Model | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
+| Scene | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
+| Palette | `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [key=value]…` |
+| Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
+| Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]` |
+| Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|frame [all\|selection\|instance]` |
+| Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>` |
 
-Para pruebas sin ratón: `--click fx fy` y `--drag fx0 fy0 fx1 fy1`, en
-fracciones del visor.
+For testing without a mouse: `--click fx fy` and `--drag fx0 fy0 fx1 fy1`, in
+fractions of the viewport.
 
 ## Stack
 
-| Pieza | Elección | Por qué |
+| Piece | Choice | Why |
 |---|---|---|
-| Ventana + UI | `eframe` / `egui` 0.36 | Trae wgpu por defecto y fija una `winit` estable |
-| Gráficos | `wgpu` 30 | Emite **Metal nativo** en Apple Silicon |
-| Matemáticas | `glam` 0.34 | SIMD, estándar del ecosistema |
-| GPU bytes | `bytemuck` 1 | `#[derive(Pod)]` para los buffers |
-| Diálogos | `rfd` 0.17 | Paneles nativos de abrir y guardar |
-| PNG | `miniz_oxide` 0.9 | DEFLATE para los fotogramas exportados |
+| Window + UI | `eframe` / `egui` 0.36 | Brings wgpu by default and pins a stable `winit` |
+| Graphics | `wgpu` 30 | Emits **native Metal** on Apple Silicon |
+| Math | `glam` 0.34 | SIMD, the ecosystem standard |
+| GPU bytes | `bytemuck` 1 | `#[derive(Pod)]` for the buffers |
+| Dialogs | `rfd` 0.17 | Native open and save panels |
+| PNG | `miniz_oxide` 0.9 | DEFLATE for the exported frames |
 
-`eframe` y `wgpu` resuelven a una **única** `wgpu v30.0.1` en el grafo. Si
-aparecen dos versiones, los tipos dejan de ser asignables entre sí y los
-errores se vuelven incomprensibles: verificar con `cargo tree | grep wgpu`
-antes de tocar esas versiones.
+`eframe` and `wgpu` resolve to a **single** `wgpu v30.0.1` in the graph. If
+two versions show up, the types stop being assignable to each other and the
+errors become incomprehensible: check with `cargo tree | grep wgpu`
+before touching those versions.
 
-## Estructura
+## Structure
 
 ```
 crates/
-├── vox-format/   parser .vox          — sin dependencias gráficas
-├── voxel-core/   volumen, grafo, undo, pinceles, selección, mallado, OBJ
-│                 — sin dependencias gráficas
+├── vox-format/   .vox parser          — no graphics dependencies
+├── voxel-core/   volume, graph, undo, brushes, selection, meshing, OBJ
+│                 — no graphics dependencies
 └── app/          eframe + egui + wgpu
 ```
 
-Los dos primeros crates no dependen de wgpu a propósito: `cargo test -p
-vox-format` corre en un segundo en lugar de recompilar el stack gráfico.
+The first two crates deliberately do not depend on wgpu: `cargo test -p
+vox-format` runs in a second instead of recompiling the graphics stack.
 
 ### Tests
 
 ```bash
-cargo test -p vox-format -p voxel-core   # rápido: no compila wgpu
-cargo test                               # todo
+cargo test -p vox-format -p voxel-core   # fast: does not compile wgpu
+cargo test                               # everything
 ```
 
-## Licencia y alcance
+## License and scope
 
-Implementación independiente. El formato `.vox` está documentado públicamente
-por su autor, its author. Este repositorio no contiene código ni assets de
-the reference editor; los modelos de prueba se mantienen fuera del control de versiones
-(ver `assets/README.md`).
+Independent implementation. The `.vox` format is publicly documented
+by its author, its author. This repository contains no the reference editor code or
+assets; the test models are kept out of version control
+(see `assets/README.md`).
 
-## Licencia
+## License
 
-Doble licencia, a elección de quien lo use: [MIT](LICENSE-MIT) o
+Dual-licensed, at the user's option: [MIT](LICENSE-MIT) or
 [Apache 2.0](LICENSE-APACHE).
 
-the reference editor es obra de its author. Voxferro no está afiliado a the reference editor ni
-contiene su código: lee y escribe su formato `.vox`. Los modelos de ejemplo y
-los mapas de entorno de the reference editor no se incluyen en el repositorio (ver
+the reference editor is the work of its author. Voxferro is not affiliated with the reference editor and
+does not contain its code: it reads and writes its `.vox` format. The example models and
+the reference editor's environment maps are not included in the repository (see
 [assets/README.md](assets/README.md)).
