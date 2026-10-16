@@ -210,7 +210,21 @@ struct Hit {
     cell: vec3<i32>,
     normal: vec3<f32>,
     distance: f32,
+    // Where the ray meets the face, exactly on its plane. Rebuilding it as
+    // origin + direction * distance is not good enough: the walk adds up
+    // the distance one cell at a time, each sum rounded at the size of the
+    // whole distance, and after a few dozen cells the point can sit more
+    // than the 0.001 that rays step off a surface -- on the wrong side, so
+    // the surface shadowed itself and rendered black.
+    point: vec3<f32>,
 };
+
+// The hit point of a ray that reached `cell` through the face `normal`
+// points back out of, with the face's own coordinate exact.
+fn face_point(origin: vec3<f32>, direction: vec3<f32>, distance: f32, cell: vec3<i32>, normal: vec3<f32>) -> vec3<f32> {
+    let plane = vec3<f32>(cell) + max(normal, vec3<f32>(0.0));
+    return mix(origin + direction * distance, plane, abs(normal));
+}
 
 // Amanatides-Woo DDA: visits every cell the ray touches, in order, so the
 // first solid one is genuinely the nearest. Fixed-step sampling would tunnel
@@ -292,6 +306,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, mode: u32) 
             result.cell = cell;
             result.normal = normal;
             result.distance = travelled;
+            result.point = face_point(origin, direction, travelled, cell, normal);
             return result;
         }
 
@@ -335,7 +350,7 @@ fn shadow(origin: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> {
             // Through the medium, attenuated by it, and on from where it
             // ends.
             var unused = 1u;
-            let w = walk_medium(p + direction * (h.distance + 0.001), direction, false, &unused);
+            let w = walk_medium(h.point + direction * 0.001, direction, false, &unused);
             transmittance = transmittance * w.transmittance;
             if (max(transmittance.x, max(transmittance.y, transmittance.z)) < 1e-4) {
                 return vec3<f32>(0.0);
@@ -346,7 +361,7 @@ fn shadow(origin: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> {
         if (m.kind != KIND_GLASS) {
             return vec3<f32>(0.0);
         }
-        let inside = p + direction * h.distance - h.normal * 0.001;
+        let inside = h.point - h.normal * 0.001;
         let out = trace(inside, direction, far, 1u);
         transmittance = transmittance * m.amount
             * absorb(palette[index].rgb, m.emission.w, out.distance);
@@ -354,7 +369,7 @@ fn shadow(origin: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> {
             return transmittance;
         }
         // out.normal faces back into the glass; step past the boundary.
-        p = inside + direction * out.distance - out.normal * 0.001;
+        p = out.point - out.normal * 0.001;
     }
     return transmittance;
 }
@@ -723,16 +738,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // as distance through the haze toward the horizon.
     var pulled_back = 0.0;
     if (p.projection.x > 0.0) {
-        pulled_back = 50000.0;
-        // Parallel rays from a plane through the eye, pulled far back:
-        // in a parallel view nothing in front of the eye may be cut off,
-        // and trace() skips the empty stretch to the grid anyway.
+        // Parallel rays from a plane through the eye, pulled back so the
+        // whole grid is in front of them: in a parallel view nothing may
+        // be cut off. Only as far as that, though. Pulled back a fixed
+        // 50000 voxels, a point on a surface (origin + direction * t) kept
+        // ~0.004 of precision, more than the 0.001 a shadow ray steps off
+        // the surface, so surfaces shadowed themselves in streaks: a lit
+        // chimney rendered dark and see-through-looking in iso views.
+        let centre = vec3<f32>(p.volume_size.xyz) * 0.5;
+        pulled_back = length(origin - centre) + length(vec3<f32>(p.volume_size.xyz)) + 1.0;
         let h = p.projection.x;
         direction = p.forward.xyz;
         origin = origin
             + p.right.xyz * (ndc.x * h * p.aspect)
             + p.up.xyz * (ndc.y * h)
-            - p.forward.xyz * 50000.0;
+            - p.forward.xyz * pulled_back;
     }
 
     var radiance = vec3<f32>(0.0);
@@ -833,7 +853,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let index = voxel_at(hit.cell);
         let albedo = palette[index].rgb;
         let m = materials[index];
-        let surface = origin + direction * hit.distance;
+        let surface = hit.point;
         // Offset off the surface, or the next ray re-hits the voxel it left.
         let outside = surface + hit.normal * 0.001;
 
@@ -919,7 +939,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     escaped = true; // left the grid while inside
                     break;
                 }
-                let exit_point = q + d * out.distance;
+                let exit_point = out.point;
                 // out.normal faces back into the glass, which is the side
                 // the ray arrives from -- what refract() expects.
                 let bent = refract(d, out.normal, m.ior);
