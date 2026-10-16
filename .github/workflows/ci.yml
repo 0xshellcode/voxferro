@@ -56,7 +56,7 @@ jobs:
           sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev
           # A software GPU (lavapipe, Vulkan) and a virtual display, for the
           # smoke tests below.
-          sudo apt-get install -y mesa-vulkan-drivers xvfb
+          sudo apt-get install -y mesa-vulkan-drivers xvfb libxkbcommon-x11-0
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

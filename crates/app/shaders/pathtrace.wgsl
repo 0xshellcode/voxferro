@@ -402,10 +402,16 @@ fn sample_emitters(point: vec3<f32>, normal: vec3<f32>, state: ptr<function, u32
             continue;
         }
 
-        var on_face = vec3<f32>(cell) + vec3<f32>(random(state), random(state), random(state));
-        on_face[axis] = f32(cell[axis]) + select(0.0, 1.0, positive);
-        var face_normal = vec3<f32>(0.0);
-        face_normal[axis] = select(-1.0, 1.0, positive);
+        // The face's own axis as a mask, rather than writing `v[axis]`:
+        // a dynamically indexed write to a local vector is not
+        // addressable in HLSL, so the DirectX shader compiler (FXC) must
+        // unroll this loop to compile it -- and cannot, with a whole grid
+        // walk inside -- and the path tracer failed to build on Windows.
+        let along = vec3<f32>(select(vec3<i32>(0), vec3<i32>(1), vec3<i32>(axis) == vec3<i32>(0, 1, 2)));
+        let side = select(0.0, 1.0, positive);
+        let random_point = vec3<f32>(cell) + vec3<f32>(random(state), random(state), random(state));
+        let on_face = mix(random_point, vec3<f32>(cell) + vec3<f32>(side), along);
+        let face_normal = along * select(-1.0, 1.0, positive);
 
         let offset = on_face - point;
         let dist2 = dot(offset, offset);
