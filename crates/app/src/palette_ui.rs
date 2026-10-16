@@ -7,15 +7,39 @@
 
 use crate::App;
 use eframe::{egui, egui_wgpu};
-use vox_format::{Color, Material, MaterialKind, ResolvedMaterial};
+use vox_format::{Color, Material, MaterialKind, MediaKind, ResolvedMaterial};
 use voxel_core::Command;
 
-const KINDS: [(MaterialKind, &str); 4] = [
+const KINDS: [(MaterialKind, &str); 5] = [
     (MaterialKind::Diffuse, "diffuse"),
     (MaterialKind::Metal, "metal"),
     (MaterialKind::Glass, "glass"),
     (MaterialKind::Emissive, "emit"),
+    (MaterialKind::Media, "cloud"),
 ];
+
+const MEDIA: [(MediaKind, &str); 4] = [
+    (MediaKind::Absorb, "absorb"),
+    (MediaKind::Scatter, "scatter"),
+    (MediaKind::Emit, "emit"),
+    (MediaKind::Subsurface, "sss"),
+];
+
+/// What a freshly chosen kind starts with, as the editor's are fully on.
+fn start_kind(r: &mut ResolvedMaterial, kind: MaterialKind) {
+    match kind {
+        MaterialKind::Metal => r.metalness = 1.0,
+        MaterialKind::Glass => r.transparency = 1.0,
+        MaterialKind::Emissive => r.emission = 1.0,
+        MaterialKind::Media => {
+            r.media = MediaKind::Scatter;
+            if r.density <= 0.0 {
+                r.density = 0.5;
+            }
+        }
+        MaterialKind::Diffuse => {}
+    }
+}
 
 impl App {
     pub fn palette_editor_ui(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
@@ -40,17 +64,12 @@ impl App {
             for (kind, name) in KINDS {
                 if ui.selectable_label(r.kind == kind, name).clicked() && r.kind != kind {
                     r.kind = kind;
-                    // A fresh kind starts fully on, as the editor's do.
-                    match kind {
-                        MaterialKind::Metal => r.metalness = 1.0,
-                        MaterialKind::Glass => r.transparency = 1.0,
-                        MaterialKind::Emissive => r.emission = 1.0,
-                        MaterialKind::Diffuse => {}
-                    }
+                    start_kind(&mut r, kind);
                     changed = true;
                 }
             }
         });
+        let mut media_changed = false;
         let mut slider = |ui: &mut egui::Ui, v: &mut f32, range: std::ops::RangeInclusive<f32>, label: &str| {
             changed |= ui.add(egui::Slider::new(v, range).text(label)).changed();
         };
@@ -70,7 +89,20 @@ impl App {
                 slider(ui, &mut r.emission, 0.0..=1.0, "emit");
                 slider(ui, &mut r.flux, 0.0..=4.0, "flux");
             }
+            MaterialKind::Media => {
+                ui.horizontal(|ui| {
+                    for (media, name) in MEDIA {
+                        if ui.selectable_label(r.media == media, name).clicked() && r.media != media {
+                            r.media = media;
+                            media_changed = true;
+                        }
+                    }
+                });
+                slider(ui, &mut r.density, 0.0..=4.0, "density");
+                slider(ui, &mut r.phase, -0.9..=0.9, "phase g");
+            }
         }
+        changed |= media_changed;
         if changed {
             self.set_material(index, Some(r), state);
         }
@@ -101,8 +133,9 @@ impl App {
     }
 
     /// `palette <index> <r> <g> <b>` and
-    /// `material <index> <diffuse|metal|glass|emit> [key=value]...`, where
-    /// keys are metal, rough, trans, ior, density, emit and flux.
+    /// `material <index> <diffuse|metal|glass|emit|cloud> [key=value]...`,
+    /// where keys are metal, rough, trans, ior, density, emit, flux, media
+    /// (0 absorb, 1 scatter, 2 emit, 3 sss) and g.
     pub fn palette_command(&mut self, line: &str, state: &egui_wgpu::RenderState) -> String {
         let words: Vec<&str> = line.split_whitespace().collect();
         let index = words.get(1).and_then(|w| w.parse::<u8>().ok()).filter(|&i| i > 0);
@@ -120,15 +153,10 @@ impl App {
             },
             ["material", _, kind, pairs @ ..] => {
                 let Some(kind) = KINDS.iter().find(|(_, n)| n == kind).map(|(k, _)| *k) else {
-                    return "kinds: diffuse, metal, glass, emit".to_owned();
+                    return "kinds: diffuse, metal, glass, emit, cloud".to_owned();
                 };
                 let mut r = ResolvedMaterial { kind, ..Default::default() };
-                match kind {
-                    MaterialKind::Metal => r.metalness = 1.0,
-                    MaterialKind::Glass => r.transparency = 1.0,
-                    MaterialKind::Emissive => r.emission = 1.0,
-                    MaterialKind::Diffuse => {}
-                }
+                start_kind(&mut r, kind);
                 for pair in pairs {
                     let Some((k, v)) = pair.split_once('=') else { return format!("expected key=value, got '{pair}'") };
                     let Ok(v) = v.parse::<f32>() else { return format!("'{v}' is not a number") };
@@ -140,6 +168,10 @@ impl App {
                         "density" => r.density = v.max(0.0),
                         "emit" => r.emission = v.clamp(0.0, 1.0),
                         "flux" => r.flux = v.max(0.0),
+                        "media" => {
+                            r.media = MEDIA.get(v.round().clamp(0.0, 3.0) as usize).map_or(MediaKind::Absorb, |m| m.0)
+                        }
+                        "g" => r.phase = v.clamp(-0.99, 0.99),
                         _ => return format!("unknown key '{k}'"),
                     }
                 }

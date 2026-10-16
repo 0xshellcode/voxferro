@@ -171,6 +171,15 @@ impl App {
             });
         });
 
+        egui::CollapsingHeader::new("Fog").show(ui, |ui| {
+            dragged |= ui.add(egui::Slider::new(&mut env.fog_density, 0.0..=20.0).text("density")).changed();
+            dragged |= ui.add(egui::Slider::new(&mut env.fog_g, -0.9..=0.9).text("phase g")).changed();
+            ui.horizontal(|ui| {
+                ui.label("colour");
+                dragged |= stored_colour_edit(ui, &mut env.fog_color);
+            });
+        });
+
         egui::CollapsingHeader::new("Lens").show(ui, |ui| {
             dragged |= ui.add(egui::Slider::new(&mut env.lens_fov, 5.0..=120.0).text("fov")).changed();
             // Depth of field is a switch of the session: the file has no key
@@ -283,13 +292,22 @@ impl App {
                     env.bloom_mix, env.bloom_scale, env.bloom_aspect, env.bloom_threshold
                 )
             }
+            Some("fog") => {
+                if let Some(d) = args.get(1).and_then(|v| v.parse::<f32>().ok()) {
+                    env.fog_density = d.max(0.0);
+                }
+                if let Some(g) = args.get(2).and_then(|v| v.parse::<f32>().ok()) {
+                    env.fog_g = g.clamp(-0.99, 0.99);
+                }
+                format!("fog: density {} g {}", env.fog_density, env.fog_g)
+            }
             Some("vig") => {
                 env.vignette = args.get(1).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0).clamp(0.0, 1.0);
                 format!("vignette {}", env.vignette)
             }
             _ => {
                 return "env uniform | atmosphere [elev] | ibl [map] [i] [rot] | dof [on|off] | \
-                        lens [aperture] [blades] [angle] | bloom [mix] [scale] [aspect] [threshold] | vig <v>"
+                        lens [aperture] [blades] [angle] | bloom [mix] [scale] [aspect] [threshold] | vig <v> | fog <density> [g]"
                     .to_owned();
             }
         };

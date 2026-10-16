@@ -309,6 +309,8 @@ impl Material {
             Some("_metal") => MaterialKind::Metal,
             Some("_glass") => MaterialKind::Glass,
             Some("_emit") => MaterialKind::Emissive,
+            // Cloud in the editor's panel: a participating medium.
+            Some("_media") => MaterialKind::Media,
             // `_blend` mixes metal, glass and emission by their own keys;
             // classify by whichever is actually present.
             Some("_blend") => {
@@ -322,8 +324,7 @@ impl Material {
                     MaterialKind::Diffuse
                 }
             }
-            // Absent in version 200 means diffuse; `_media` (volumetric) is
-            // rendered as diffuse until participating media are supported.
+            // Absent in version 200 means diffuse.
             _ => MaterialKind::Diffuse,
         };
 
@@ -368,6 +369,13 @@ impl Material {
                 .or_else(|| self.float("_att"))
                 .unwrap_or(0.0)
                 .max(0.0),
+            media: match self.float("_media").map(|v| v.round() as i32) {
+                Some(1) => MediaKind::Scatter,
+                Some(2) => MediaKind::Emit,
+                Some(3) => MediaKind::Subsurface,
+                _ => MediaKind::Absorb,
+            },
+            phase: self.float("_g").unwrap_or(0.0).clamp(-0.99, 0.99),
         }
     }
 }
@@ -389,6 +397,7 @@ impl Material {
             MaterialKind::Metal => "_metal",
             MaterialKind::Glass => "_glass",
             MaterialKind::Emissive => "_emit",
+            MaterialKind::Media => "_media",
         };
         d.set("_type", kind);
         for key in ["_metal", "_trans", "_alpha", "_emit", "_weight"] {
@@ -415,6 +424,10 @@ impl Material {
                 d.set("_emit", number(r.emission));
                 d.set("_weight", number(r.emission));
             }
+            MaterialKind::Media => {
+                d.set("_media", (r.media as u32).to_string());
+                d.set("_g", number(r.phase));
+            }
         }
         Material { id, properties: d }
     }
@@ -428,6 +441,24 @@ pub enum MaterialKind {
     Metal = 1,
     Glass = 2,
     Emissive = 3,
+    /// A participating medium: cloud, smoke, fog in a volume.
+    Media = 4,
+}
+
+/// How a medium interacts with light, as the editor's `_media` numbers it
+/// (`the reference renderer` puts the density in a different slot
+/// for each).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum MediaKind {
+    /// Darkens what passes through, tinted by the colour.
+    Absorb = 0,
+    /// Scatters light, like a cloud.
+    Scatter = 1,
+    /// Glows with its colour.
+    Emit = 2,
+    /// Scatters, flagged by the editor as subsurface scattering.
+    Subsurface = 3,
 }
 
 /// Material parameters in one convention, whatever version wrote them.
@@ -446,8 +477,14 @@ pub struct ResolvedMaterial {
     pub emission: f32,
     /// Emission power exponent, as the editor's `_flux` slider.
     pub flux: f32,
-    /// How strongly a transparent material absorbs per voxel travelled.
+    /// How strongly a transparent material absorbs per voxel travelled; for
+    /// a medium, its density.
     pub density: f32,
+    /// For a medium: how it interacts with light (`_media`).
+    pub media: MediaKind,
+    /// For a medium: the Henyey-Greenstein anisotropy (`_g`), -1 back to 1
+    /// forward scattering.
+    pub phase: f32,
 }
 
 impl Default for ResolvedMaterial {
@@ -461,6 +498,8 @@ impl Default for ResolvedMaterial {
             emission: 0.0,
             flux: 0.0,
             density: 0.0,
+            media: MediaKind::Absorb,
+            phase: 0.0,
         }
     }
 }
@@ -567,6 +606,13 @@ mod material_tests {
             ResolvedMaterial { kind: MaterialKind::Glass, transparency: 0.4, density: 0.2, ior: 1.8, ..Default::default() },
             ResolvedMaterial { kind: MaterialKind::Emissive, emission: 0.5, flux: 2.0, ..Default::default() },
             ResolvedMaterial { kind: MaterialKind::Diffuse, roughness: 0.6, ..Default::default() },
+            ResolvedMaterial {
+                kind: MaterialKind::Media,
+                media: MediaKind::Scatter,
+                density: 0.3,
+                phase: 0.4,
+                ..Default::default()
+            },
         ];
         for r in cases {
             let m = Material::from_resolved(9, None, &r);

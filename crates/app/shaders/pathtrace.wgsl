@@ -63,6 +63,14 @@ struct Params {
     // `_aperture * 0.03`; 0 is a pinhole), y: focus distance, z: number of
     // aperture blades (below 3, a round lens), w: blade rotation, radians.
     lens: vec4<f32>,
+
+    // Fog (`_fog_uni`): x: extinction per voxel (`_d * 0.001`, as the editor
+    // uploads air_et), y: anisotropy g (`_g`); 0 extinction is no fog.
+    // z: scattering events allowed in media and fog (`_bounce._scatter`),
+    // counted apart from surface bounces.
+    fog: vec4<f32>,
+    // The fog's colour (`_k`): what fraction of light a scattering keeps.
+    fog_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -75,6 +83,10 @@ const KIND_DIFFUSE: u32 = 0u;
 const KIND_METAL: u32 = 1u;
 const KIND_GLASS: u32 = 2u;
 const KIND_EMIT: u32 = 3u;
+// A participating medium (`_media`, the editor's cloud). `amount` holds how
+// it interacts (0 absorb, 1 scatter, 2 emit, 3 subsurface), `roughness` its
+// phase g, `emission.w` its density per voxel.
+const KIND_MEDIA: u32 = 4u;
 
 // One entry per palette index, resolved on the CPU from the MATL chunks so
 // the shader never sees the two on-disk conventions.
@@ -312,13 +324,25 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, mode: u32) 
 fn shadow(origin: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> {
     var transmittance = vec3<f32>(1.0);
     var p = origin;
-    for (var k = 0; k < 6; k = k + 1) {
+    for (var k = 0; k < 12; k = k + 1) {
         let h = trace(p, direction, far, 0u);
         if (!h.hit) {
             return transmittance;
         }
         let index = voxel_at(h.cell);
         let m = materials[index];
+        if (m.kind == KIND_MEDIA) {
+            // Through the medium, attenuated by it, and on from where it
+            // ends.
+            var unused = 1u;
+            let w = walk_medium(p + direction * (h.distance + 0.001), direction, false, &unused);
+            transmittance = transmittance * w.transmittance;
+            if (max(transmittance.x, max(transmittance.y, transmittance.z)) < 1e-4) {
+                return vec3<f32>(0.0);
+            }
+            p = w.point + direction * 0.001;
+            continue;
+        }
         if (m.kind != KIND_GLASS) {
             return vec3<f32>(0.0);
         }
@@ -404,12 +428,12 @@ fn ground_distance(origin: vec3<f32>, direction: vec3<f32>) -> f32 {
 
 // How much of the ground at `distance` has dissolved into the sky.
 //
-// The editor stores `_hor` as `m_hor_density` and blends the ground into the
-// horizon with it. The exact curve lives in its runtime-generated shader,
-// which the binary does not carry as text, so this exponential fog is an
-// approximation of the effect, not a transcription of it.
+// The editor uploads `hor_et = _hor * 0.0005` (the reference renderer::
+// EnvLightParameters): an extinction per voxel, so the fade is Beer-Lambert
+// over the distance. (Before that constant was read out of the binary this
+// used an estimate six times stronger.)
 fn horizon_fade(distance: f32) -> f32 {
-    return 1.0 - exp(-p.ground.z * distance * 0.003);
+    return 1.0 - exp(-p.ground.z * 0.0005 * distance);
 }
 
 // Next event estimation toward the environment map.
@@ -503,6 +527,127 @@ fn aperture_sample(state: ptr<function, u32>) -> vec2<f32> {
     return v0 * u + v1 * v;
 }
 
+fn is_media(index: u32) -> bool {
+    return index != 0u && materials[index].kind == KIND_MEDIA;
+}
+
+// Henyey-Greenstein phase function, normalised over the sphere. `cos_theta`
+// is between the direction light travels and the direction it leaves in.
+fn hg_phase(cos_theta: f32, g: f32) -> f32 {
+    let d = 1.0 + g * g - 2.0 * g * cos_theta;
+    return (1.0 - g * g) / (4.0 * PI * pow(max(d, 1e-6), 1.5));
+}
+
+// A new direction after scattering, distributed by the phase function
+// around the direction of travel.
+fn sample_hg(travel: vec3<f32>, g: f32, state: ptr<function, u32>) -> vec3<f32> {
+    let u1 = random(state);
+    let u2 = random(state);
+    var cos_t: f32;
+    if (abs(g) < 1e-3) {
+        cos_t = 1.0 - 2.0 * u1;
+    } else {
+        let s = (1.0 - g * g) / (1.0 - g + 2.0 * g * u1);
+        cos_t = (1.0 + g * g - s * s) / (2.0 * g);
+    }
+    let sin_t = sqrt(max(0.0, 1.0 - cos_t * cos_t));
+    let phi = 2.0 * PI * u2;
+    var tangent: vec3<f32>;
+    if (abs(travel.x) > 0.9) {
+        tangent = normalize(cross(travel, vec3<f32>(0.0, 1.0, 0.0)));
+    } else {
+        tangent = normalize(cross(travel, vec3<f32>(1.0, 0.0, 0.0)));
+    }
+    let bitangent = cross(travel, tangent);
+    return normalize(travel * cos_t + (tangent * cos(phi) + bitangent * sin(phi)) * sin_t);
+}
+
+struct MediumWalk {
+    // Stopped by a scattering event, at `point`, in a cell of colour
+    // `albedo` and phase `g`.
+    scattered: bool,
+    point: vec3<f32>,
+    albedo: vec3<f32>,
+    g: f32,
+    // Light let through so far, and light the medium itself gave off.
+    transmittance: vec3<f32>,
+    emitted: vec3<f32>,
+};
+
+// Walks from `start` (inside a medium cell) cell by cell while the cells are
+// media, until a scattering event or the first cell that is not a medium
+// (`point` is then where the ray leaves). With `sample` false the walk only
+// attenuates -- what a shadow ray needs.
+//
+// Each cell is homogeneous, so free flight inside it is sampled exactly:
+// distance -ln(u)/density, accepted if it ends inside the cell.
+fn walk_medium(start: vec3<f32>, dir: vec3<f32>, sample: bool, state: ptr<function, u32>) -> MediumWalk {
+    var w: MediumWalk;
+    w.scattered = false;
+    w.point = start;
+    w.albedo = vec3<f32>(1.0);
+    w.g = 0.0;
+    w.transmittance = vec3<f32>(1.0);
+    w.emitted = vec3<f32>(0.0);
+
+    var cell = vec3<i32>(floor(start));
+    let step = vec3<i32>(sign(dir));
+    let inv = 1.0 / max(abs(dir), vec3<f32>(1e-8));
+    var t_max = vec3<f32>(
+        select(start.x - f32(cell.x), f32(cell.x) + 1.0 - start.x, dir.x > 0.0) * inv.x,
+        select(start.y - f32(cell.y), f32(cell.y) + 1.0 - start.y, dir.y > 0.0) * inv.y,
+        select(start.z - f32(cell.z), f32(cell.z) + 1.0 - start.z, dir.z > 0.0) * inv.z
+    );
+    var t = 0.0;
+    let limit = i32(p.volume_size.x + p.volume_size.y + p.volume_size.z) * 3 + 32;
+    for (var i = 0; i < limit; i = i + 1) {
+        let index = voxel_at(cell);
+        if (!is_media(index)) {
+            w.point = start + dir * t;
+            return w;
+        }
+        let m = materials[index];
+        let albedo = palette[index].rgb;
+        let density = m.emission.w;
+        let kind = u32(m.amount + 0.5);
+        let t_exit = min(t_max.x, min(t_max.y, t_max.z));
+        let len = max(t_exit - t, 0.0);
+
+        if (kind == 0u) {
+            // Absorbing: tinted like coloured glass.
+            w.transmittance = w.transmittance * absorb(albedo, density, len);
+        } else if (kind == 2u) {
+            // Glowing: adds its colour along the way.
+            w.emitted = w.emitted + w.transmittance * albedo * density * len;
+        } else if (sample) {
+            let s = -log(max(1.0 - random(state), 1e-7)) / max(density, 1e-6);
+            if (s < len) {
+                w.scattered = true;
+                w.point = start + dir * (t + s);
+                w.albedo = albedo;
+                w.g = m.roughness;
+                return w;
+            }
+        } else {
+            w.transmittance = w.transmittance * exp(-density * len);
+        }
+
+        t = t_exit;
+        if (t_max.x < t_max.y && t_max.x < t_max.z) {
+            t_max.x = t_max.x + inv.x;
+            cell.x = cell.x + step.x;
+        } else if (t_max.y < t_max.z) {
+            t_max.y = t_max.y + inv.y;
+            cell.y = cell.y + step.y;
+        } else {
+            t_max.z = t_max.z + inv.z;
+            cell.z = cell.z + step.z;
+        }
+    }
+    w.point = start + dir * t;
+    return w;
+}
+
 fn random_in_sphere(state: ptr<function, u32>) -> vec3<f32> {
     // Rejection sampling: simple, unbiased, and converges in ~2 tries.
     for (var i = 0; i < 8; i = i + 1) {
@@ -524,13 +669,15 @@ fn fresnel(cos_theta: f32, ior: f32) -> f32 {
 // `include_sun` is false after a diffuse bounce: the sun is already sampled
 // directly there, and adding the disc again when a bounce happens to escape
 // toward it would count that light twice.
-fn sky(direction: vec3<f32>, include_sun: bool) -> vec3<f32> {
+fn sky(direction: vec3<f32>, include_sun: bool, env_sampled: bool) -> vec3<f32> {
     // Uniform sky or environment map, plus a sun disc (_uni / _ibl, _inf).
     // After a diffuse bounce (`include_sun` false) an environment map is
     // left out too: it is importance-sampled at the surface, and adding it
     // again when a bounce escapes would count it twice.
+    // `env_sampled`: the map was importance-sampled at the last vertex
+    // (diffuse surfaces do; media and mirrors do not).
     var light = vec3<f32>(0.0);
-    if (p.ibl.x < 0.5 || include_sun) {
+    if (p.ibl.x < 0.5 || !env_sampled) {
         light = background(direction);
     }
     let alignment = dot(direction, normalize(p.sun_direction.xyz));
@@ -594,9 +741,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // directly; after a diffuse bounce both are already counted by direct
     // sampling, so they are skipped to avoid adding the same light twice.
     var specular = true;
+    // Whether the environment map was sampled directly at the last vertex.
+    var env_sampled = false;
+    // Crossing a medium without scattering is not a bounce; this bounds how
+    // many such crossings one path may make.
+    var crossings = 0;
+    // Scattering events in media and fog so far; they have their own budget.
+    var scatters = 0;
     let far = f32(p.volume_size.x + p.volume_size.y + p.volume_size.z) * 2.0;
 
-    for (var bounce = 0u; bounce <= p.bounces; bounce = bounce + 1u) {
+    for (var bounce = 0; bounce <= i32(p.bounces); bounce = bounce + 1) {
         // No distance cap here: the camera may sit far outside the grid,
         // and trace() clips to the grid box itself.
         let hit = trace(origin, direction, 1e30, 0u);
@@ -604,6 +758,40 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // The ground wins when it is nearer than any voxel, or when the ray
         // left the grid without hitting one.
         let t_ground = ground_distance(origin, direction);
+
+        // Fog: a homogeneous medium everywhere. Sample how far the ray goes
+        // before it scatters; if that is before whatever it would reach,
+        // it scatters there instead.
+        if (p.fog.x > 0.0) {
+            var reach = 1e5;
+            if (hit.hit) {
+                reach = hit.distance;
+            }
+            if (t_ground > 0.0) {
+                reach = min(reach, t_ground);
+            }
+            let s = pulled_back - log(max(1.0 - random(&rng), 1e-7)) / p.fog.x;
+            if (s < reach) {
+                let point = origin + direction * s;
+                throughput = throughput * p.fog_color.rgb;
+                let to_sun = normalize(p.sun_direction.xyz);
+                // The fog does not dim the sun on its way in: an infinite
+                // medium would leave no sunlight at all.
+                let visible = shadow(point, to_sun, far);
+                radiance = radiance + throughput * visible * p.sun_color.rgb * p.sun_intensity
+                    * hg_phase(dot(direction, to_sun), p.fog.y) * PI;
+                direction = sample_hg(direction, p.fog.y, &rng);
+                origin = point;
+                pulled_back = 0.0;
+                specular = false;
+                env_sampled = false;
+                scatters = scatters + 1;
+                if (scatters <= i32(p.fog.z)) {
+                    bounce = bounce - 1;
+                }
+                continue;
+            }
+        }
         if (t_ground > 0.0 && (!hit.hit || t_ground < hit.distance)) {
             let point = origin + direction * t_ground;
             let up = vec3<f32>(0.0, 0.0, 1.0);
@@ -632,12 +820,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             direction = sample_hemisphere(up, &rng);
             origin = lifted;
             specular = false;
+            env_sampled = true;
             continue;
         }
 
         pulled_back = 0.0;
         if (!hit.hit) {
-            radiance = radiance + throughput * sky(direction, specular);
+            radiance = radiance + throughput * sky(direction, specular, env_sampled);
             break;
         }
 
@@ -650,6 +839,38 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         if (m.kind == KIND_EMIT && specular) {
             radiance = radiance + throughput * m.emission.rgb;
+        }
+
+        if (m.kind == KIND_MEDIA) {
+            let w = walk_medium(surface + direction * 0.001, direction, true, &rng);
+            radiance = radiance + throughput * w.emitted;
+            throughput = throughput * w.transmittance;
+            if (!w.scattered) {
+                // Straight through: on from where the medium ends, without
+                // spending a bounce.
+                origin = w.point + direction * 0.001;
+                crossings = crossings + 1;
+                if (crossings < 32) {
+                    bounce = bounce - 1;
+                }
+                continue;
+            }
+            // Scattered inside: direct sun through the phase function, then
+            // a new direction drawn from it.
+            throughput = throughput * w.albedo;
+            let to_sun = normalize(p.sun_direction.xyz);
+            let visible = shadow(w.point, to_sun, far);
+            radiance = radiance + throughput * visible * p.sun_color.rgb * p.sun_intensity
+                * hg_phase(dot(direction, to_sun), w.g) * PI;
+            direction = sample_hg(direction, w.g, &rng);
+            origin = w.point;
+            specular = false;
+            env_sampled = false;
+            scatters = scatters + 1;
+            if (scatters <= i32(p.fog.z)) {
+                bounce = bounce - 1;
+            }
+            continue;
         }
 
         // Pick a lobe with probability equal to its weight. Throughput needs
@@ -671,6 +892,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             direction = reflected;
             origin = outside;
             specular = true;
+            env_sampled = false;
             continue;
         }
 
@@ -681,6 +903,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 direction = reflect(direction, hit.normal);
                 origin = outside;
                 specular = true;
+                env_sampled = false;
                 continue;
             }
 
@@ -718,6 +941,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             direction = normalize(d);
             origin = q;
             specular = true;
+            env_sampled = false;
             continue;
         }
 
@@ -741,6 +965,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         direction = sample_hemisphere(hit.normal, &rng);
         origin = outside;
         specular = false;
+        env_sampled = true;
     }
 
     // Accumulate in linear light. Resetting on camera motion keeps a moved

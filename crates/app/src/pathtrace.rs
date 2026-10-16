@@ -66,6 +66,15 @@ pub struct Environment {
     pub bloom_scale: f32,
     pub bloom_aspect: f32,
     pub bloom_threshold: f32,
+
+    /// `_fog_uni`: `_d` density (uploaded as `_d * 0.001` per voxel, as the
+    /// editor does), `_k` colour, `_g` anisotropy.
+    pub fog_density: f32,
+    pub fog_color: Vec3,
+    pub fog_g: f32,
+    /// `_bounce._scatter`: scattering events in media and fog a path may
+    /// take, counted apart from surface bounces as the editor does.
+    pub scatter_bounces: u32,
 }
 
 impl Default for Environment {
@@ -112,6 +121,11 @@ impl Default for Environment {
             bloom_scale: 0.0,
             bloom_aspect: 0.0,
             bloom_threshold: 1.0,
+            fog_density: 0.0,
+            fog_color: Vec3::ONE,
+            fog_g: 0.0,
+            // `_bounce._scatter` in a file the editor saved with defaults.
+            scatter_bounces: 5,
         };
         let pair = |k: &str, v: &str| (k.to_owned(), v.to_owned());
         base.with_render_objects(&[
@@ -269,6 +283,9 @@ impl Environment {
                     if let Some(b) = object.get("_diffuse").and_then(|v| v.parse::<u32>().ok()) {
                         env.bounces = b.clamp(1, 16);
                     }
+                    if let Some(b) = object.get("_scatter").and_then(|v| v.parse::<u32>().ok()) {
+                        env.scatter_bounces = b.min(64);
+                    }
                 }
                 Some("_film") => {
                     let number = |k: &str| object.get(k).and_then(|v| v.parse::<f32>().ok());
@@ -299,6 +316,17 @@ impl Environment {
                     }
                     if let Some(v) = number("_blade_r") {
                         env.blade_rotation = v;
+                    }
+                }
+                Some("_fog_uni") => {
+                    if let Some(d) = object.get("_d").and_then(|v| v.parse::<f32>().ok()) {
+                        env.fog_density = d.max(0.0);
+                    }
+                    if let Some(k) = object.get_parsed::<f32, 3>("_k") {
+                        env.fog_color = Vec3::from_array(k) / 255.0;
+                    }
+                    if let Some(g) = object.get("_g").and_then(|v| v.parse::<f32>().ok()) {
+                        env.fog_g = g.clamp(-0.99, 0.99);
                     }
                 }
                 Some("_bloom") => {
@@ -408,12 +436,19 @@ impl Environment {
         lens.set("_blade_n", self.blades.to_string());
         lens.set("_blade_r", num(self.blade_rotation));
 
+        let fog = object(&mut out, "_fog_uni");
+        fog.set("_d", num(self.fog_density));
+        fog.set("_k", rgb255(self.fog_color));
+        fog.set("_g", num(self.fog_g));
+
         let bloom = object(&mut out, "_bloom");
         bloom.set("_mix", num(self.bloom_mix));
         bloom.set("_scale", num(self.bloom_scale));
         bloom.set("_aspect", num(self.bloom_aspect));
         bloom.set("_threshold", num(self.bloom_threshold));
-        object(&mut out, "_bounce").set("_diffuse", self.bounces.to_string());
+        let bounce = object(&mut out, "_bounce");
+        bounce.set("_diffuse", self.bounces.to_string());
+        bounce.set("_scatter", self.scatter_bounces.to_string());
         out
     }
 }
@@ -459,6 +494,15 @@ struct GpuMaterial {
 pub fn emission_strength(emission: f32, flux: f32) -> f32 {
     1.0 + 3.0 * emission * 10f32.powf(flux)
 }
+
+/// A medium's `_d` as extinction per voxel.
+///
+/// Calibrated, not read: `CalcMaterialProp` passes `_d` on unchanged and the
+/// scaling happens in the runtime shader. A 40-voxel cloud sphere with
+/// `_d 0.4`, rendered in the editor beside this tracer at several scales,
+/// matched at 0.1 per voxel -- grey with the floor showing through its lower
+/// half -- where 0.4 was opaque and 0.04 too clear.
+pub const MEDIA_DENSITY_SCALE: f32 = 0.25;
 
 /// The editor's roughness slider is far gentler than a raw GGX alpha:
 /// `CalcMaterialProp` scales it by 0.15 before use. Without this, every
@@ -521,6 +565,10 @@ struct Params {
     /// x: lens radius over focus distance (0 = pinhole), y: focus distance,
     /// z: blades, w: blade rotation in radians.
     lens: [f32; 4],
+
+    /// x: fog extinction per voxel, y: fog g.
+    fog: [f32; 4],
+    fog_color: [f32; 4],
 }
 
 /// Must match the WGSL `Post`.
@@ -850,11 +898,18 @@ impl PathTracer {
 
             table[index as usize] = GpuMaterial {
                 kind: r.kind as u32,
-                roughness: effective_roughness(r.roughness),
+                // A medium keeps its phase g here instead.
+                roughness: if r.kind == vox_format::MaterialKind::Media {
+                    r.phase
+                } else {
+                    effective_roughness(r.roughness)
+                },
                 ior: r.ior,
                 amount: match r.kind {
                     vox_format::MaterialKind::Metal => r.metalness,
                     vox_format::MaterialKind::Glass => r.transparency,
+                    // How the medium interacts, as a number the shader rounds.
+                    vox_format::MaterialKind::Media => r.media as u32 as f32,
                     _ => 0.0,
                 },
                 // w carries the absorption density; the vec4 had a free lane.
@@ -862,7 +917,11 @@ impl PathTracer {
                     srgb_to_linear(c.r) * strength,
                     srgb_to_linear(c.g) * strength,
                     srgb_to_linear(c.b) * strength,
-                    r.density,
+                    if r.kind == vox_format::MaterialKind::Media {
+                        r.density * MEDIA_DENSITY_SCALE
+                    } else {
+                        r.density
+                    },
                 ],
             };
         }
@@ -1113,6 +1172,13 @@ impl PathTracer {
                 environment.blades as f32,
                 -environment.blade_rotation.to_radians(),
             ],
+            fog: [
+                environment.fog_density * 0.001,
+                environment.fog_g,
+                environment.scatter_bounces as f32,
+                0.0,
+            ],
+            fog_color: environment.fog_color.extend(0.0).to_array(),
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
 
@@ -1534,6 +1600,22 @@ mod tests {
         assert_eq!(back.lens_fov, 52.0);
         let written = edited.write_render_objects(&room);
         assert!(written.iter().any(|o| o.get("_proj") == Some("0")), "keys not modelled survive");
+    }
+
+    #[test]
+    fn fog_and_scatter_budget_round_trip() {
+        // room.vox's fog object.
+        let room = [
+            dict(&[("_type", "_fog_uni"), ("_d", "0"), ("_k", "255 255 255"), ("_g", "0.2")]),
+            dict(&[("_type", "_bounce"), ("_diffuse", "2"), ("_specular", "5"), ("_scatter", "5")]),
+        ];
+        let env = Environment::from_render_objects(&room);
+        assert_eq!((env.fog_density, env.fog_g, env.scatter_bounces), (0.0, 0.2, 5));
+        let edited = Environment { fog_density: 12.5, scatter_bounces: 3, ..env };
+        let written = edited.write_render_objects(&room);
+        let back = Environment::from_render_objects(&written);
+        assert_eq!((back.fog_density, back.scatter_bounces), (12.5, 3));
+        assert!(written.iter().any(|o| o.get("_specular") == Some("5")), "other bounce counts survive");
     }
 }
 

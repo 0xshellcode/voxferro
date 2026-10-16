@@ -10,7 +10,7 @@ idiomática de Rust.
 
 ## Estado
 
-Las fases 0–30 del [ROADMAP](ROADMAP.md) están completas, con **179 tests
+Las fases 0–31 del [ROADMAP](ROADMAP.md) están completas, con **180 tests
 verdes**. Funciona hoy:
 
 - Lectura **y escritura** de `.vox` (versiones 150 y 200), validadas contra el
@@ -40,7 +40,8 @@ verdes**. Funciona hoy:
 - Operaciones de voxel como compute kernels en WGSL
 - Guardado atómico que conserva materiales, cámaras y ajustes del renderer
 - Path tracer progresivo (GI, sombras, ACES) con la iluminación del archivo
-- Materiales metal, vidrio y emisivos, con las fórmulas de the reference editor
+- Materiales metal, vidrio, emisivos y nubes (medios que absorben, dispersan
+  o emiten), con las fórmulas de the reference editor; niebla
 - Plano de suelo infinito con fusión en el horizonte
 - Iluminación con mapas HDR, orientada y normalizada como en the reference editor
 - Cielo atmosférico con dispersión Rayleigh y Mie, y sol que enrojece al atardecer
