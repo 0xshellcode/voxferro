@@ -42,6 +42,18 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key><string>$version</string>
     <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>NSHighResolutionCapable</key><true/>
+    <!-- Offered under Open With for .vox files, without taking over as the
+         default app (Alternate): files arrive as an Apple Event, which
+         src/macos_open.rs handles. -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>the reference editor model</string>
+            <key>CFBundleTypeExtensions</key><array><string>vox</string></array>
+            <key>CFBundleTypeRole</key><string>Editor</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST

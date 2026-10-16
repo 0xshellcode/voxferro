@@ -3865,6 +3865,7 @@ dependencies = [
  "eframe",
  "egui",
  "glam",
+ "objc2 0.6.5",
  "rfd",
  "rmcp",
  "schemars",

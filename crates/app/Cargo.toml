@@ -37,3 +37,8 @@ axum = { version = "0.8", default-features = false, features = ["tokio", "http1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1"
+
+# Files opened from Finder arrive as an Apple Event (src/macos_open.rs).
+# The same objc2 version winit already uses, so nothing new is built.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"

@@ -16,6 +16,9 @@ mod icon;
 mod image_out;
 mod mcp;
 mod mcp_ui;
+#[cfg(target_os = "macos")]
+mod macos_open;
+mod recent;
 mod palette_ui;
 mod move_tool;
 mod outline;
@@ -36,6 +39,10 @@ use pathtrace::{Environment, PathTracer};
 use voxel_core::{History, Mesh};
 
 fn main() -> eframe::Result {
+    // Before the event loop, so a file that launches the app is caught.
+    #[cfg(target_os = "macos")]
+    macos_open::install();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
@@ -157,6 +164,11 @@ struct App {
     picking: bool,
     /// The saved-camera slot the camera panel acts on.
     camera_slot: usize,
+    /// Recently opened and saved files, and whether to add to them: not
+    /// in scripted runs (`--run`, `--screenshot`, ...), which would fill
+    /// the list with test files.
+    recent: Vec<String>,
+    remember_files: bool,
     brush_shape: voxel_core::BrushShape,
     /// The brush stroke under way, while the button is held.
     stroke: Option<tools::Stroke>,
@@ -268,6 +280,8 @@ impl App {
             mirror: [false; 3],
             picking: false,
             camera_slot: 0,
+            recent: recent::load(),
+            remember_files: true,
             brush_shape: voxel_core::BrushShape::Voxel,
             stroke: None,
             orbiting: false,
@@ -351,7 +365,19 @@ impl App {
         let icon = args.iter().position(|a| a == "--icon").and_then(|i| args.get(i + 1).cloned());
         app.write_icon = icon.is_some();
         app.screenshot = icon.or(screenshot);
+        let scripted = ["--run", "--script", "--screenshot", "--icon", "--render", "--click", "--drag"]
+            .iter()
+            .any(|f| args.iter().any(|a| a == f))
+            || std::env::var_os("VOXFERRO_NO_RECENT").is_some();
+        app.remember_files = !scripted;
         app.load(state, &path);
+        // A file named on the command line (or by the Explorer, or a
+        // .desktop file) is one the user opened; the bundled sample is not.
+        if positional_args(&args).iter().any(|a| a == &path) && app.scene.is_some() {
+            app.remember(&path);
+        }
+        #[cfg(target_os = "macos")]
+        macos_open::set_waker(&cc.egui_ctx);
 
         // Run before the first frame, so --screenshot captures the result.
         for command in &startup_commands {
@@ -626,6 +652,7 @@ impl App {
                 self.console_log.push(m);
             }
         });
+        self.recent_ui(ui, state);
         ui.label(&self.status);
 
         // Read everything needed up front, so no borrow of `self.scene` is
@@ -1500,6 +1527,12 @@ impl eframe::App for App {
     /// behind the terminal they were sent from.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let Some(state) = frame.wgpu_render_state().cloned() else { return };
+        // Files opened from Finder.
+        #[cfg(target_os = "macos")]
+        for path in macos_open::take() {
+            self.console_log.push(format!("opening {path}"));
+            self.request(files::Discarding::Open(Some(path)), ctx, &state);
+        }
         self.mcp_poll(ctx, &state);
         // Hidden, nothing draws the view, so a pending capture draws it
         // here at the size it last had; a render, one sample per call.

@@ -47,6 +47,9 @@ impl App {
                 let path = path.or_else(|| self.open_panel());
                 if let Some(path) = path {
                     self.load(state, &path);
+                    if self.scene.as_ref().and_then(|s| s.path.as_deref()) == Some(path.as_str()) {
+                        self.remember(&path);
+                    }
                 }
             }
             Discarding::New(size) => {
@@ -83,6 +86,7 @@ impl App {
         match loaded.save(path) {
             Ok(bytes) => {
                 loaded.set_path(path);
+                self.remember(path);
                 self.saved_revision = self.history.revision();
                 format!("saved {path} ({bytes} bytes)")
             }
@@ -125,6 +129,35 @@ impl App {
             Ok(()) => format!("exported {} ({} quads, with .mtl and .png)", path.display(), export.quads),
             Err(e) => format!("error: could not export {}: {e}", path.display()),
         })
+    }
+
+    /// Adds a file to the recent list, unless this is a scripted run.
+    pub fn remember(&mut self, path: &str) {
+        if self.remember_files {
+            crate::recent::push(&mut self.recent, path);
+        }
+    }
+
+    /// The recent files, in the panel under the file buttons.
+    pub fn recent_ui(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
+        if self.recent.is_empty() {
+            return;
+        }
+        let mut open = None;
+        egui::CollapsingHeader::new("Recent").show(ui, |ui| {
+            for path in &self.recent {
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .map_or(path.clone(), |n| n.to_string_lossy().into_owned());
+                if ui.small_button(name).on_hover_text(path).clicked() {
+                    open = Some(path.clone());
+                }
+            }
+        });
+        if let Some(path) = open {
+            let ctx = ui.ctx().clone();
+            self.request(Discarding::Open(Some(path)), &ctx, state);
+        }
     }
 
     fn open_panel(&self) -> Option<String> {
