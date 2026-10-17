@@ -43,6 +43,11 @@ impl App {
         self.path_tracer.reset();
     }
 
+    /// The frames stepping wraps within: the range playback uses.
+    pub fn anim_bounds(&self) -> (u32, u32) {
+        self.scene.as_ref().map_or((0, 0), |s| s.anim_range())
+    }
+
     pub fn frame(&self) -> u32 {
         self.scene.as_ref().map_or(0, |s| s.doc.scene.frame)
     }
@@ -120,6 +125,57 @@ impl App {
                 }
             }
             ["newframe"] => self.new_shape_frame(),
+            // the reference editor a recent version's stepping, loop and reverse (`astep`,
+            // `aset loop`, `arev`), on the selected objects' keys.
+            ["step", n] => match n.trim_start_matches('+').parse::<i64>() {
+                Ok(n) => {
+                    // Wraps within the range, as `astep time` does.
+                    let (first, last) = self.anim_bounds();
+                    let len = (last - first + 1) as i64;
+                    let f = first as i64 + (self.frame() as i64 - first as i64 + n).rem_euclid(len);
+                    self.set_frame(f as u32);
+                    format!("frame {f}")
+                }
+                Err(_) => "anim step <frames>".to_owned(),
+            },
+            ["key", which @ ("next" | "prev" | "first" | "last")] => {
+                let Some(node) = self.target_node() else { return "nothing selected".to_owned() };
+                let Some(loaded) = &self.scene else { return "nothing open".to_owned() };
+                let keys = loaded.doc.scene.keys_of(node);
+                let (first, last) = self.anim_bounds();
+                let now = self.frame();
+                let to = match *which {
+                    "next" => keys.iter().copied().find(|&k| k > now).unwrap_or(last),
+                    "prev" => keys.iter().rev().copied().find(|&k| k < now).unwrap_or(first),
+                    "first" => keys.first().copied().unwrap_or(first),
+                    _ => keys.last().copied().unwrap_or(last),
+                };
+                self.set_frame(to);
+                format!("frame {to}")
+            }
+            ["loop", on @ ("on" | "off")] => {
+                let nodes = if self.objects.is_empty() { self.target_node().into_iter().collect() } else { self.object_nodes() };
+                self.history.begin_group();
+                let mut done = 0;
+                for node in nodes {
+                    let Some(loaded) = &self.scene else { break };
+                    let graph = loaded.doc.scene.with_loop(node, *on == "on");
+                    if self.exec_graph(graph, false).is_ok() {
+                        done += 1;
+                    }
+                }
+                self.history.end_group();
+                format!("loop {on} on {done} objects")
+            }
+            ["reverse"] => {
+                let Some(node) = self.target_node() else { return "nothing selected".to_owned() };
+                let Some(loaded) = &self.scene else { return "nothing open".to_owned() };
+                let graph = loaded.doc.scene.with_keys_reversed(node);
+                match self.exec_graph(graph, false) {
+                    Ok(()) => "keys reversed".to_owned(),
+                    Err(_) => "reverse: the selection has no keys".to_owned(),
+                }
+            }
             [verb @ ("movekey" | "moveframe"), from, to] => {
                 let (Ok(from), Ok(to)) = (from.parse::<u32>(), to.parse::<u32>()) else {
                     return format!("anim {verb} <from> <to>");

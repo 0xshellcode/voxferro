@@ -16,7 +16,8 @@
 //! | 5 | frame the selection or the model (Shift+F everything) |
 //! | 6 | snapshot of the viewport |
 //! | 7 8 | save the camera to the slot, load it |
-//! | , . | previous, next animation frame |
+//! | , . | previous, next animation frame (wrapping in the range) |
+//! | Cmd+, Cmd+. | previous, next key; with Shift, first and last |
 //! | F5 F6 | add, remove an animation key |
 //! | Alt+click | take the voxel's colour (Alt+Shift+click picks a group) |
 //!
@@ -81,10 +82,10 @@ impl App {
                     lines.push(format!("camera load {}", self.camera_slot));
                 }
                 if pressed(Key::Comma) {
-                    lines.push(format!("anim frame {}", self.frame().saturating_sub(1)));
+                    lines.push("anim step -1".to_owned());
                 }
                 if pressed(Key::Period) {
-                    lines.push(format!("anim frame {}", self.frame() + 1));
+                    lines.push("anim step 1".to_owned());
                 }
                 if pressed(Key::F5) {
                     lines.push("anim key".to_owned());
@@ -101,6 +102,18 @@ impl App {
                         self.mirror[k] = !self.mirror[k];
                     }
                 }
+            }
+            // Cmd+, and Cmd+. a key back and on; with Shift, the first and
+            // the last key.
+            if cmd && !alt && (pressed(Key::Comma) || pressed(Key::Period)) {
+                let back = pressed(Key::Comma);
+                let which = match (back, shift) {
+                    (true, false) => "prev",
+                    (false, false) => "next",
+                    (true, true) => "first",
+                    (false, true) => "last",
+                };
+                lines.push(format!("anim key {which}"));
             }
             if cmd && !shift && pressed(Key::I) {
                 lines.push("select invert".to_owned());

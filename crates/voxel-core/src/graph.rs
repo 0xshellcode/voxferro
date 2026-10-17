@@ -358,6 +358,66 @@ impl Scene {
         out
     }
 
+    /// The frames keyed on transform node `node` and on its shape, if it
+    /// shows one: every `_f` there is, sorted, without repeats.
+    pub fn keys_of(&self, node: i32) -> Vec<u32> {
+        let frame = |d: &Dict| d.get("_f").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        let mut out = Vec::new();
+        if let Some(SceneNode::Transform(t)) = find(&self.nodes, node) {
+            out.extend(t.frames.iter().map(frame));
+            if let Some(SceneNode::Shape(s)) = find(&self.nodes, t.child) {
+                out.extend(s.models.iter().map(|m| frame(&m.attributes)));
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// The nodes with `_loop` set on transform node `node`, and on its
+    /// shape: its keys and its models repeat.
+    pub fn with_loop(&self, node: i32, on: bool) -> Result<Vec<SceneNode>, GraphError> {
+        let mut nodes = self.nodes.clone();
+        let child = match nodes.iter_mut().find(|n| n.id() == node) {
+            Some(SceneNode::Transform(t)) => {
+                if on { t.attributes.set("_loop", "1") } else { t.attributes.remove("_loop") }
+                t.child
+            }
+            _ => return Err(GraphError::NotPlaceable),
+        };
+        if let Some(SceneNode::Shape(s)) = nodes.iter_mut().find(|n| n.id() == child) {
+            if on { s.attributes.set("_loop", "1") } else { s.attributes.remove("_loop") }
+        }
+        Ok(nodes)
+    }
+
+    /// The nodes with the keys of transform node `node` (and of its shape)
+    /// played backwards: each key at frame f moves to first + last - f.
+    pub fn with_keys_reversed(&self, node: i32) -> Result<Vec<SceneNode>, GraphError> {
+        let keys = self.keys_of(node);
+        let (Some(&first), Some(&last)) = (keys.first(), keys.last()) else { return Err(GraphError::NotPlaceable) };
+        let flip = |d: &mut Dict| {
+            let f = d.get("_f").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+            d.set("_f", (first + last - f).to_string());
+        };
+        let mut nodes = self.nodes.clone();
+        let child = match nodes.iter_mut().find(|n| n.id() == node) {
+            Some(SceneNode::Transform(t)) => {
+                t.frames.iter_mut().for_each(flip);
+                t.frames.sort_by_key(|d| d.get("_f").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0));
+                t.child
+            }
+            _ => return Err(GraphError::NotPlaceable),
+        };
+        if let Some(SceneNode::Shape(s)) = nodes.iter_mut().find(|n| n.id() == child)
+            && s.models.len() > 1
+        {
+            s.models.iter_mut().for_each(|m| flip(&mut m.attributes));
+            s.models.sort_by_key(|m| m.attributes.get("_f").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0));
+        }
+        Ok(nodes)
+    }
+
     /// The nodes with transform node `node` moved by a world offset. For a
     /// group this moves everything in it.
     pub fn with_node_moved(&self, node: i32, delta: IVec3) -> Result<Vec<SceneNode>, GraphError> {
