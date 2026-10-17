@@ -41,7 +41,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–49 of the [ROADMAP](ROADMAP.md) are complete, with **251 tests
+Phases 0–40 and 43–49 of the [ROADMAP](ROADMAP.md) are complete, with **254 tests
 passing**. Working today:
 
 - Reading **and writing** `.vox` (versions 150 and 200), validated against the
@@ -73,8 +73,8 @@ passing**. Working today:
   draggable keys) and export of rendered frames to PNG
 - Export to OBJ + MTL + palette texture, and to the reference editor's other
   formats: PLY (faces, cubes or points), a smooth surface by marching
-  cubes, XRAW, Qubicle QB, SLAB6 and PNG
-  slices; import of `.vox`, XRAW, QB and SLAB6 models into a scene, of
+  cubes, XRAW, Qubicle QB, SLAB6, PNG
+  slices and isometric or front-view pixel sprites; import of `.vox`, XRAW, QB and SLAB6 models into a scene, of
   another project's materials, render settings, cameras or palette, and
   *Recover* for damaged files
 - Camera: frame selection or scene, axis and isometric views,
@@ -174,7 +174,7 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 
 | Group | Commands |
 |---|---|
-| Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `recover <path>`, `export [obj\|ply\|mc\|cube\|point\|xraw\|qb\|slab\|slice] <path>`, `import <path>`, `import materials\|render\|cameras\|palette <file.vox>` |
+| Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `recover <path>`, `export [obj\|ply\|mc\|cube\|point\|xraw\|qb\|slab\|slice\|iso\|2d] <path>`, `import <path>`, `import materials\|render\|cameras\|palette <file.vox>` |
 | Project | `project [list \| dir <path> \| open <name> \| rename <name> \| dup \| delete]` |
 | Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|square\|circle\|face\|fill\|shader\|pattern]`, `brush size <1-64>`, `brush tip cube\|sphere\|2d\|3d`, `brush centre fill\|ring\|even\|odd`, `brush project on\|off`, `brush face color\|geo\|4\|8\|palette\|voxel`, `brush mirror\|axis <axes>`, `brush region same\|color\|geo [4\|8]`, `color <n>` |
 | Pattern | `pattern selection\|open <file.vox>\|match on\|off\|turn x\|y\|z\|colours own\|brush\|clear` |

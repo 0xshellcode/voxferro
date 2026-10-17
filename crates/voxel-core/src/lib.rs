@@ -20,6 +20,7 @@ pub mod mesh_cache;
 pub mod ops;
 mod raycast;
 pub mod saved_camera;
+pub mod sprites;
 mod scene;
 mod selection;
 mod transform;

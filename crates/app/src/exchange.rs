@@ -18,7 +18,7 @@ use crate::App;
 use voxel_core::formats::{self, Imported};
 
 /// The export formats, as the reference editor's Export buttons name them.
-pub const FORMATS: [(&str, &str, &str); 9] = [
+pub const FORMATS: [(&str, &str, &str); 11] = [
     ("obj", "obj", "Merged faces, Y up, with a palette texture"),
     ("ply", "ply", "A quad per visible face, coloured, scale 0.1"),
     ("mc", "ply", "A smooth surface by marching cubes, coloured, scale 0.1"),
@@ -28,6 +28,8 @@ pub const FORMATS: [(&str, &str, &str); 9] = [
     ("qb", "qb", "The selected model as Qubicle Binary"),
     ("slab", "vox", "The selected model as a SLAB6 .vox"),
     ("slice", "png", "The selected model's layers stacked in one PNG"),
+    ("iso", "png", "The selected model as isometric pixel sprites, four views"),
+    ("2d", "png", "The selected model as a front-view pixel sprite"),
 ];
 
 /// `io_ply`, `io_cube` and `io_point` in the reference editor's `config.txt`.
@@ -97,6 +99,14 @@ impl App {
                 let (w, h, rgba) = formats::slices(selected()?, palette);
                 voxel_core::export::png_rgba(w, h, &rgba)
             }
+            "iso" | "2d" => {
+                let img = if format == "iso" {
+                    voxel_core::sprites::iso(selected()?, palette, &Default::default())
+                } else {
+                    voxel_core::sprites::flat(selected()?, palette, &Default::default())
+                };
+                voxel_core::export::png_rgba(img.width, img.height, &img.rgba)
+            }
             other => return Err(format!("unknown format {other}")),
         })
     }
@@ -113,6 +123,8 @@ impl App {
             "point" => "-points",
             "slab" => "-slab6",
             "slice" => "-slices",
+            "iso" => "-iso",
+            "2d" => "-2d",
             _ => "",
         };
         rfd::FileDialog::new()
