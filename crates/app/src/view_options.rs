@@ -87,6 +87,15 @@ impl App {
                 };
                 format!("view cube {}", if self.view_cube_shown { "on" } else { "off" })
             }
+            ["ruler", rest @ ..] => {
+                self.ruler_shown = match rest {
+                    [] => !self.ruler_shown,
+                    ["on"] => true,
+                    ["off"] => false,
+                    _ => return "view ruler [on|off]".to_owned(),
+                };
+                format!("view ruler {}", if self.ruler_shown { "on" } else { "off" })
+            }
             [word, rest @ ..] => {
                 let Some(slot) = self.view.slot(word) else {
                     return "view [edges|frame|grid|bg|wire|shadow] [on|off]".to_owned();

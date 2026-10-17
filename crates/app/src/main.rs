@@ -326,6 +326,9 @@ struct App {
     window_snap_sent: bool,
     /// The view cube in the viewport's corner.
     view_cube_shown: bool,
+    /// The camera ruler beside it, and a drag on it under way.
+    ruler_shown: bool,
+    ruler_drag: Option<view_cube::RulerDrag>,
     /// A `snap` waiting for the viewport's first frame.
     pending_snap: Option<String>,
     /// The Edit panel's text fields.
@@ -454,6 +457,8 @@ impl App {
             meshed_for: None,
             pending_snap: None,
             view_cube_shown: true,
+            ruler_shown: false,
+            ruler_drag: None,
             window_snap: None,
             settings_open: false,
             drawer_open: false,
@@ -1513,8 +1518,10 @@ impl App {
             )
         });
         let pointer = response.hover_pos();
-        // A click on the view cube is the cube's alone.
-        let on_cube = self.view_cube_shown && pointer.is_some_and(|p| view_cube::cube_rect(rect).contains(p));
+        // A click on the view cube or the ruler is theirs alone.
+        let on_cube = pointer.is_some_and(|p| {
+            view_cube::corner_rect(rect, self.view_cube_shown, self.ruler_shown).is_some_and(|r| r.contains(p))
+        });
         if !headless {
             if pressed && response.hovered() && !on_cube {
                 let hit = !self.rendering
@@ -1674,6 +1681,7 @@ impl App {
             }
         }
         if !headless {
+            self.ruler(ui, rect);
             self.view_cube(ui, rect);
         }
     }

@@ -1,6 +1,16 @@
 //! The view cube, in the viewport's corner: a cube turned with the camera,
 //! its faces named; a click on one goes to that view. the reference editor shows one
 //! too (`lower.ui`'s "Show View Cube"); `view cube on|off`.
+//!
+//! Beside it, the camera ruler (`lower.ui`'s "Show Camera Ruler : Drag on
+//! Ruler"; `view ruler on|off`). As the reference editor a recent version draws it
+//! (`UI_3DView::GenRuler`, `MouseDrag`): not a graduated scale but two
+//! strips on the outer edges of the cube's corner, one reading the camera's
+//! turn and one its elevation, in whole degrees. A drag on a strip turns
+//! the camera on that axis, the corner where they meet both; the angle
+//! moves 180° for half the viewport's height dragged and lands on the
+//! scene's 5° snap (`scene : (snap = '5')` in `editor.ui`), starting from
+//! the current angle snapped. The turn reads 0 from the front.
 
 use crate::App;
 use crate::camera::View;
@@ -17,9 +27,85 @@ const FACES: [(Vec3, &str, View); 6] = [
     (Vec3::NEG_Z, "Bottom", View::Bottom),
 ];
 
-/// Where the cube sits in a viewport.
-pub fn cube_rect(viewport: egui::Rect) -> egui::Rect {
-    egui::Rect::from_min_size(viewport.right_bottom() - egui::vec2(96.0, 96.0), egui::vec2(84.0, 84.0))
+/// The cube's side, its margin from the viewport's corner, and the
+/// ruler's strips' width.
+const CUBE: f32 = 84.0;
+const MARGIN: f32 = 12.0;
+const STRIP: f32 = 24.0;
+/// Degrees the ruler's angles land on.
+const SNAP: f32 = 5.0;
+
+/// Where the cube sits in a viewport: in the corner, or inside the ruler.
+pub fn cube_rect(viewport: egui::Rect, ruler: bool) -> egui::Rect {
+    let shift = if ruler { STRIP + 4.0 } else { 0.0 };
+    egui::Rect::from_min_size(viewport.right_bottom() - egui::vec2(MARGIN + CUBE + shift, MARGIN + CUBE + shift), egui::vec2(CUBE, CUBE))
+}
+
+/// The ruler's parts: the turn's strip along the bottom, the elevation's
+/// along the right, and the corner where they meet.
+pub fn ruler_rects(viewport: egui::Rect) -> [egui::Rect; 3] {
+    let max = viewport.right_bottom() - egui::vec2(MARGIN, MARGIN);
+    let min = cube_rect(viewport, true).min;
+    [
+        egui::Rect::from_min_max(egui::pos2(min.x, max.y - STRIP), egui::pos2(max.x - STRIP, max.y)),
+        egui::Rect::from_min_max(egui::pos2(max.x - STRIP, min.y), egui::pos2(max.x, max.y - STRIP)),
+        egui::Rect::from_min_max(max - egui::vec2(STRIP, STRIP), max),
+    ]
+}
+
+/// The area the corner's widgets take, which the viewport leaves to them.
+pub fn corner_rect(viewport: egui::Rect, cube: bool, ruler: bool) -> Option<egui::Rect> {
+    if ruler {
+        Some(cube_rect(viewport, true).union(ruler_rects(viewport)[2]))
+    } else {
+        cube.then(|| cube_rect(viewport, false))
+    }
+}
+
+/// The camera's turn as the ruler reads it: degrees from the front view,
+/// -179 to 180.
+pub fn ruler_yaw(yaw: f32) -> f32 {
+    let d = yaw.to_degrees() + 90.0;
+    180.0 - (180.0 - d).rem_euclid(360.0)
+}
+
+/// The angle on the snap grid.
+fn snapped(degrees: f32) -> f32 {
+    (degrees / SNAP).round() * SNAP
+}
+
+/// A drag on the ruler: which angles it turns, and where each would be
+/// without the snap.
+#[derive(Debug, Clone, Copy)]
+pub struct RulerDrag {
+    yaw: Option<f32>,
+    pitch: Option<f32>,
+}
+
+impl RulerDrag {
+    /// Starts at the current angles, snapped.
+    pub fn start(yaw: bool, pitch: bool, camera: &crate::camera::OrbitCamera) -> Self {
+        Self {
+            yaw: yaw.then(|| snapped(ruler_yaw(camera.yaw))),
+            pitch: pitch.then(|| snapped(camera.pitch.to_degrees())),
+        }
+    }
+
+    /// Moves by a drag of `delta` pixels in a viewport `height` pixels
+    /// tall, and sets the camera's angles, snapped. Right turns as an
+    /// orbit drag does; down raises the camera.
+    pub fn drag(&mut self, delta: egui::Vec2, height: f32, camera: &mut crate::camera::OrbitCamera) {
+        let rate = 180.0 / (height / 2.0).max(1.0);
+        if let Some(y) = &mut self.yaw {
+            *y -= delta.x * rate;
+            camera.yaw = (snapped(*y) - 90.0).to_radians();
+        }
+        if let Some(p) = &mut self.pitch {
+            *p = (*p + delta.y * rate).clamp(-90.0, 90.0);
+            // Short of the poles, as an orbit stops.
+            camera.pitch = snapped(*p).clamp(-89.4, 89.4).to_radians();
+        }
+    }
 }
 
 /// The faces turned toward a camera of basis `basis` (right, up,
@@ -48,7 +134,7 @@ impl App {
         if !self.view_cube_shown {
             return false;
         }
-        let area = cube_rect(viewport);
+        let area = cube_rect(viewport, self.ruler_shown);
         let centre = area.center();
         let scale = area.width() * 0.3;
         let to_screen = |p: glam::Vec2| centre + egui::vec2(p.x, p.y) * scale;
@@ -89,12 +175,81 @@ impl App {
         }
         clicked && pointer.is_some_and(|p| area.contains(p))
     }
+
+    /// Draws the ruler and turns the camera when it is dragged.
+    pub fn ruler(&mut self, ui: &egui::Ui, viewport: egui::Rect) {
+        if !self.ruler_shown {
+            self.ruler_drag = None;
+            return;
+        }
+        let [turn, rise, corner] = ruler_rects(viewport);
+        let (pointer, pressed, down, delta) =
+            ui.input(|i| (i.pointer.hover_pos(), i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.delta()));
+        let iso = self.camera.projection == crate::camera::Projection::Isometric;
+        if pressed && !iso && let Some(p) = pointer {
+            let on = |r: egui::Rect| r.contains(p);
+            if on(turn) || on(rise) || on(corner) {
+                let both = on(corner);
+                self.ruler_drag = Some(RulerDrag::start(on(turn) || both, on(rise) || both, &self.camera));
+            }
+        }
+        if !down {
+            self.ruler_drag = None;
+        }
+        if let Some(drag) = &mut self.ruler_drag
+            && delta != egui::Vec2::ZERO
+        {
+            drag.drag(delta, viewport.height(), &mut self.camera);
+            self.path_tracer.reset();
+        }
+        let painter = ui.painter_at(viewport);
+        let fill = egui::Color32::from_rgba_unmultiplied(90, 90, 90, 140);
+        let active = egui::Color32::from_rgba_unmultiplied(110, 150, 210, 170);
+        let hover = |r: egui::Rect| pointer.is_some_and(|p| r.contains(p)) && !iso;
+        let dragging = self.ruler_drag.map(|d| (d.yaw.is_some(), d.pitch.is_some()));
+        let signed = |v: f32| if v > 0.0 { format!("+{v:.0}°") } else { format!("{v:.0}°") };
+        for (rect, lit, text, alpha) in [
+            (turn, dragging.is_some_and(|d| d.0) || hover(turn), signed(ruler_yaw(self.camera.yaw).floor()), 255),
+            (rise, dragging.is_some_and(|d| d.1) || hover(rise), signed(self.camera.pitch.to_degrees().floor()), 220),
+            (corner, dragging.is_some_and(|d| d.0 && d.1) || hover(corner), String::new(), 255),
+        ] {
+            painter.rect_filled(rect.shrink(1.0), 4.0, if lit { active } else { fill });
+            if !text.is_empty() {
+                painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(10.0), egui::Color32::from_white_alpha(alpha));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::camera::OrbitCamera;
+
+    #[test]
+    fn the_ruler_reads_from_the_front_and_drags_in_snapped_steps() {
+        let mut c = OrbitCamera::default();
+        c.set_view(View::Front);
+        assert_eq!(ruler_yaw(c.yaw).round(), 0.0);
+        c.set_view(View::Right);
+        assert_eq!(ruler_yaw(c.yaw).round().abs(), 90.0);
+        c.set_view(View::Back);
+        assert_eq!(ruler_yaw(c.yaw).round(), 180.0);
+        // Half the viewport's height turns 180°, in 5° steps.
+        c.set_view(View::Front);
+        c.pitch = 0.3;
+        let mut d = RulerDrag::start(true, true, &c);
+        d.drag(egui::vec2(-12.0, 0.0), 360.0, &mut c);
+        assert!((ruler_yaw(c.yaw) - 10.0).abs() < 1e-3, "{}", ruler_yaw(c.yaw));
+        assert!((c.pitch.to_degrees() - 15.0).abs() < 1e-3, "starts snapped: {}", c.pitch.to_degrees());
+        d.drag(egui::vec2(0.0, 1000.0), 360.0, &mut c);
+        assert!(c.pitch.to_degrees() < 90.0 && c.pitch.to_degrees() > 89.0);
+        // A strip alone leaves the other angle.
+        let before = c.pitch;
+        let mut turn = RulerDrag::start(true, false, &c);
+        turn.drag(egui::vec2(30.0, 30.0), 360.0, &mut c);
+        assert_eq!(c.pitch, before);
+    }
 
     #[test]
     fn each_view_faces_its_own_face() {

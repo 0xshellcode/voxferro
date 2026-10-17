@@ -332,7 +332,8 @@ impl App {
             let mut word = None;
             for pair in [[("bg", "BO", v.background, "Background objects (Cmd+B)"), ("edges", "Edge", v.edges, "Voxel edges (Cmd+E)")],
                 [("wire", "WR", v.wire, "Wireframe (Cmd+M)"), ("grid", "Grid", v.grid, "Floor grid (Cmd+G)")],
-                [("shadow", "SW", v.shadow, "Shadows"), ("frame", "Frame", v.frame, "The model's box (Cmd+F)")]]
+                [("shadow", "SW", v.shadow, "Shadows"), ("frame", "Frame", v.frame, "The model's box (Cmd+F)")],
+                [("cube", "Cube", self.view_cube_shown, "The view cube"), ("ruler", "Ruler", self.ruler_shown, "Camera ruler: drag on it to turn in 5° steps")]]
             {
                 let items: Vec<(bool, &str, &str)> = pair.iter().map(|(_, l, on, h)| (*on, *l, *h)).collect();
                 if let Some(i) = toggle_row(ui, &items) {
