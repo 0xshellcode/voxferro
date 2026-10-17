@@ -13,6 +13,7 @@
 mod anim_ui;
 mod autosave;
 mod hotkeys;
+mod photo;
 mod camera;
 mod camera_tools;
 mod compute;
@@ -222,6 +223,11 @@ struct App {
     path_tracer: PathTracer,
     /// Render mode, mirroring the editor's Model/Render tabs.
     rendering: bool,
+    /// A render at a size of its own, under way, and the panel's settings.
+    photo: Option<photo::PhotoJob>,
+    photo_settings: photo::PhotoSettings,
+    /// True while the launch's `--run` and `--script` lines run.
+    starting_up: bool,
     /// Edits the tracer's grid has not caught up with: it is only brought
     /// up to date when a frame is traced, so editing outside Render mode
     /// does not pay for it.
@@ -400,6 +406,9 @@ impl App {
             xs: xs_ui::XsState::new(&state.device),
             path_tracer: PathTracer::new(&state.device),
             rendering: false,
+            photo: None,
+            photo_settings: Default::default(),
+            starting_up: false,
             trace_stale: false,
             environment: Environment::default(),
             env_maps: None,
@@ -572,12 +581,14 @@ impl App {
         layout::apply_theme(&cc.egui_ctx);
 
         // Run before the first frame, so --screenshot captures the result.
+        app.starting_up = true;
         for command in &startup_commands {
             app.run_command(command, &cc.egui_ctx, state);
             if app.mesh_dirty {
                 app.remesh(state);
             }
         }
+        app.starting_up = false;
         if !startup_commands.is_empty() {
             for line in &app.console_log {
                 eprintln!("[voxferro] {line}");
@@ -851,6 +862,9 @@ impl App {
                 self.console_log.push(message);
             }
         }
+        ui.add_space(4.0);
+        self.photo_ui(ui);
+        ui.add_space(4.0);
         self.render_settings_ui(ui, state);
         ui.separator();
     }
@@ -1053,6 +1067,12 @@ impl App {
             if self.mesh_dirty {
                 self.refresh_document(state);
             }
+            return;
+        }
+
+        if line.split_whitespace().take(2).eq(["render", "image"]) {
+            let message = self.photo_command(line);
+            self.console_log.push(message);
             return;
         }
 
@@ -1417,7 +1437,14 @@ impl App {
     /// Painting it is the caller's: the viewport shows it, and an agent's
     /// capture reads it back while the window is hidden.
     pub fn draw_scene(&mut self, state: &egui_wgpu::RenderState, size: [u32; 2]) -> Option<egui::TextureId> {
-        self.last_view_size = size;
+        // A photo traces at its own size, whatever the viewport's.
+        let size = match self.photo_size() {
+            Some(photo) => photo,
+            None => {
+                self.last_view_size = size;
+                size
+            }
+        };
         let view_proj = self.camera.view_proj(size[0] as f32 / size[1] as f32);
 
         if self.mesh_dirty {
@@ -1640,15 +1667,23 @@ impl App {
 
         if self.rendering {
             if let Some(id) = id {
+                // A photo of another shape sits letterboxed in the view.
+                let shown = match self.photo_size() {
+                    Some([w, h]) => photo::letterbox(rect, w as f32 / h as f32),
+                    None => rect,
+                };
                 ui.painter().image(
                     id,
-                    rect,
+                    shown,
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+                self.photo_overlay(ui, shown);
                 // Keep sampling: the image refines frame by frame.
                 ui.ctx().request_repaint();
             }
+            let ctx = ui.ctx().clone();
+            self.photo_step(&ctx, state);
             return;
         }
 
@@ -1795,6 +1830,10 @@ impl eframe::App for App {
         // Hidden, nothing draws the view, so a pending capture draws it
         // here at the size it last had; a render, one sample per call.
         let hidden = ctx.input(|i| i.viewport().visible() == Some(false));
+        if hidden && self.photo.is_some() {
+            self.draw_scene(&state, self.last_view_size);
+            self.photo_step(ctx, &state);
+        }
         if hidden && self.mcp_capture.is_some() {
             self.draw_scene(&state, self.last_view_size);
             self.mcp_finish_capture(ctx, &state);

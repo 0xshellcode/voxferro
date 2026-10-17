@@ -316,6 +316,7 @@ pub fn write_target(line: &str, current: Option<&str>) -> Option<Result<std::pat
         ["export", p, ..] => Some(Ok(path(p).with_extension("obj"))),
         ["anim", "export", dir, ..] => Some(Ok(path(dir))),
         ["render", "save", p, ..] => Some(Ok(path(p))),
+        ["render", "image", _, _, _, p, ..] => Some(Ok(path(p))),
         ["palette", "save", p, ..] => Some(Ok(path(p))),
         ["snap", "window", p, ..] => Some(Ok(path(p))),
         ["snap", p, ..] if *p != "window" => Some(Ok(path(p))),
