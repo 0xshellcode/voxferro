@@ -108,7 +108,13 @@ jobs:
         run: |
           run=""; if [ "$RUNNER_OS" = Linux ]; then run="xvfb-run -a"; fi
           py=python3; if [ "$RUNNER_OS" = Windows ]; then py=python; fi
-          $run ./target/debug/voxferro --script assets/showcase/shapes.cmds --render 8 --screenshot smoke.bmp 2>&1 | tee smoke.log
+          set +e
+          $run ./target/debug/voxferro --script assets/showcase/shapes.cmds --render 8 --screenshot smoke.bmp > smoke.log 2>&1
+          code=$?
+          set -e
+          cat smoke.log
+          echo "voxferro exited with $code"
+          [ $code -eq 0 ]
           grep "graphics backend" smoke.log
           if [ "$RUNNER_OS" = Windows ]; then grep "graphics: DirectX 12 with DXC" smoke.log; fi
           $py scripts/ci/check_image.py smoke.bmp

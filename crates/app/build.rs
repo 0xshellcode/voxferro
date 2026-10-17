@@ -5,6 +5,17 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=../../assets/icon/icon.ico");
+    // A larger main-thread stack on Windows: 1 MB there by default (8 MB on
+    // macOS and Linux), and the DirectX software rasteriser (WARP) compiles
+    // the path tracer's shader on that thread at its first dispatch, deeply
+    // enough to overflow it.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        match std::env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+            Ok("msvc") => println!("cargo:rustc-link-arg-bins=/STACK:16777216"),
+            Ok("gnu") => println!("cargo:rustc-link-arg-bins=-Wl,--stack,16777216"),
+            _ => {}
+        }
+    }
     #[cfg(windows)]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
