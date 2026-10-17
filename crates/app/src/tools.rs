@@ -36,6 +36,29 @@ impl App {
         let Some(loaded) = &mut self.scene else { return false };
         self.selected = pick.instance;
         let model = loaded.doc.scene.instances[pick.instance].model_index;
+        // One click does the whole job, and starts no stroke.
+        match self.brush_shape {
+            BrushShape::Shader => {
+                let message = self.shader_brush();
+                self.console_log.push(message);
+                return true;
+            }
+            BrushShape::Pattern => {
+                let volume = loaded.doc.scene.models[model].clone();
+                let Some(writes) = self.pattern_stroke_writes(&volume, &pick.hit) else {
+                    self.console_log.push("pattern brush: no pattern yet (make one from a selection)".to_owned());
+                    return true;
+                };
+                let Some(loaded) = &mut self.scene else { return true };
+                self.history.end_gesture();
+                if self.history.set_voxels(&mut loaded.doc, model, writes) > 0 {
+                    self.mesh_dirty = true;
+                }
+                self.history.end_gesture();
+                return true;
+            }
+            _ => {}
+        }
         let anchor = brush::anchor(self.brush_mode, &pick.hit);
 
         self.stroke = Some(Stroke {
@@ -84,7 +107,7 @@ impl App {
                 }
             }
             // One click does the whole job.
-            BrushShape::Face | BrushShape::Fill => {}
+            BrushShape::Face | BrushShape::Fill | BrushShape::Shader | BrushShape::Pattern => {}
         }
     }
 
@@ -115,8 +138,10 @@ impl App {
         // when dragging; the other shapes start from the hit itself.
         let cells = match self.brush_shape {
             BrushShape::Voxel => vec![cell],
+            BrushShape::Fill if self.brush_mode != BrushMode::Attach => brush::region(volume, hit.voxel, self.region),
             shape => brush::stroke_cells(volume, self.brush_mode, shape, &hit, cell),
         };
+        let cells = brush::through_axes(&cells, volume.size(), self.axis_lock);
         let cells = brush::mirrored(&cells, volume.size(), self.mirror);
         let writes = brush::writes(volume, self.brush_mode, self.brush_color, &cells);
         stroke.end = cell;
@@ -135,6 +160,7 @@ impl App {
         let Some(volume) = loaded.doc.scene.models.get(stroke.model) else { return };
         let end = clamp_to(volume.size(), end);
         let cells = brush::stroke_cells(volume, self.brush_mode, self.brush_shape, &stroke.hit, end);
+        let cells = brush::through_axes(&cells, volume.size(), self.axis_lock);
         let cells = brush::mirrored(&cells, volume.size(), self.mirror);
         let writes = brush::writes(volume, self.brush_mode, self.brush_color, &cells);
         let command = Command::set_voxels(&loaded.doc, stroke.model, writes);
@@ -297,6 +323,28 @@ impl App {
                 let on: String = ['x', 'y', 'z'].iter().zip(self.mirror).filter(|(_, m)| *m).map(|(a, _)| *a).collect();
                 format!("mirror {}", if on.is_empty() { "off" } else { &on })
             }
+            Some("brush") if line.split_whitespace().nth(1) == Some("axis") => {
+                match line.split_whitespace().nth(2) {
+                    Some("off") => self.axis_lock = [false; 3],
+                    Some(axes) if !axes.is_empty() && axes.chars().all(|c| "xyz".contains(c)) => {
+                        self.axis_lock = ['x', 'y', 'z'].map(|a| axes.contains(a));
+                    }
+                    _ => return "brush axis x|y|z|xy|xz|yz|xyz|off".to_owned(),
+                }
+                let on: String = ['x', 'y', 'z'].iter().zip(self.axis_lock).filter(|(_, m)| *m).map(|(a, _)| *a).collect();
+                format!("axis {}", if on.is_empty() { "off" } else { &on })
+            }
+            Some("brush") if line.split_whitespace().nth(1) == Some("region") => {
+                let words: Vec<&str> = line.split_whitespace().skip(2).collect();
+                let wide = words.contains(&"8");
+                self.region = match words.first() {
+                    Some(&"same") => brush::Region::SameColour,
+                    Some(&"color" | &"colour") => brush::Region::Connected { by_colour: true, wide },
+                    Some(&"geo") => brush::Region::Connected { by_colour: false, wide },
+                    _ => return "brush region same | color [4|8] | geo [4|8]".to_owned(),
+                };
+                format!("region {}", region_name(self.region))
+            }
             Some("brush") if line.split_whitespace().nth(1) == Some("pick") => {
                 self.picking = true;
                 "click a voxel to take its colour".to_owned()
@@ -316,7 +364,10 @@ impl App {
                     } else if let Some(shape) = BrushShape::parse(word) {
                         self.brush_shape = shape;
                     } else {
-                        return format!("unknown brush '{word}': attach, erase, paint, select, move, pick; voxel, box, line, face, fill; mirror <axes>");
+                        return format!(
+                            "unknown brush '{word}': attach, erase, paint, select, move, pick; \
+                             voxel, box, line, face, fill, shader, pattern; mirror <axes>; axis <axes>; region …"
+                        );
                     }
                 }
                 let mode = if self.moving {
@@ -329,6 +380,18 @@ impl App {
                 format!("brush {mode} {}", self.brush_shape.name())
             }
         }
+    }
+}
+
+/// How the region rule reads in messages and the panel.
+pub fn region_name(region: brush::Region) -> String {
+    match region {
+        brush::Region::SameColour => "same colour".to_owned(),
+        brush::Region::Connected { by_colour, wide } => format!(
+            "connected by {}, {} neighbours",
+            if by_colour { "colour" } else { "geometry" },
+            if wide { 8 } else { 4 }
+        ),
     }
 }
 

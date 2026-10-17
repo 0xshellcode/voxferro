@@ -42,7 +42,8 @@ pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut Histo
                       anim play|stop|frame n|fps n|key|unkey|newframe|movekey a b|moveframe a b|range a b|export dir [n]; \
                       camera front|back|left|right|top|bottom|iso|ortho|persp|frame [all|selection|instance]|slots|save n|load n; \
                       full | zero | rev | x2 | xh | loop a n | scale axes f | shear a s t | rot a deg | repeat axes n | mir a | dia a | prim elli|cyli|pyra|cone | flood [c] | hull | dil|ero [6|18|26]; \
-                      render save <file.png>; xs [-n passes] [-c c1,c2] <script> [args] | xs list; \
+                      render save <file.png>; xs [-n passes] [-c c1,c2] <script> [args] | xs list | xs use <script> [args]; \
+                      pattern [selection|open f|turn a|colours own|brush|clear]; brush axis <axes> | brush region same|color|geo [4|8]; \
                       open | new | save | export <file.obj>; env …; undo | redo"
                 .to_owned(),
             changed: false,

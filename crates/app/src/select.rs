@@ -128,7 +128,7 @@ impl App {
         };
         match self.brush_shape {
             BrushShape::Face => brush::face_region(volume, hit.voxel, hit.face),
-            BrushShape::Fill => brush::colour_region(volume, hit.voxel),
+            BrushShape::Fill => brush::region(volume, hit.voxel, self.region),
             _ => vec![hit.voxel],
         }
     }

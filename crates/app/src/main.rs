@@ -28,6 +28,7 @@ mod recent;
 mod palette_ui;
 mod move_tool;
 mod outline;
+mod pattern;
 mod pathtrace;
 mod render_ui;
 mod renderer;
@@ -255,6 +256,15 @@ struct App {
     /// Brush symmetry: strokes repeat reflected through the model's centre
     /// on these axes.
     mirror: [bool; 3],
+    /// Axis mode: strokes run through the whole model on these axes.
+    axis_lock: [bool; 3],
+    /// What a Fill click takes in, when erasing, painting or selecting.
+    region: voxel_core::brush::Region,
+    /// The pattern brush's model, and whether it keeps its own colours.
+    pattern: Option<voxel_core::Volume>,
+    pattern_own_colours: bool,
+    /// The GPU, for the shader brush, which runs from mouse handling.
+    gpu: egui_wgpu::RenderState,
     /// The next click takes its colour from a voxel instead of editing.
     picking: bool,
     /// The saved-camera slot the camera panel acts on.
@@ -376,6 +386,11 @@ impl App {
             brush_color: 79,
             brush_mode: voxel_core::BrushMode::Attach,
             mirror: [false; 3],
+            axis_lock: [false; 3],
+            region: voxel_core::brush::Region::default(),
+            pattern: None,
+            pattern_own_colours: true,
+            gpu: state.clone(),
             picking: false,
             camera_slot: 0,
             recent: recent::load(),
@@ -870,6 +885,59 @@ impl App {
             }
         });
         ui.horizontal(|ui| {
+            ui.label("Axis");
+            for (axis, name) in ["x", "y", "z"].iter().enumerate() {
+                if ui
+                    .selectable_label(self.axis_lock[axis], *name)
+                    .on_hover_text("Strokes run through the whole model along this axis")
+                    .clicked()
+                {
+                    self.axis_lock[axis] = !self.axis_lock[axis];
+                }
+            }
+        });
+        match self.brush_shape {
+            voxel_core::BrushShape::Fill if self.selecting || self.brush_mode != voxel_core::BrushMode::Attach => {
+                use voxel_core::brush::Region;
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Region");
+                    let wide = matches!(self.region, Region::Connected { wide: true, .. });
+                    for (label, rule, hint) in [
+                        ("Same colour", Region::SameColour, "Every voxel of the clicked colour"),
+                        ("Colour", Region::Connected { by_colour: true, wide }, "Connected voxels of the clicked colour"),
+                        ("Geo", Region::Connected { by_colour: false, wide }, "Connected voxels of any colour"),
+                    ] {
+                        let on = match (self.region, rule) {
+                            (Region::SameColour, Region::SameColour) => true,
+                            (Region::Connected { by_colour: a, .. }, Region::Connected { by_colour: b, .. }) => a == b,
+                            _ => false,
+                        };
+                        if ui.selectable_label(on, label).on_hover_text(hint).clicked() {
+                            self.region = rule;
+                        }
+                    }
+                    if let Region::Connected { by_colour, wide } = self.region {
+                        for (label, w) in [("4", false), ("8", true)] {
+                            if ui
+                                .selectable_label(wide == w, label)
+                                .on_hover_text("Through faces only (4), or edges and corners too (8)")
+                                .clicked()
+                            {
+                                self.region = Region::Connected { by_colour, wide: w };
+                            }
+                        }
+                    }
+                });
+            }
+            voxel_core::BrushShape::Shader => {
+                let name = self.xs.chosen_name().unwrap_or_else(|| "none: choose one under Scripts".to_owned());
+                ui.label(format!("Script: {name}"))
+                    .on_hover_text("A click runs it over the model; the brush mode attaches, erases or paints its result");
+            }
+            voxel_core::BrushShape::Pattern => self.pattern_ui(ui),
+            _ => {}
+        }
+        ui.horizontal(|ui| {
             ui.add(egui::Slider::new(&mut self.brush_color, 1..=255).text("colour"));
             if ui
                 .selectable_label(self.picking, "Pick")
@@ -1160,6 +1228,12 @@ impl App {
 
         if matches!(line.split_whitespace().next(), Some("palette" | "material")) {
             let message = self.palette_command(line, state);
+            self.console_log.push(message);
+            return;
+        }
+
+        if line.split_whitespace().next() == Some("pattern") {
+            let message = self.pattern_command(line);
             self.console_log.push(message);
             return;
         }

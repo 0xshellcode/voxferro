@@ -41,7 +41,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40, 43 and 44 of the [ROADMAP](ROADMAP.md) are complete, with **220 tests
+Phases 0–40 and 43–45 of the [ROADMAP](ROADMAP.md) are complete, with **225 tests
 passing**. Working today:
 
 - Reading **and writing** `.vox` (versions 150 and 200), validated against the
@@ -52,7 +52,10 @@ passing**. Working today:
   of scenes with multiple models, rotated ones included
 - Open, new, save as, and a warning about unsaved changes
 - Attach / erase / paint brushes with voxel, box, line, face and
-  fill shapes, with preview and one-step undo/redo per stroke
+  fill shapes, with preview and one-step undo/redo per stroke; a shader
+  brush (a voxel script's result, attached, erased or painted), a pattern
+  brush, region rules for fills (same colour, or connected by colour or
+  geometry), mirror and axis modes
 - Selection (box, face, color), copy/cut/paste, move; rotate, mirror,
   crop and resize the model
 - the reference editor's Edit panel: full, reverse, double and halve, loop, scale,
@@ -159,7 +162,8 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 | Group | Commands |
 |---|---|
 | Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `export <path.obj>` |
-| Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|face\|fill]`, `color <n>` |
+| Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|face\|fill\|shader\|pattern]`, `brush mirror\|axis <axes>`, `brush region same\|color\|geo [4\|8]`, `color <n>` |
+| Pattern | `pattern selection\|open <file.vox>\|turn x\|y\|z\|colours own\|brush\|clear` |
 | Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz` |
 | Model | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
 | Scene | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
@@ -167,8 +171,8 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]` |
 | Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|frame [all\|selection\|instance]` |
-| Edit | `full`, `zero`, `rev`, `x2`, `xh`, `loop <axis> <n>`, `scale <axes> <f>`, `shear <axis> <a> <b>`, `rot <axis> <deg>`, `repeat <axes> <n>`, `mir <axis>`, `dia <axis>`, `prim elli\|cyli\|pyra\|cone`, `flood [c]`, `hull`, `dil\|ero [6\|18\|26]` |
-| Scripts | `xs [-n passes] [-c c1,c2,…] <script> [args…]`, `xs list` |
+| Edit | `full`, `zero`, `rev`, `x2`, `xh`, `loop <axis> <n>`, `scale <axes> <f>`, `shear <axis> <a> <b>`, `rot <axis> <deg>`, `repeat <axes> <n>`, `mir <axis>`, `dia <axis>`, `prim elli\|cyli\|pyra\|cone`, `flood [c]`, `hull`, `dil\|ero [6\|18\|26]`, `mask`, `tex` |
+| Scripts | `xs [-n passes] [-c c1,c2,…] <script> [args…]`, `xs list`, `xs use <script> [args…]` |
 | Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>` |
 
 For testing without a mouse: `--click fx fy` and `--drag fx0 fy0 fx1 fy1`, in

@@ -11,7 +11,8 @@
 //! - `-c 12,40,41` sets the colour selection `color_sel` reads; without it,
 //!   the selection is the current colour alone.
 //!
-//! `xs list` names the scripts found. The result is one undoable step, and
+//! `xs list` names the scripts found; `xs use <script> [args]` chooses the
+//! panel's script, which the shader brush runs. The result is one undoable step, and
 //! with voxels selected on that model only they change.
 
 use crate::xs::{self, Script, XsRunner};
@@ -37,6 +38,11 @@ impl XsState {
             values: Vec::new(),
             passes: 1,
         }
+    }
+
+    /// The Scripts panel's script, which the shader brush runs.
+    pub fn chosen_name(&self) -> Option<String> {
+        self.chosen.as_ref().map(|s| s.name.clone())
     }
 
     fn found(&mut self) -> &[(String, std::path::PathBuf)] {
@@ -92,6 +98,32 @@ fn parse(line: &str) -> Result<Request, String> {
     })
 }
 
+/// What a script's result does to the model.
+#[derive(Debug, Clone, Copy)]
+enum Apply {
+    /// It becomes the model (`xs`).
+    Replace,
+    /// It is attached, erased or painted (the shader brush).
+    Brush(voxel_core::BrushMode),
+}
+
+/// The cells where `after` differs from `before`, with their new values.
+fn diff(before: &voxel_core::Volume, after: &voxel_core::Volume) -> Vec<(glam::IVec3, u8)> {
+    let [sx, sy, sz] = before.size();
+    let mut out = Vec::new();
+    for z in 0..sz {
+        for y in 0..sy {
+            for x in 0..sx {
+                let new = after.get(x, y, z);
+                if before.get(x, y, z) != new {
+                    out.push((glam::IVec3::new(x as i32, y as i32, z as i32), new));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// A seed that differs between runs, for `i_rand`. Nothing here needs more
 /// than "not the same as last time".
 fn random4() -> [f32; 4] {
@@ -112,7 +144,11 @@ impl App {
             }
             return format!("scripts: {}", names.join(", "));
         }
-        let request = match parse(line) {
+        // `xs use <script> [args]`: the Scripts panel's script, which the
+        // shader brush runs.
+        let choosing = line.split_whitespace().nth(1) == Some("use");
+        let line = if choosing { line.replacen("use", "", 1) } else { line.to_owned() };
+        let request = match parse(&line) {
             Ok(r) => r,
             Err(e) => return format!("error: {e}"),
         };
@@ -137,7 +173,25 @@ impl App {
         }
         let mut values: Vec<f32> = script.args.iter().map(|a| a.value).collect();
         values[..request.args.len()].copy_from_slice(&request.args);
-        self.run_script(&script, &values, request.passes, request.colours.as_deref(), state)
+        if choosing {
+            let name = script.name.clone();
+            self.xs.chosen = Some(script);
+            self.xs.values = values;
+            self.xs.passes = request.passes;
+            return format!("script {name} chosen for the panel and the shader brush");
+        }
+        self.run_script(&script, &values, request.passes, request.colours.as_deref(), Apply::Replace, state)
+    }
+
+    /// The shader brush: the Scripts panel's script, with its values, run
+    /// over the model, its result attached, erased or painted.
+    pub fn shader_brush(&mut self) -> String {
+        let Some(script) = self.xs.chosen.clone() else {
+            return "shader brush: choose a script in the Scripts panel".to_owned();
+        };
+        let values = self.xs.values.clone();
+        let state = self.gpu.clone();
+        self.run_script(&script, &values, self.xs.passes, None, Apply::Brush(self.brush_mode), &state)
     }
 
     /// Runs `script` over the selected model as one undoable step.
@@ -147,6 +201,7 @@ impl App {
         values: &[f32],
         passes: u32,
         colours: Option<&[u8]>,
+        apply: Apply,
         state: &egui_wgpu::RenderState,
     ) -> String {
         let model = self.selected_model();
@@ -167,8 +222,7 @@ impl App {
             color_index: self.brush_color as f32,
             mirror: self.mirror.map(|m| m as u8 as f32),
             num_color_sels: colours.len() as i32,
-            // the reference editor's axis buttons; this editor has none yet.
-            axis: [0.0; 3],
+            axis: self.axis_lock.map(|a| a as u8 as f32),
             frame: loaded.doc.scene.frame.saturating_sub(first) as f32,
             rand: random4(),
             num_frames: (last.saturating_sub(first) + 1) as f32,
@@ -194,20 +248,24 @@ impl App {
         };
         let elapsed = started.elapsed();
 
-        let mut writes = Vec::new();
+        let mut computed = voxel_core::Volume::new([sx, sy, sz]);
         let mut i = 0usize;
         for z in 0..sz {
             for y in 0..sy {
                 for x in 0..sx {
-                    let new = result[i];
+                    computed.set(x, y, z, result[i]);
                     i += 1;
-                    let at = [x as i32, y as i32, z as i32];
-                    if volume.get(x, y, z) != new && only.as_ref().is_none_or(|cells| cells.contains(&at)) {
-                        writes.push((glam::IVec3::from_array(at), new));
-                    }
                 }
             }
         }
+        let writes: Vec<_> = match apply {
+            Apply::Replace => diff(volume, &computed),
+            Apply::Brush(mode) => voxel_core::brush::combine(volume, &computed, mode),
+        };
+        let writes: Vec<_> = writes
+            .into_iter()
+            .filter(|(p, _)| only.as_ref().is_none_or(|cells| cells.contains(&p.to_array())))
+            .collect();
         let count = writes.len();
         self.history.end_gesture();
         if count > 0 {
@@ -216,7 +274,11 @@ impl App {
             self.mesh_dirty = true;
         }
         let passes = if passes > 1 { format!(", {passes} passes") } else { String::new() };
-        format!("xs {}: {count} voxels changed in {elapsed:.1?}{passes}", script.name)
+        let what = match apply {
+            Apply::Replace => "xs",
+            Apply::Brush(mode) => mode.name(),
+        };
+        format!("{what} {}: {count} voxels changed in {elapsed:.1?}{passes}", script.name)
     }
 
     pub fn scripts_ui(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
@@ -280,7 +342,7 @@ impl App {
         });
         if run {
             let values = self.xs.values.clone();
-            let message = self.run_script(&script, &values, self.xs.passes, None, state);
+            let message = self.run_script(&script, &values, self.xs.passes, None, Apply::Replace, state);
             self.console_log.push(message);
         }
     }

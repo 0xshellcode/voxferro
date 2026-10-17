@@ -278,6 +278,26 @@ pub fn prim(volume: &Volume, prim: Prim, color: u8) -> Volume {
     })
 }
 
+/// The pattern repeated over the box, as `repeat` tiles: its cell for `p`.
+fn tiled(pattern: &Volume, p: Vec3) -> u8 {
+    voxel(pattern, p % size_vec(pattern))
+}
+
+/// *Mask*: keeps only the voxels where the pattern, tiled over the box from
+/// its corner, is solid.
+pub fn mask(volume: &Volume, pattern: &Volume) -> Volume {
+    map_volume(volume.size(), |p| if tiled(pattern, p) > 0 { voxel(volume, p) } else { 0 })
+}
+
+/// *Texture*: repaints the voxels where the tiled pattern is solid with the
+/// pattern's colours.
+pub fn texture(volume: &Volume, pattern: &Volume) -> Volume {
+    map_volume(volume.size(), |p| {
+        let (c, t) = (voxel(volume, p), tiled(pattern, p));
+        if c > 0 && t > 0 { t } else { c }
+    })
+}
+
 /// Which empty cells are open to the outside: reachable from beyond the
 /// box through empty cells, moving across faces.
 fn outside_air(volume: &Volume) -> Vec<bool> {
@@ -510,5 +530,15 @@ mod tests {
         let mut cup = shell.clone();
         cup.set(2, 2, 4, 0);
         assert_eq!(flood(&cup, 3).get(1, 1, 1), 0);
+    }
+
+    #[test]
+    fn mask_and_texture_tile_the_pattern() {
+        // A checker of 2x1x1: solid, empty.
+        let pattern = filled(&[[0, 0, 0]], [2, 1, 1]);
+        let row = full(&Volume::new([4, 1, 1]), 3);
+        assert_eq!(cells(&mask(&row, &pattern)), vec![[0, 0, 0], [2, 0, 0]]);
+        let t = texture(&row, &pattern);
+        assert_eq!((t.get(0, 0, 0), t.get(1, 0, 0), t.get(2, 0, 0)), (7, 3, 7));
     }
 }

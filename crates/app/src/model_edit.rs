@@ -14,6 +14,7 @@
 //! | `prim elli\|cyli\|pyra\|cone` | a solid filling the box |
 //! | `flood [colour]`, `hull` | fill enclosed space; `flood 0` (or `hull`) removes hidden voxels |
 //! | `dil [6\|18\|26]`, `ero [6\|18\|26]` | grow or wear by one voxel |
+//! | `mask`, `tex` | keep, or repaint, the voxels under the pattern tiled over the box |
 //!
 //! `flip` and `rot90` are accepted for `mirror` and `rotate` (see `main`).
 //!
@@ -28,9 +29,9 @@ use voxel_core::kernels::{self, Prim};
 use voxel_core::Volume;
 
 /// The command words this module answers.
-pub const WORDS: [&str; 17] = [
+pub const WORDS: [&str; 19] = [
     "full", "zero", "rev", "x2", "xh", "loop", "scale", "shear", "rot", "repeat", "mir", "dia", "prim", "flood",
-    "hull", "dil", "ero",
+    "hull", "dil", "ero", "mask", "tex",
 ];
 
 /// The panel's text fields, which start with the reference editor's examples.
@@ -99,7 +100,14 @@ impl App {
         };
         let colour = self.brush_color;
         let args = &words[1..];
-        let edit = match edit_for(verb, args, &volume, colour) {
+        let edit = match verb {
+            "mask" | "tex" => match &self.pattern {
+                Some(p) => Ok(Edit::InPlace(if verb == "mask" { kernels::mask(&volume, p) } else { kernels::texture(&volume, p) })),
+                None => Err("no pattern: make one from a selection, or open one (pattern …)".to_owned()),
+            },
+            _ => edit_for(verb, args, &volume, colour),
+        };
+        let edit = match edit {
             Ok(e) => e,
             Err(e) => return format!("{verb}: {e}"),
         };
@@ -221,6 +229,8 @@ impl App {
                 ("Flood", "flood", "Fill enclosed empty space with the colour"),
                 ("Dilation", "dil", "Grow by a voxel, in the colour"),
                 ("Erosion", "ero", "Wear away a voxel"),
+                ("Mask", "mask", "Keep only the voxels under the pattern, tiled over the box"),
+                ("Texture", "tex", "Repaint the voxels under the tiled pattern with its colours"),
             ],
             &mut lines,
         );
@@ -324,7 +334,7 @@ mod tests {
     fn every_word_is_handled() {
         let v = Volume::new([4, 4, 4]);
         for w in WORDS {
-            if matches!(w, "flip" | "hull") {
+            if matches!(w, "hull" | "mask" | "tex") {
                 continue;
             }
             let args: &[&str] = match w {

@@ -35,6 +35,11 @@ pub enum BrushShape {
     /// Flood fill: connected voxels of one colour for erase and paint; the
     /// enclosed empty region of a layer for attach.
     Fill,
+    /// A click runs the chosen voxel script over the model, and its result
+    /// is attached, erased or painted (the reference editor's shader mode).
+    Shader,
+    /// A click stamps the pattern, a model kept for the purpose.
+    Pattern,
 }
 
 impl BrushMode {
@@ -54,12 +59,14 @@ impl BrushMode {
 }
 
 impl BrushShape {
-    pub const ALL: [(BrushShape, &'static str); 5] = [
+    pub const ALL: [(BrushShape, &'static str); 7] = [
         (BrushShape::Voxel, "voxel"),
         (BrushShape::Box, "box"),
         (BrushShape::Line, "line"),
         (BrushShape::Face, "face"),
         (BrushShape::Fill, "fill"),
+        (BrushShape::Shader, "shader"),
+        (BrushShape::Pattern, "pattern"),
     ];
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -175,6 +182,69 @@ pub fn face_region(volume: &Volume, voxel: IVec3, face: Face) -> Vec<IVec3> {
     )
 }
 
+/// What a region click takes in (the reference editor's Region options).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Region {
+    /// Every voxel of the clicked colour, anywhere in the model.
+    SameColour,
+    /// Voxels connected to the clicked one: of its colour only
+    /// (`by_colour`) or any; through faces, or (`wide`) through edges and
+    /// corners as well -- the reference editor's "4" and "8" neighbours.
+    Connected { by_colour: bool, wide: bool },
+}
+
+impl Default for Region {
+    fn default() -> Self {
+        Region::Connected { by_colour: true, wide: false }
+    }
+}
+
+/// The region `rule` takes in from `voxel`.
+pub fn region(volume: &Volume, voxel: IVec3, rule: Region) -> Vec<IVec3> {
+    let colour = volume.get_i(voxel.x, voxel.y, voxel.z);
+    if colour == 0 {
+        return Vec::new();
+    }
+    match rule {
+        Region::SameColour => {
+            let [sx, sy, sz] = volume.size();
+            let mut out = Vec::new();
+            for z in 0..sz {
+                for y in 0..sy {
+                    for x in 0..sx {
+                        if volume.get(x, y, z) == colour {
+                            out.push(IVec3::new(x as i32, y as i32, z as i32));
+                        }
+                    }
+                }
+            }
+            out
+        }
+        Region::Connected { by_colour, wide } => {
+            let mut steps = Vec::new();
+            for z in -1..=1 {
+                for y in -1..=1 {
+                    for x in -1..=1 {
+                        let d = IVec3::new(x, y, z);
+                        let touching = x.abs() + y.abs() + z.abs();
+                        if touching == 1 || wide && touching > 1 {
+                            steps.push(d);
+                        }
+                    }
+                }
+            }
+            flood(
+                voxel,
+                |p| steps.iter().map(|d| p + *d).collect(),
+                |p| {
+                    let c = volume.get_i(p.x, p.y, p.z);
+                    in_bounds(volume, p) && c != 0 && (!by_colour || c == colour)
+                },
+            )
+        }
+    }
+}
+
 /// Voxels of the same colour connected to `voxel` through shared faces.
 pub fn colour_region(volume: &Volume, voxel: IVec3) -> Vec<IVec3> {
     let colour = volume.get_i(voxel.x, voxel.y, voxel.z);
@@ -231,7 +301,110 @@ pub fn stroke_cells(volume: &Volume, mode: BrushMode, shape: BrushShape, hit: &H
             BrushMode::Attach => empty_region_in_plane(volume, start, face_axis(hit.face)),
             _ => colour_region(volume, hit.voxel),
         },
+        // Not cell shapes: the app runs them (see `combine` and
+        // `pattern_cells`).
+        BrushShape::Shader | BrushShape::Pattern => Vec::new(),
     }
+}
+
+/// `cells` stretched across the whole box on each locked axis
+/// (the reference editor's Axis mode, which sets the brush's bounds to the model's
+/// on those axes). Duplicates are dropped, keeping the first's order.
+pub fn through_axes(cells: &[IVec3], size: [u32; 3], axes: [bool; 3]) -> Vec<IVec3> {
+    if !axes.iter().any(|&a| a) {
+        return cells.to_vec();
+    }
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for &c in cells {
+        let range = |a: usize| if axes[a] { 0..size[a] as i32 } else { c[a]..c[a] + 1 };
+        for z in range(2) {
+            for y in range(1) {
+                for x in range(0) {
+                    let p = IVec3::new(x, y, z);
+                    if seen.insert(p) {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// What the shader brush writes: the model `a` and the script's result `t`
+/// (both the same size) combined by the mode, as the reference editor's brush
+/// kernel does -- attach `a > 0 ? a : t`, erase `t > 0 ? 0 : a`, paint
+/// `min(a, t) > 0 ? t : a`.
+pub fn combine(volume: &Volume, result: &Volume, mode: BrushMode) -> Vec<(IVec3, u8)> {
+    let [sx, sy, sz] = volume.size();
+    let mut out = Vec::new();
+    for z in 0..sz {
+        for y in 0..sy {
+            for x in 0..sx {
+                let (a, t) = (volume.get(x, y, z), result.get(x, y, z));
+                let r = match mode {
+                    BrushMode::Attach => if a > 0 { a } else { t },
+                    BrushMode::Erase => if t > 0 { 0 } else { a },
+                    BrushMode::Paint => if a.min(t) > 0 { t } else { a },
+                };
+                if r != a {
+                    out.push((IVec3::new(x as i32, y as i32, z as i32), r));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Where a pattern lands for a click, and its colour in each cell: centred
+/// on the clicked cell across the face, and stacked out from the face when
+/// attaching -- into the model otherwise -- without turning (the pattern
+/// keeps the model's axes). `colour`, when given, replaces the pattern's
+/// own colours.
+pub fn pattern_cells(pattern: &Volume, mode: BrushMode, hit: &Hit, colour: Option<u8>) -> Vec<(IVec3, u8)> {
+    let size = pattern.size();
+    let axis = face_axis(hit.face);
+    let outward = hit.face.offset()[axis] > 0;
+    let start = anchor(mode, hit);
+    let mut origin = IVec3::ZERO;
+    for a in 0..3 {
+        origin[a] = start[a] - (size[a] as i32) / 2;
+    }
+    // Along the normal: the pattern's near side on the anchor, extending
+    // away from the surface when attaching and into it otherwise.
+    let away = (mode == BrushMode::Attach) == outward;
+    origin[axis] = if away { start[axis] } else { start[axis] - size[axis] as i32 + 1 };
+    let mut out = Vec::new();
+    for z in 0..size[2] {
+        for y in 0..size[1] {
+            for x in 0..size[0] {
+                let v = pattern.get(x, y, z);
+                if v != 0 {
+                    out.push((origin + IVec3::new(x as i32, y as i32, z as i32), colour.unwrap_or(v)));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A pattern's cells turned into writes by the mode, like `writes`, but
+/// each cell with its own colour.
+pub fn pattern_writes(volume: &Volume, mode: BrushMode, cells: &[(IVec3, u8)]) -> Vec<(IVec3, u8)> {
+    cells
+        .iter()
+        .filter(|(p, _)| in_bounds(volume, *p))
+        .filter_map(|&(p, c)| {
+            let filled = volume.get_i(p.x, p.y, p.z) != 0;
+            match mode {
+                BrushMode::Attach if !filled => Some((p, c)),
+                BrushMode::Erase if filled => Some((p, 0)),
+                BrushMode::Paint if filled => Some((p, c)),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// Turns covered cells into writes according to the mode.
@@ -413,5 +586,69 @@ mod tests {
         for (s, n) in BrushShape::ALL {
             assert_eq!(BrushShape::parse(n), Some(s));
         }
+    }
+
+    #[test]
+    fn axis_lock_runs_through_the_box() {
+        let c = IVec3::new(1, 2, 3);
+        assert_eq!(through_axes(&[c], [4, 5, 6], [false; 3]), vec![c]);
+        let column = through_axes(&[c], [4, 5, 6], [false, false, true]);
+        assert_eq!(column.len(), 6);
+        assert!(column.iter().all(|p| p.x == 1 && p.y == 2));
+        // Two layers, each a whole 4x5 plane.
+        assert_eq!(through_axes(&[c, IVec3::new(1, 2, 0)], [4, 5, 6], [true, true, false]).len(), 40);
+    }
+
+    #[test]
+    fn regions_by_rule() {
+        let mut v = floor();
+        // A colour-2 voxel touching the patch only by an edge, above it.
+        v.set(5, 5, 1, 2);
+        let n = |rule| region(&v, IVec3::new(3, 3, 0), rule).len();
+        assert_eq!(n(Region::default()), 4);
+        assert_eq!(n(Region::Connected { by_colour: true, wide: true }), 5);
+        assert_eq!(n(Region::SameColour), 5);
+        // By geometry the raised voxel joins through the floor cell below it.
+        assert_eq!(n(Region::Connected { by_colour: false, wide: false }), 65);
+        assert!(region(&v, IVec3::new(0, 0, 5), Region::SameColour).is_empty());
+    }
+
+    #[test]
+    fn shader_results_combine_by_mode() {
+        let v = floor();
+        let mut t = Volume::new([8, 8, 8]);
+        t.set(0, 0, 0, 9); // over a voxel
+        t.set(0, 0, 1, 9); // over empty space
+        assert_eq!(combine(&v, &t, BrushMode::Attach), vec![(IVec3::new(0, 0, 1), 9)]);
+        assert_eq!(combine(&v, &t, BrushMode::Erase), vec![(IVec3::ZERO, 0)]);
+        assert_eq!(combine(&v, &t, BrushMode::Paint), vec![(IVec3::ZERO, 9)]);
+    }
+
+    #[test]
+    fn patterns_land_on_the_face() {
+        // A 3x3x2 pattern, full.
+        let mut pattern = Volume::new([3, 3, 2]);
+        for z in 0..2 {
+            for y in 0..3 {
+                for x in 0..3 {
+                    pattern.set(x, y, z, 5);
+                }
+            }
+        }
+        let hit = top_hit(4, 4);
+        let on = pattern_cells(&pattern, BrushMode::Attach, &hit, None);
+        let zs: Vec<i32> = on.iter().map(|(p, _)| p.z).collect();
+        assert!(zs.iter().all(|&z| z == 1 || z == 2));
+        assert!(on.iter().all(|(p, c)| (3..=5).contains(&p.x) && (3..=5).contains(&p.y) && *c == 5));
+        // Erasing goes into the surface; the brush colour replaces the
+        // pattern's when asked.
+        let into = pattern_cells(&pattern, BrushMode::Erase, &hit, Some(7));
+        assert!(into.iter().all(|(p, c)| (p.z == 0 || p.z == -1) && *c == 7));
+        // From below, attaching stacks downward.
+        let under = Hit { voxel: IVec3::new(4, 4, 3), face: Face::NegZ };
+        assert!(pattern_cells(&pattern, BrushMode::Attach, &under, None).iter().all(|(p, _)| p.z == 1 || p.z == 2));
+        let writes = pattern_writes(&floor(), BrushMode::Attach, &on);
+        assert_eq!(writes.len(), 18);
+        assert_eq!(pattern_writes(&floor(), BrushMode::Paint, &into).len(), 9);
     }
 }
