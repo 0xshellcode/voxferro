@@ -43,6 +43,9 @@ pub enum Clip {
 /// A box of world cells: low corner and high corner, exclusive.
 type CellBox = (IVec3, IVec3);
 
+/// A selected object: its node, world placement and box.
+type Placed = (i32, Transform, CellBox);
+
 /// An instance's model box in world cells: low corner and high corner,
 /// exclusive.
 pub(crate) fn instance_box(scene: &Scene, index: usize) -> Option<(IVec3, IVec3)> {
@@ -123,7 +126,7 @@ impl App {
     }
 
     /// The selected objects' boxes, by node, and their union.
-    fn object_boxes_world(&self) -> Option<(Vec<(i32, Transform, CellBox)>, CellBox)> {
+    fn object_boxes_world(&self) -> Option<(Vec<Placed>, CellBox)> {
         let scene = self.scene_ref()?;
         let mut all = None;
         let mut out = Vec::new();
