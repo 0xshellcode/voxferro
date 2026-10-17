@@ -41,7 +41,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–47 of the [ROADMAP](ROADMAP.md) are complete, with **238 tests
+Phases 0–40 and 43–48 of the [ROADMAP](ROADMAP.md) are complete, with **241 tests
 passing**. Working today:
 
 - Reading **and writing** `.vox` (versions 150 and 200), validated against the
@@ -76,7 +76,11 @@ passing**. Working today:
   another project's materials, render settings, cameras or palette, and
   *Recover* for damaged files
 - Camera: frame selection or scene, axis and isometric views,
-  orthographic projection (also in the path tracer) and panning
+  the reference editor's four modes -- perspective, free (look around and fly with
+  W A S D Q E), orthographic and isometric -- also in the path tracer and
+  in saved cameras, panning, and snapshots of the viewport
+- Display switches: voxel edges, frame, grid, background objects and
+  wireframe, with the reference editor's shortcuts (Cmd+E, F, G, B, M)
 - Render settings (sun, uniform / atmospheric / HDR sky, ground, lens,
   film, bloom) editable in the panel, with undo and saved in the
   file; depth of field with a polygonal aperture
@@ -159,7 +163,8 @@ in).
 the ground; Shift+drag, up and down; Cmd+drag turns around z;
 X, Y, Z give a quarter turn.
 
-**Keyboard:** I eyedropper, F frames (Shift+F everything), 1–7 fixed views, O orthographic;
+**Keyboard:** I eyedropper, F frames (Shift+F everything), 1–7 fixed views, O orthographic, W A S D Q E fly (free camera);
+Cmd+E/F/G/B/M display switches;
 Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z; with a selection,
 Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 
@@ -177,7 +182,8 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 | Palette | `palette open\|save <file.png>`, `palette reset`, `palette default 0-3`, `palette swap\|gradient\|copy <a> <b>`, `palette paste <i>`, `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [key=value]…` |
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]` |
-| Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|frame [all\|selection\|instance]` |
+| Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|free\|frame [all\|selection\|instance]`, `snap [file.png]` |
+| View | `view [edges\|frame\|grid\|bg\|wire] [on\|off]` |
 | Edit | `full`, `zero`, `rev`, `x2`, `xh`, `loop <axis> <n>`, `scale <axes> <f>`, `shear <axis> <a> <b>`, `rot <axis> <deg>`, `repeat <axes> <n>`, `mir <axis>`, `dia <axis>`, `prim elli\|cyli\|pyra\|cone`, `flood [c]`, `hull`, `dil\|ero [6\|18\|26]`, `mask`, `tex` |
 | Scripts | `xs [-n passes] [-c c1,c2,…] <script> [args…]`, `xs list`, `xs use <script> [args…]` |
 | Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>` |

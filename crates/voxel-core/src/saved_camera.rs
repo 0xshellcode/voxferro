@@ -32,13 +32,49 @@
 use glam::Vec3;
 use vox_format::{Camera, Dict};
 
+/// The editor's four camera modes, as `_mode` names them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Projection {
+    /// Orbiting a focus, in perspective.
+    #[default]
+    Perspective,
+    /// In perspective, turning about the eye and flying with the keys.
+    Free,
+    /// Orbiting, parallel projection.
+    Orthographic,
+    /// Parallel, at the isometric pitch, turning in quarter turns.
+    Isometric,
+}
+
+impl Projection {
+    pub const ALL: [(Projection, &'static str); 4] = [
+        (Projection::Perspective, "pers"),
+        (Projection::Free, "free"),
+        (Projection::Orthographic, "orth"),
+        (Projection::Isometric, "iso"),
+    ];
+
+    pub fn name(self) -> &'static str {
+        Self::ALL.iter().find(|(p, _)| *p == self).map_or("pers", |(_, n)| n)
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.iter().find(|(_, n)| *n == name).map(|(p, _)| *p)
+    }
+
+    /// Orthographic or isometric.
+    pub fn is_parallel(self) -> bool {
+        matches!(self, Projection::Orthographic | Projection::Isometric)
+    }
+}
+
 /// The editor keeps ten camera slots.
 pub const SLOTS: usize = 10;
 
 /// A view in this editor's terms.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SavedView {
-    pub ortho: bool,
+    pub projection: Projection,
     pub target: Vec3,
     /// Radians, this editor's orbit convention.
     pub yaw: f32,
@@ -66,7 +102,8 @@ impl SavedView {
         let (pitch, yaw) = (*angle.first().unwrap_or(&0.0), *angle.get(1).unwrap_or(&0.0));
         let fov_deg = one("_fov").filter(|f| *f > 0.0).unwrap_or(45.0);
         let fov_y = fov_deg.to_radians();
-        let ortho = matches!(camera.mode(), "orth" | "iso");
+        let projection = Projection::parse(camera.mode()).unwrap_or_default();
+        let ortho = projection.is_parallel();
         // In the parallel modes the scale is the stored half height: put
         // the eye where this editor's `distance * tan(fov / 2)` gives it.
         let distance = match one("_frustum") {
@@ -74,7 +111,7 @@ impl SavedView {
             _ => radius,
         };
         Some(Self {
-            ortho,
+            projection,
             target: Vec3::new(
                 *focus.first().unwrap_or(&0.0),
                 *focus.get(1).unwrap_or(&0.0),
@@ -93,11 +130,12 @@ impl SavedView {
         let yaw = (self.yaw.to_degrees() + 90.0).rem_euclid(360.0);
         let tan = (self.fov_y * 0.5).tan();
         let mut attributes = Dict::default();
-        attributes.set("_mode", if self.ortho { "orth" } else { "pers" });
+        let ortho = self.projection.is_parallel();
+        attributes.set("_mode", self.projection.name());
         attributes.set("_focus", format!("{} {} {}", g(self.target.x), g(self.target.y), g(self.target.z)));
         attributes.set("_angle", format!("{} {} 0", g(pitch), g(yaw)));
         attributes.set("_radius", g(self.distance));
-        attributes.set("_frustum", g(if self.ortho { self.distance * tan } else { tan }));
+        attributes.set("_frustum", g(if ortho { self.distance * tan } else { tan }));
         attributes.set("_fov", g(self.fov_y.to_degrees()));
         Camera { id, attributes }
     }
@@ -175,7 +213,7 @@ mod tests {
     fn unused_slots_are_empty_and_writing_reads_back() {
         assert!(SavedView::from_camera(&camera("pers", "0 0 0", "0 0 0", "0")).is_none());
         let view = SavedView {
-            ortho: false,
+            projection: Projection::Perspective,
             target: Vec3::new(1.0, -2.5, 8.0),
             yaw: (-135f32).to_radians(),
             pitch: 30f32.to_radians(),
@@ -196,7 +234,7 @@ mod tests {
         let mut c = camera("orth", "0 0 0", "-35.26 45 0", "100");
         c.attributes.set("_frustum", "20");
         let v = SavedView::from_camera(&c).unwrap();
-        assert!(v.ortho);
+        assert!(v.projection.is_parallel());
         assert!((v.distance * (v.fov_y * 0.5).tan() - 20.0).abs() < 1e-3);
         let slots = slots(&with_slot(&[], 2, &v));
         assert!(slots[2].is_some() && slots[0].is_none());

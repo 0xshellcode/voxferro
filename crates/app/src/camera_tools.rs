@@ -1,6 +1,6 @@
 //! Camera tools: framing, fixed views, projection, and their shortcuts.
 
-use crate::camera::View;
+use crate::camera::{Projection, View};
 use crate::App;
 use eframe::egui;
 use glam::Vec3;
@@ -90,7 +90,7 @@ impl App {
                 let used: Vec<String> = slots
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, v)| v.map(|v| format!("{i} ({})", if v.ortho { "ortho" } else { "persp" })))
+                    .filter_map(|(i, v)| v.map(|v| format!("{i} ({})", v.projection.name())))
                     .collect();
                 if used.is_empty() { "no saved cameras".to_owned() } else { format!("saved cameras: {}", used.join(", ")) }
             }
@@ -104,7 +104,9 @@ impl App {
                             self.camera.pitch = view.pitch;
                             self.camera.distance = view.distance;
                             self.camera.fov_y = view.fov_y;
-                            self.camera.ortho = view.ortho;
+                            self.camera.set_projection(view.projection);
+                            self.camera.yaw = view.yaw;
+                            self.camera.pitch = view.pitch;
                             self.camera_slot = slot;
                             format!("camera {slot} loaded")
                         }
@@ -116,7 +118,7 @@ impl App {
             ["save", n] => match n.parse::<usize>().ok().filter(|n| *n < saved_camera::SLOTS) {
                 Some(slot) => {
                     let view = saved_camera::SavedView {
-                        ortho: self.camera.ortho,
+                        projection: self.camera.projection,
                         target: self.camera.target,
                         yaw: self.camera.yaw,
                         pitch: self.camera.pitch,
@@ -132,13 +134,17 @@ impl App {
                 }
                 None => return "camera save <0-9>".to_owned(),
             },
-            ["ortho"] => {
-                self.camera.ortho = true;
-                "orthographic".to_owned()
-            }
-            ["persp"] => {
-                self.camera.ortho = false;
+            ["persp" | "pers"] => {
+                self.camera.set_projection(Projection::Perspective);
                 "perspective".to_owned()
+            }
+            ["free"] => {
+                self.camera.set_projection(Projection::Free);
+                "free camera: drag to look around, W A S D to move, Q E down and up".to_owned()
+            }
+            ["ortho" | "orth"] => {
+                self.camera.set_projection(Projection::Orthographic);
+                "orthographic".to_owned()
             }
             ["frame", what @ ..] => {
                 let (name, bounds) = match what {
@@ -186,6 +192,31 @@ impl App {
             egui::Key::Num7,
         ];
         let mut lines: Vec<String> = Vec::new();
+        // Free camera: W/S along the view, A/D across it, Q/E down and up,
+        // at a speed that scales with the distance to the target; Shift is
+        // faster. Held keys move every frame.
+        if self.camera.projection == Projection::Free {
+            let (forward, right, up, dt, fast) = ctx.input(|i| {
+                // Cmd+S and the like are shortcuts, not flying.
+                let free = !i.modifiers.command;
+                let axis = |plus: egui::Key, minus: egui::Key| {
+                    if free { i.key_down(plus) as i32 as f32 - i.key_down(minus) as i32 as f32 } else { 0.0 }
+                };
+                (
+                    axis(egui::Key::W, egui::Key::S),
+                    axis(egui::Key::D, egui::Key::A),
+                    axis(egui::Key::E, egui::Key::Q),
+                    i.stable_dt.min(0.1),
+                    i.modifiers.shift,
+                )
+            });
+            if (forward, right, up) != (0.0, 0.0, 0.0) {
+                let speed = self.camera.distance.max(8.0) * if fast { 2.0 } else { 0.6 } * dt;
+                self.camera.fly(forward * speed, right * speed, up * speed);
+                self.path_tracer.reset();
+                ctx.request_repaint();
+            }
+        }
         ctx.input(|i| {
             if i.modifiers.command {
                 return;
@@ -197,7 +228,7 @@ impl App {
                 self.picking = !self.picking;
             }
             if i.key_pressed(egui::Key::O) {
-                lines.push(if self.camera.ortho { "camera persp" } else { "camera ortho" }.to_owned());
+                lines.push(if self.camera.ortho() { "camera persp" } else { "camera ortho" }.to_owned());
             }
             for (key, (_, name)) in keys.iter().zip(View::ALL) {
                 if i.key_pressed(*key) {
@@ -227,9 +258,17 @@ impl App {
             if ui.small_button("Frame all").on_hover_text("Shift+F").clicked() {
                 lines.push("camera frame all".to_owned());
             }
-            let mut ortho = self.camera.ortho;
-            if ui.checkbox(&mut ortho, "Ortho").on_hover_text("O").changed() {
-                lines.push(if ortho { "camera ortho" } else { "camera persp" }.to_owned());
+        });
+        ui.horizontal(|ui| {
+            for (projection, label, command, hint) in [
+                (Projection::Perspective, "Pers", "camera persp", "Perspective (O toggles with orthographic)"),
+                (Projection::Free, "Free", "camera free", "Free camera: drag to look, W A S D Q E to move"),
+                (Projection::Orthographic, "Orth", "camera ortho", "Orthographic"),
+                (Projection::Isometric, "Iso", "camera iso", "Isometric: turns a quarter at a time"),
+            ] {
+                if ui.selectable_label(self.camera.projection == projection, label).on_hover_text(hint).clicked() {
+                    lines.push(command.to_owned());
+                }
             }
         });
         // The file's saved cameras, as the editor's ten slots: a filled

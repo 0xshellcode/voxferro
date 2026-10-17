@@ -226,19 +226,23 @@ impl App {
             out.push(crate::renderer::LineVertex { position: world(a), color });
             out.push(crate::renderer::LineVertex { position: world(b), color });
         };
-        for x in 1..volume.size()[0] {
-            segment(Vec3::new(x as f32, 0.0, 0.0), Vec3::new(x as f32, size.y, 0.0), GRID);
-        }
-        for y in 1..volume.size()[1] {
-            segment(Vec3::new(0.0, y as f32, 0.0), Vec3::new(size.x, y as f32, 0.0), GRID);
+        if self.view.grid {
+            for x in 1..volume.size()[0] {
+                segment(Vec3::new(x as f32, 0.0, 0.0), Vec3::new(x as f32, size.y, 0.0), GRID);
+            }
+            for y in 1..volume.size()[1] {
+                segment(Vec3::new(0.0, y as f32, 0.0), Vec3::new(size.x, y as f32, 0.0), GRID);
+            }
         }
         let corner = |i: usize| Vec3::new(
             if i & 1 == 0 { 0.0 } else { size.x },
             if i & 2 == 0 { 0.0 } else { size.y },
             if i & 4 == 0 { 0.0 } else { size.z },
         );
-        for (a, b) in crate::CUBE_EDGES {
-            segment(corner(a), corner(b), FRAME);
+        if self.view.frame {
+            for (a, b) in crate::CUBE_EDGES {
+                segment(corner(a), corner(b), FRAME);
+            }
         }
         out
     }

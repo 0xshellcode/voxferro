@@ -1,6 +1,7 @@
 //! Orbit camera.
 
 use glam::{Mat3, Mat4, Vec3};
+pub use voxel_core::saved_camera::Projection;
 // glam 0.34 groups projections by graphics API rather than by handedness.
 // wgpu wants NDC with Z in 0..1 and Y up, which is the `directx` variant --
 // `vulkan` flips Y, and `opengl` maps Z to -1..1 and would clip half the
@@ -56,10 +57,14 @@ pub struct OrbitCamera {
     /// Elevation, radians, clamped short of the poles.
     pub pitch: f32,
     pub fov_y: f32,
-    /// Parallel projection instead of perspective. The visible height is
-    /// what the perspective view shows at the target, so toggling keeps the
-    /// subject the same size.
-    pub ortho: bool,
+    /// the reference editor's four modes. In the parallel ones the visible height is
+    /// what the perspective view shows at the target, so switching keeps
+    /// the subject the same size. Free turns about the eye instead of the
+    /// target and flies with the keys; isometric keeps its pitch and turns
+    /// a quarter at a time.
+    pub projection: Projection,
+    /// Drag gathered toward the next isometric quarter turn.
+    iso_turn: f32,
 }
 
 impl Default for OrbitCamera {
@@ -70,7 +75,8 @@ impl Default for OrbitCamera {
             yaw: 0.6,
             pitch: 0.5,
             fov_y: 45f32.to_radians(),
-            ortho: false,
+            projection: Projection::Perspective,
+            iso_turn: 0.0,
         }
     }
 }
@@ -89,9 +95,61 @@ impl OrbitCamera {
         self.target + Vec3::new(cp * cy, cp * sy, sp) * self.distance
     }
 
+    /// Parallel projection: orthographic or isometric.
+    pub fn ortho(&self) -> bool {
+        self.projection.is_parallel()
+    }
+
+    /// The isometric pitch: the three axes equally foreshortened.
+    pub fn iso_pitch() -> f32 {
+        (1.0 / 2f32.sqrt()).atan()
+    }
+
+    /// Switches mode. Isometric snaps to its pitch and the nearest diagonal.
+    pub fn set_projection(&mut self, projection: Projection) {
+        use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
+        self.projection = projection;
+        self.iso_turn = 0.0;
+        if projection == Projection::Isometric {
+            self.pitch = Self::iso_pitch();
+            self.yaw = ((self.yaw - FRAC_PI_4) / FRAC_PI_2).round() * FRAC_PI_2 + FRAC_PI_4;
+        }
+    }
+
+    /// A mouse drag: orbiting the target, or, in free mode, looking around
+    /// from the eye; isometric turns a quarter for each half radian dragged.
     pub fn orbit(&mut self, delta_yaw: f32, delta_pitch: f32) {
-        self.yaw -= delta_yaw;
-        self.pitch = (self.pitch + delta_pitch).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        match self.projection {
+            Projection::Isometric => {
+                use std::f32::consts::FRAC_PI_2;
+                self.iso_turn += delta_yaw;
+                while self.iso_turn.abs() >= 0.5 {
+                    let step = self.iso_turn.signum();
+                    self.yaw -= step * FRAC_PI_2;
+                    self.iso_turn -= step * 0.5;
+                }
+            }
+            Projection::Free => {
+                // The eye stays; the target swings round it. Dragging turns
+                // the view the way the cursor goes, as looking does.
+                let eye = self.eye();
+                self.yaw += delta_yaw;
+                self.pitch = (self.pitch + delta_pitch).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+                self.target = eye - (self.eye() - self.target);
+            }
+            _ => {
+                self.yaw -= delta_yaw;
+                self.pitch = (self.pitch + delta_pitch).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+            }
+        }
+    }
+
+    /// Free mode's keys: `forward`, `right` and `up` in units of distance
+    /// to move, along the view (W/S), across it (A/D) and the world's up
+    /// (E/Q). The eye and target move together.
+    pub fn fly(&mut self, forward: f32, right: f32, up: f32) {
+        let b = self.basis();
+        self.target += b.z_axis * forward + b.x_axis * right + Vec3::Z * up;
     }
 
     /// Turns to a fixed view, keeping target and distance. Every view but
@@ -107,8 +165,9 @@ impl OrbitCamera {
             View::Top => (-FRAC_PI_2, PITCH_LIMIT),
             View::Bottom => (-FRAC_PI_2, -PITCH_LIMIT),
             View::Iso => {
-                self.ortho = true;
-                (-FRAC_PI_4, (1.0 / 2f32.sqrt()).atan())
+                self.projection = Projection::Isometric;
+                self.iso_turn = 0.0;
+                (-FRAC_PI_4, Self::iso_pitch())
             }
         };
         self.yaw = yaw;
@@ -146,7 +205,7 @@ impl OrbitCamera {
     /// See the import comment for why this is the `directx` projection.
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
         let aspect = aspect.max(0.01);
-        let proj = if self.ortho {
+        let proj = if self.ortho() {
             let h = self.half_height();
             // Near behind the eye: in a parallel view the eye's place along
             // the axis is arbitrary, and nothing between it and the target
@@ -201,7 +260,7 @@ mod tests {
     fn iso_is_orthographic_with_equal_axes() {
         let mut c = OrbitCamera::default();
         c.set_view(View::Iso);
-        assert!(c.ortho);
+        assert!(c.ortho());
         // Equal foreshortening: the three axes project to equal lengths.
         let b = c.basis();
         let len = |a: Vec3| Vec3::new(a.dot(b.x_axis), a.dot(b.y_axis), 0.0).length();
@@ -224,7 +283,7 @@ mod tests {
     fn orthographic_projects_parallel_lines_parallel() {
         let mut c = OrbitCamera::default();
         c.set_view(View::Front);
-        c.ortho = true;
+        c.projection = Projection::Orthographic;
         let vp = c.view_proj(1.0);
         let ndc = |p: Vec3| {
             let v = vp * p.extend(1.0);
@@ -235,5 +294,33 @@ mod tests {
         let far = ndc(Vec3::new(5.0, 20.0, 3.0));
         assert!((near.x - far.x).abs() < 1e-5 && (near.y - far.y).abs() < 1e-5);
     }
-}
 
+    #[test]
+    fn free_looks_from_the_eye_and_flies() {
+        let mut c = OrbitCamera::default();
+        c.set_projection(Projection::Free);
+        let eye = c.eye();
+        c.orbit(0.3, 0.1);
+        assert!((c.eye() - eye).length() < 1e-3, "the eye stays put");
+        let forward = c.basis().z_axis;
+        c.fly(2.0, 0.0, 0.0);
+        assert!((c.eye() - (eye + forward * 2.0)).length() < 1e-3);
+    }
+
+    #[test]
+    fn isometric_turns_in_quarters_at_its_pitch() {
+        use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
+        let mut c = OrbitCamera::default();
+        c.set_projection(Projection::Isometric);
+        assert!(c.ortho());
+        assert!((c.pitch - OrbitCamera::iso_pitch()).abs() < 1e-6);
+        let quarter = |y: f32| ((y - FRAC_PI_4) / FRAC_PI_2 - ((y - FRAC_PI_4) / FRAC_PI_2).round()).abs() < 1e-4;
+        assert!(quarter(c.yaw));
+        let before = c.yaw;
+        c.orbit(0.2, 0.3);
+        assert_eq!(c.yaw, before, "small drags gather");
+        c.orbit(0.35, 0.0);
+        assert!((c.yaw - (before - FRAC_PI_2)).abs() < 1e-5);
+        assert!((c.pitch - OrbitCamera::iso_pitch()).abs() < 1e-6, "pitch held");
+    }
+}

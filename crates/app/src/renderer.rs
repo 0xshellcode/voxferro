@@ -21,6 +21,8 @@ struct Uniforms {
     view_proj: [[f32; 4]; 4],
     light_dir: [f32; 4],
     ambient: [f32; 4],
+    /// x: draw voxel edges (1) or not (0).
+    options: [f32; 4],
 }
 
 /// 256 RGBA entries. 4 KiB, well inside the uniform buffer limit.
@@ -62,6 +64,9 @@ pub struct SceneRenderer {
     line_pipeline: wgpu::RenderPipeline,
     line_buffer: Option<wgpu::Buffer>,
     line_vertices: u32,
+    /// The mesh's quad outlines, when wireframes are shown.
+    wire_buffer: Option<wgpu::Buffer>,
+    wire_vertices: u32,
 
     target: Option<Target>,
 }
@@ -229,6 +234,8 @@ impl SceneRenderer {
             line_pipeline,
             line_buffer: None,
             line_vertices: 0,
+            wire_buffer: None,
+            wire_vertices: 0,
             pipeline,
             bind_group,
             uniform_buffer,
@@ -248,6 +255,35 @@ impl SceneRenderer {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("guide lines"),
                 contents: bytemuck::cast_slice(vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
+    }
+
+    /// The outline of every quad of `mesh` as lines, or none. The mesher
+    /// writes each quad as four vertices and the indices `0 1 2 0 2 3`.
+    pub fn set_wire(&mut self, device: &wgpu::Device, mesh: Option<&Mesh>) {
+        const WIRE: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
+        let mut lines = Vec::new();
+        if let Some(mesh) = mesh {
+            for quad in mesh.indices.as_chunks::<6>().0 {
+                let corners = [quad[0], quad[1], quad[2], quad[5]];
+                for k in 0..4 {
+                    for v in [corners[k], corners[(k + 1) % 4]] {
+                        // A hair off the face, so the depth test keeps the
+                        // line in front of the face it outlines.
+                        let vertex = &mesh.vertices[v as usize];
+                        let position = std::array::from_fn(|i| vertex.position[i] + vertex.normal[i] * 0.01);
+                        lines.push(LineVertex { position, color: WIRE });
+                    }
+                }
+            }
+        }
+        self.wire_vertices = lines.len() as u32;
+        self.wire_buffer = (!lines.is_empty()).then(|| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("wireframe"),
+                contents: bytemuck::cast_slice(&lines),
                 usage: wgpu::BufferUsages::VERTEX,
             })
         });
@@ -377,6 +413,7 @@ impl SceneRenderer {
         light_dir: Vec3,
         ambient: Vec3,
         clear: [f32; 3],
+        edges: bool,
     ) -> egui::TextureId {
         self.ensure_target(device, renderer, size);
         let target = self.target.as_ref().expect("target was just ensured");
@@ -385,6 +422,7 @@ impl SceneRenderer {
             view_proj: view_proj.to_cols_array_2d(),
             light_dir: [light_dir.x, light_dir.y, light_dir.z, 0.0],
             ambient: [ambient.x, ambient.y, ambient.z, 1.0],
+            options: [edges as u8 as f32, 0.0, 0.0, 0.0],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -427,6 +465,12 @@ impl SceneRenderer {
                 pass.set_vertex_buffer(0, vb.slice(..));
                 pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..self.index_count, 0, 0..1);
+            }
+            if let Some(wire) = &self.wire_buffer {
+                pass.set_pipeline(&self.line_pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.set_vertex_buffer(0, wire.slice(..));
+                pass.draw(0..self.wire_vertices, 0..1);
             }
             if let Some(lines) = &self.line_buffer {
                 pass.set_pipeline(&self.line_pipeline);

@@ -316,6 +316,7 @@ pub fn write_target(line: &str, current: Option<&str>) -> Option<Result<std::pat
         ["anim", "export", dir, ..] => Some(Ok(path(dir))),
         ["render", "save", p, ..] => Some(Ok(path(p))),
         ["palette", "save", p, ..] => Some(Ok(path(p))),
+        ["snap", p, ..] => Some(Ok(path(p))),
         ["project", "rename", name @ ..] => Some(match current {
             Some(c) => crate::project::renamed(std::path::Path::new(c), &name.join(" ")),
             None => Err("this model has never been saved".to_owned()),
@@ -330,7 +331,7 @@ pub fn write_target(line: &str, current: Option<&str>) -> Option<Result<std::pat
 /// the panel would block the editor waiting for someone at the screen.
 pub fn needs_path(line: &str) -> bool {
     match line.split_whitespace().collect::<Vec<_>>().as_slice() {
-        ["open"] | ["import"] | ["export"] => true,
+        ["open"] | ["import"] | ["export"] | ["snap"] => true,
         ["export", f] => crate::exchange::FORMATS.iter().any(|(n, ..)| n == f),
         _ => false,
     }
@@ -361,6 +362,7 @@ mod tests {
         assert_eq!(write_target("anim export out 8", None), Some(Ok("out".into())));
         assert_eq!(write_target("render save r.png", None), Some(Ok("r.png".into())));
         assert_eq!(write_target("palette save p.png", None), Some(Ok("p.png".into())));
+        assert_eq!(write_target("snap s.png", None), Some(Ok("s.png".into())));
         assert_eq!(write_target("project rename fort", Some("/a/castle.vox")), Some(Ok("/a/fort.vox".into())));
         assert!(matches!(write_target("project dup", None), Some(Err(_))));
         assert_eq!(write_target("box 0 0 0 1 1 1 2", None), None);

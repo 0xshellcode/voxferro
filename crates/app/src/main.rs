@@ -39,6 +39,7 @@ mod scene;
 mod scene_ui;
 mod select;
 mod tools;
+mod view_options;
 mod trace_cache;
 #[cfg(windows)]
 mod windows_graphics;
@@ -297,6 +298,13 @@ struct App {
     clipboard: voxel_core::Clipboard,
     /// The Resize fields, and which model and size they were filled from.
     resize_to: [u32; 3],
+    /// The viewport's display switches.
+    view: view_options::ViewOptions,
+    /// The instance the mesh was built around, while the background is
+    /// hidden: selecting another must remesh.
+    meshed_for: Option<usize>,
+    /// A `snap` waiting for the viewport's first frame.
+    pending_snap: Option<String>,
     /// The Edit panel's text fields.
     edit_fields: model_edit::Fields,
     /// The Project panel's folder and its pending confirmation.
@@ -417,6 +425,9 @@ impl App {
             select_drag: None,
             clipboard: voxel_core::Clipboard::default(),
             resize_to: [32; 3],
+            view: view_options::ViewOptions::default(),
+            meshed_for: None,
+            pending_snap: None,
             edit_fields: model_edit::Fields::default(),
             project: project::ProjectState::default(),
             resize_for: None,
@@ -615,6 +626,8 @@ impl App {
             self.camera.frame_world_bounds(min, max);
         }
         self.scene_renderer.set_mesh(&state.device, &mesh);
+        self.scene_renderer.set_wire(&state.device, self.view.wire.then_some(&mesh));
+        self.meshed_for = (!self.view.background).then_some(self.selected);
         self.refresh_colors(state);
         self.upload_trace_volume(state);
     }
@@ -628,6 +641,8 @@ impl App {
         let mesh = self.build_mesh();
         let meshed = started.elapsed();
         self.scene_renderer.set_mesh(&state.device, &mesh);
+        self.scene_renderer.set_wire(&state.device, self.view.wire.then_some(&mesh));
+        self.meshed_for = (!self.view.background).then_some(self.selected);
         let uploaded = started.elapsed();
         self.sync_trace_volume(state);
         if self.timings {
@@ -647,9 +662,14 @@ impl App {
         let Some(loaded) = &self.scene else { return Mesh::default() };
         let visible = self.visibility();
         let selection = self.selection.as_ref();
+        // With the background hidden, the selected model alone.
+        let only = (!self.view.background)
+            .then(|| loaded.doc.scene.instances.get(self.selected))
+            .flatten()
+            .map(|i| i as *const voxel_core::Instance);
         self.mesh_cache.build(
             &loaded.doc.scene,
-            |i| visible.shows(i),
+            |i| visible.shows(i) && only.is_none_or(|o| std::ptr::eq(o, i)),
             |model| selection.filter(|s| s.model == model).map(|s| s.cells()),
         )
     }
@@ -836,6 +856,14 @@ impl App {
 
         ui.label("Camera");
         self.camera_ui(ui);
+        ui.horizontal(|ui| {
+            ui.label("View");
+            self.view_ui(ui);
+        });
+        if ui.small_button("Snapshot…").on_hover_text("The viewport as a PNG (the reference editor's Capture Image)").clicked() {
+            let message = self.snap(None, state);
+            self.console_log.push(message);
+        }
 
         if self.rendering {
             ui.label(format!(
@@ -1144,9 +1172,10 @@ impl App {
             return;
         }
 
-        // the reference editor's names for two commands the editor already had.
+        // the reference editor's names for commands the editor already had.
         let renamed;
         let line = match line.split_whitespace().next() {
+            Some("shrink") => "crop",
             Some("flip") => {
                 renamed = line.trim_start().replacen("flip", "mirror", 1);
                 renamed.as_str()
@@ -1244,6 +1273,21 @@ impl App {
             if self.mesh_dirty {
                 self.refresh_document(state);
             }
+            return;
+        }
+
+        if line.split_whitespace().next() == Some("view") {
+            let message = self.view_command(line);
+            self.console_log.push(message);
+            if self.mesh_dirty {
+                self.refresh_document(state);
+            }
+            return;
+        }
+
+        if line.split_whitespace().next() == Some("snap") {
+            let message = self.snap(line.split_whitespace().nth(1), state);
+            self.console_log.push(message);
             return;
         }
 
@@ -1451,6 +1495,34 @@ impl App {
         format!("gpu {shape_name}: {count} voxels in {elapsed:.1?}")
     }
 
+    /// the reference editor's Capture Image: the viewport as it is -- the editor's
+    /// view in Model mode, the render in Render mode -- as a PNG. Without a
+    /// path, asks where.
+    fn snap(&mut self, path: Option<&str>, state: &egui_wgpu::RenderState) -> String {
+        let path = match path {
+            Some(p) => p.to_owned(),
+            None => match rfd::FileDialog::new().add_filter("PNG image", &["png"]).set_file_name("snapshot.png").save_file() {
+                Some(p) => p.to_string_lossy().into_owned(),
+                None => return "snapshot cancelled".to_owned(),
+            },
+        };
+        if self.rendering {
+            return self.save_render(&path, state);
+        }
+        match self.scene_renderer.read_frame(&state.device, &state.queue) {
+            Some((w, h, rgba)) => match std::fs::write(&path, voxel_core::export::png_rgba(w, h, &rgba)) {
+                Ok(()) => format!("saved {path} ({w}x{h})"),
+                Err(e) => format!("error: could not write {path}: {e}"),
+            },
+            // Nothing drawn yet (a script's first lines run before the first
+            // frame): taken after the next one.
+            None => {
+                self.pending_snap = Some(path.clone());
+                format!("{path} will be saved after the next frame")
+            }
+        }
+    }
+
     /// Writes the path traced image as it is now -- tone mapped, as shown
     /// -- to a PNG.
     fn save_render(&mut self, path: &str, state: &egui_wgpu::RenderState) -> String {
@@ -1491,7 +1563,7 @@ impl App {
                 self.camera.eye(),
                 basis,
                 self.camera.fov_y,
-                self.camera.ortho.then(|| self.camera.half_height()),
+                self.camera.ortho().then(|| self.camera.half_height()),
                 // In focus: the point the camera orbits, which framing and
                 // panning put on the subject.
                 self.camera.distance,
@@ -1516,6 +1588,7 @@ impl App {
             self.light_dir,
             Vec3::new(0.19, 0.18, 0.26), // the editor's own default ambient
             [0.16, 0.16, 0.17],
+            self.view.edges,
         ))
     }
 
@@ -1658,6 +1731,10 @@ impl App {
             ((rect.height() * ppp) as u32).max(1),
         ];
         let id = self.draw_scene(state, size);
+        if let Some(path) = self.pending_snap.take() {
+            let message = self.snap(Some(&path), state);
+            self.console_log.push(message);
+        }
 
         if self.rendering {
             if let Some(id) = id {
@@ -1854,6 +1931,10 @@ impl eframe::App for App {
         self.file_input(&ctx, &state);
         self.selection_input(&ctx);
         self.camera_input(&ctx);
+        self.view_input(&ctx);
+        if !self.view.background && self.meshed_for != Some(self.selected) {
+            self.mesh_dirty = true;
+        }
         self.move_input(&ctx);
         self.animate(&ctx);
         self.confirm_ui(&ctx, &state);
