@@ -49,6 +49,20 @@ pub fn identity_order() -> Box<[u8; 256]> {
     Box::new(std::array::from_fn(|k| k as u8))
 }
 
+/// A file's `IMAP` as the display order, when it is one: every colour in
+/// exactly one slot. A damaged map -- a colour twice, another nowhere --
+/// would hide colours from the palette, so it falls back to the identity.
+pub fn display_order(map: Option<&[u8; 256]>) -> Box<[u8; 256]> {
+    let Some(map) = map else { return identity_order() };
+    let mut seen = [false; 256];
+    for &i in map {
+        if std::mem::replace(&mut seen[i as usize], true) {
+            return identity_order();
+        }
+    }
+    Box::new(*map)
+}
+
 impl Document {
     pub fn model_mut(&mut self, index: usize) -> Option<&mut Volume> {
         self.scene.models.get_mut(index)
@@ -104,5 +118,22 @@ impl Document {
             }
             (None, None) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_permutation_is_a_display_order() {
+        let mut reversed = [0u8; 256];
+        for (k, slot) in reversed.iter_mut().enumerate() {
+            *slot = (255 - k) as u8;
+        }
+        assert_eq!(*display_order(Some(&reversed)), reversed);
+        assert_eq!(display_order(None), identity_order());
+        reversed[3] = reversed[4];
+        assert_eq!(display_order(Some(&reversed)), identity_order());
     }
 }

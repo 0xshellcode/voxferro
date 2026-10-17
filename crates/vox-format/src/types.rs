@@ -539,6 +539,19 @@ mod material_tests {
     }
 
     #[test]
+    fn a_blend_keeps_its_shares_through_a_save() {
+        let m = material(&[("_type", "_blend"), ("_metal", "0.25"), ("_trans", "0.5"), ("_emit", "0.75"), ("_flux", "2")]);
+        let r = m.resolve();
+        assert_eq!(r.kind, MaterialKind::Blend);
+        let again = Material::from_resolved(1, Some(&m), &r).resolve();
+        assert_eq!(again.kind, MaterialKind::Blend);
+        assert_eq!((again.metalness, again.transparency, again.emission, again.flux), (0.25, 0.5, 0.75, 2.0));
+        // Shares left out are none of each, out of range is clamped.
+        let bare = material(&[("_type", "_blend"), ("_emit", "7")]).resolve();
+        assert_eq!((bare.metalness, bare.transparency, bare.emission), (0.0, 0.0, 1.0));
+    }
+
+    #[test]
     fn a_version_200_material_without_type_is_diffuse() {
         // Exactly what cars.vox stores: only the non-default keys.
         let m = material(&[("_rough", "0.1"), ("_ior", "0.3"), ("_ri", "1.3"), ("_d", "0.05")]);

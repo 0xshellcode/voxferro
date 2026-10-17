@@ -24,11 +24,46 @@ pub enum VoxelShape {
     Cylinder = 2,
     Brick = 3,
     Clay = 4,
+    /// Marching cubes: the flat-faced surface of the *mc* export.
+    Marching = 5,
 }
 
 impl VoxelShape {
-    pub const ALL: [(VoxelShape, &'static str); 5] =
-        [(Self::Cube, "cube"), (Self::Sphere, "sphere"), (Self::Cylinder, "cylinder"), (Self::Brick, "brick"), (Self::Clay, "clay")];
+    pub const ALL: [(VoxelShape, &'static str); 6] = [
+        (Self::Cube, "cube"),
+        (Self::Sphere, "sphere"),
+        (Self::Cylinder, "cylinder"),
+        (Self::Brick, "brick"),
+        (Self::Clay, "clay"),
+        (Self::Marching, "mc"),
+    ];
+}
+
+/// The marching cubes cases for the shader, two `vec4<u32>` a case: the
+/// triangle count, then up to five triangles (no case has more), each
+/// corner packed in six bits as twice its position in the cell (0, 1 or 2
+/// per axis, two bits each). The polygons are `voxel_core::marching`'s, the
+/// *mc* export's own, fanned from their first corner.
+pub fn mc_table() -> Vec<[u32; 4]> {
+    let mut out = vec![[0u32; 4]; 512];
+    for (case, polygons) in voxel_core::marching::table().iter().enumerate() {
+        let corner = |e: usize| {
+            let v = voxel_core::marching::edge_mid(e) * 2.0;
+            v.x as u32 | (v.y as u32) << 2 | (v.z as u32) << 4
+        };
+        let mut tris = Vec::new();
+        for poly in polygons {
+            for k in 1..poly.len() - 1 {
+                tris.push(corner(poly[0]) | corner(poly[k]) << 6 | corner(poly[k + 1]) << 12);
+            }
+        }
+        assert!(tris.len() <= 5, "case {case} has {} triangles", tris.len());
+        let words = std::iter::once(tris.len() as u32).chain(tris);
+        for (i, word) in words.enumerate() {
+            out[case * 2 + i / 4][i % 4] = word;
+        }
+    }
+    out
 }
 
 /// Lighting and film settings, read from the file's `rOBJ` chunks where
@@ -85,6 +120,9 @@ pub struct Environment {
     /// a radius of 0.25 to 0.5).
     pub voxel_shape: VoxelShape,
     pub voxel_size: f32,
+    /// Lines drawn on the voxels in the render, the reference editor's Display
+    /// Grids and Display Edges (`pt_b_grid`, `pt_b_edge`). Session settings.
+    pub lines: Lines,
 
     /// `_film._vig`: vignette strength.
     pub vignette: f32,
@@ -151,6 +189,7 @@ impl Default for Environment {
             background_color: Vec3::splat(0.2),
             voxel_shape: VoxelShape::Cube,
             voxel_size: 1.0,
+            lines: Lines::default(),
             vignette: 0.0,
             aces: true,
             gamma: 2.2,
@@ -626,9 +665,48 @@ struct Params {
     fog_color: [f32; 4],
     /// x: the background, 0 sky, 1 colour, 2 transparent.
     look: [f32; 4],
-    /// x: voxels as 0 cubes, 1 spheres, 2 cylinders, 3 bricks, 4 clay;
+    /// x: voxels as 0 cubes, 1 spheres, 2 cylinders, 3 bricks, 4 clay, 5
+    /// marching cubes;
     /// y: the sphere's and cylinder's radius.
     shape: [f32; 4],
+    /// x: grid width (0 off), y: grid spacing, z: grid on the ground only,
+    /// w: edge width (0 off).
+    lines: [f32; 4],
+    grid_color: [f32; 4],
+    edge_color: [f32; 4],
+}
+
+/// The grid and edge lines of the render. Widths are a share of a voxel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lines {
+    /// A line along every voxel border on the faces (`pt_grid_*`), every
+    /// `grid_spacing` voxels, or only on the ground.
+    pub grid: bool,
+    pub grid_spacing: u32,
+    pub grid_width: f32,
+    pub grid_ground_only: bool,
+    /// Linear colour.
+    pub grid_color: Vec3,
+    /// A line where a face meets another at an angle: the model's outline
+    /// and creases (`pt_edge_*`).
+    pub edge: bool,
+    pub edge_width: f32,
+    pub edge_color: Vec3,
+}
+
+impl Default for Lines {
+    fn default() -> Self {
+        Self {
+            grid: false,
+            grid_spacing: 1,
+            grid_width: 0.05,
+            grid_ground_only: false,
+            grid_color: Vec3::ZERO,
+            edge: false,
+            edge_width: 0.1,
+            edge_color: Vec3::ZERO,
+        }
+    }
 }
 
 /// Must match the WGSL `Post`.
@@ -691,6 +769,8 @@ struct Target {
 }
 
 pub struct PathTracer {
+    /// [`mc_table`], for voxels drawn by marching cubes.
+    mc_table: wgpu::Buffer,
     pipeline: wgpu::ComputePipeline,
     /// The same shader built with `SHAPES`, for voxels drawn as spheres,
     /// bricks... -- made the first time it is wanted.
@@ -767,6 +847,7 @@ impl PathTracer {
                 storage(7, true),
                 storage(8, true),
                 storage(9, false),
+                uniform(10),
             ],
         });
 
@@ -859,7 +940,14 @@ impl PathTracer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
+        let mc_table = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("path tracer marching cubes"),
+            contents: bytemuck::cast_slice(&mc_table()),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
         Self {
+            mc_table,
             pipeline,
             shaped_pipeline: None,
             shader,
@@ -1006,11 +1094,7 @@ impl PathTracer {
             }
             let r = material.resolve();
             let c = palette.color(index);
-            let strength = if matches!(r.kind, vox_format::MaterialKind::Emissive | vox_format::MaterialKind::Blend) {
-                emission_strength(r.emission, r.flux)
-            } else {
-                0.0
-            };
+            let strength = if lights(&r) { emission_strength(r.emission, r.flux) } else { 0.0 };
 
             table[index as usize] = GpuMaterial {
                 kind: r.kind as u32,
@@ -1315,6 +1399,17 @@ impl PathTracer {
             fog_color: environment.fog_color.extend(0.0).to_array(),
             look: [environment.background as u32 as f32, 0.0, 0.0, 0.0],
             shape: [environment.voxel_shape as u32 as f32, 0.25 + 0.25 * environment.voxel_size.clamp(0.0, 1.0), 0.0, 0.0],
+            lines: {
+                let l = &environment.lines;
+                [
+                    if l.grid { l.grid_width.clamp(0.01, 1.0) } else { 0.0 },
+                    l.grid_spacing.max(1) as f32,
+                    if l.grid_ground_only { 1.0 } else { 0.0 },
+                    if l.edge { l.edge_width.clamp(0.01, 1.0) } else { 0.0 },
+                ]
+            },
+            grid_color: environment.lines.grid_color.extend(0.0).to_array(),
+            edge_color: environment.lines.edge_color.extend(0.0).to_array(),
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
 
@@ -1401,6 +1496,10 @@ impl PathTracer {
                 wgpu::BindGroupEntry {
                     binding: 9,
                     resource: target.coverage.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: self.mc_table.as_entire_binding(),
                 },
             ],
         });
@@ -1503,6 +1602,18 @@ fn empty_emitter_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     })
 }
 
+/// Whether a material gives off light: an emitter always (at `_emit = 0` it
+/// still glows with its own colour), a Blend only with an emission share --
+/// it is a lamp then like any emitter, sampled directly by the surfaces it
+/// lights.
+fn lights(r: &vox_format::ResolvedMaterial) -> bool {
+    match r.kind {
+        vox_format::MaterialKind::Emissive => true,
+        vox_format::MaterialKind::Blend => r.emission > 0.0,
+        _ => false,
+    }
+}
+
 /// Emissive cells with at least one empty neighbour, as `[x, y, z, mask]`.
 ///
 /// Mask bit `2 * axis` is the negative face, `2 * axis + 1` the positive one,
@@ -1511,7 +1622,7 @@ pub fn exposed_emitters(volume: &Volume, materials: &[vox_format::Material]) -> 
     let mut emissive = [false; 256];
     for m in materials {
         if let Ok(i) = u8::try_from(m.id) {
-            emissive[i as usize] = m.resolve().kind == vox_format::MaterialKind::Emissive;
+            emissive[i as usize] = lights(&m.resolve());
         }
     }
     emissive[0] = false;
@@ -1604,6 +1715,18 @@ mod tests {
         let mut v = Volume::new([2, 2, 2]);
         v.set(0, 0, 0, 3);
         assert!(exposed_emitters(&v, &[emit_material(9)]).is_empty());
+    }
+
+    #[test]
+    fn a_blend_is_a_lamp_only_with_an_emission_share() {
+        let blend = |emit: &str| vox_format::Material {
+            id: 3,
+            properties: vox_format::Dict(vec![("_type".into(), "_blend".into()), ("_emit".into(), emit.into())]),
+        };
+        let mut v = Volume::new([2, 2, 2]);
+        v.set(0, 0, 0, 3);
+        assert_eq!(exposed_emitters(&v, &[blend("0.5")]).len(), 1);
+        assert!(exposed_emitters(&v, &[blend("0")]).is_empty());
     }
 
     #[test]

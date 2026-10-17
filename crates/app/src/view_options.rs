@@ -116,7 +116,8 @@ impl App {
         message
     }
 
-    /// Cmd+E, F, G, B and M, as in the reference editor.
+    /// Cmd+E, F, G, B and M, as in the reference editor; in the render, Cmd+E and
+    /// Cmd+G switch its edges and grid instead.
     pub fn view_input(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() {
             return;
@@ -129,7 +130,12 @@ impl App {
                 .collect()
         });
         for word in pressed {
-            let message = self.view_command(&format!("view {word}"));
+            // In the render, Cmd+E and Cmd+G are its own lines, as there.
+            let message = match word {
+                "edges" if self.rendering => self.lines_command(&["edge"]),
+                "grid" if self.rendering => self.lines_command(&["grid"]),
+                _ => self.view_command(&format!("view {word}")),
+            };
             self.console_log.push(message);
         }
     }

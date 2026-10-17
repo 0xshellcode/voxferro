@@ -810,7 +810,7 @@ mod tests {
         if let SceneNode::Transform(t) = &mut nodes[0] {
             t.set_placement([100, 0, 0], 0b0000_0100);
         }
-        let mut s = Scene { models, nodes, instances: Vec::new(), frame: 0 };
+        let mut s = Scene { models, nodes, instances: Vec::new(), frame: 0, held: None };
         s.rebuild();
         s
     }

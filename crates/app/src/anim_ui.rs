@@ -37,6 +37,16 @@ impl App {
         if loaded.doc.scene.frame == frame {
             return;
         }
+        // Global Time off, inside a group: what is outside stays at the
+        // frame it showed when the group's time first moved.
+        let scene = &mut loaded.doc.scene;
+        scene.held = match (self.global_time, self.open_groups.last()) {
+            (false, Some(&group)) => Some(match scene.held {
+                Some((g, f)) if g == group => (g, f),
+                _ => (group, scene.frame),
+            }),
+            _ => None,
+        };
         loaded.doc.scene.frame = frame;
         loaded.doc.scene.rebuild();
         self.mesh_dirty = true;
@@ -167,6 +177,28 @@ impl App {
                 self.history.end_group();
                 format!("loop {on} on {done} objects")
             }
+            ["global", rest @ ..] => {
+                self.global_time = match rest {
+                    [] => !self.global_time,
+                    ["on" | "1"] => true,
+                    ["off" | "0"] => false,
+                    _ => return "anim global [on|off]".to_owned(),
+                };
+                if self.global_time
+                    && let Some(loaded) = self.scene.as_mut()
+                    && loaded.doc.scene.held.take().is_some()
+                {
+                    // Everything catches up with the current frame.
+                    loaded.doc.scene.rebuild();
+                    self.mesh_dirty = true;
+                    self.path_tracer.reset();
+                }
+                if self.global_time {
+                    "global time on: the whole scene animates".to_owned()
+                } else {
+                    "global time off: only the open group animates".to_owned()
+                }
+            }
             ["reverse"] => {
                 let Some(node) = self.target_node() else { return "nothing selected".to_owned() };
                 let Some(loaded) = &self.scene else { return "nothing open".to_owned() };
@@ -199,7 +231,7 @@ impl App {
                 let samples = rest.first().and_then(|s| s.parse::<u32>().ok()).unwrap_or(self.export_samples);
                 self.start_export(std::path::PathBuf::from(dir), samples)
             }
-            _ => "anim play | stop | frame <n> | fps <n> | key | unkey | newframe | movekey <a> <b> | moveframe <a> <b> | range <a> <b> | export <dir> [samples]"
+            _ => "anim play | stop | frame <n> | fps <n> | key | unkey | newframe | movekey <a> <b> | moveframe <a> <b> | range <a> <b> | global [on|off] | export <dir> [samples]"
                 .to_owned(),
         }
     }
@@ -415,6 +447,10 @@ impl App {
                 frame += 1;
             }
             ui.add(egui::DragValue::new(&mut self.fps).range(1.0..=60.0).suffix(" fps").speed(0.2));
+            let mut global = self.global_time;
+            if ui.checkbox(&mut global, "Global").on_hover_text("Global time: off, only the open group (Tab) animates").changed() {
+                lines.push(format!("anim global {}", if global { "on" } else { "off" }));
+            }
         });
         if frame != self.frame() {
             self.set_frame(frame);

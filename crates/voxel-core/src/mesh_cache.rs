@@ -219,6 +219,7 @@ mod tests {
             instances: vec![Instance { model_index: 0, layer: -1, ..Default::default() }],
             nodes: Vec::new(),
             frame: 0,
+            held: None,
         }
     }
 

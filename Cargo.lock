@@ -3917,7 +3917,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vox-format"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "dot_vox",
  "thiserror 2.0.21",
@@ -3925,7 +3925,7 @@ dependencies = [
 
 [[package]]
 name = "voxel-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "bytemuck",
  "dot_vox",
@@ -3936,7 +3936,7 @@ dependencies = [
 
 [[package]]
 name = "voxferro"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "axum",
  "bytemuck",

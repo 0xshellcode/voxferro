@@ -78,8 +78,15 @@ struct Params {
     look: vec4<f32>,
     // How a voxel is drawn: x 0 a cube, 1 a sphere, 2 a cylinder standing
     // on z, 3 a brick with a stud on top, 4 clay (a smooth surface through
-    // the voxels); y the sphere's and cylinder's radius, 0.25 to 0.5.
+    // the voxels), 5 marching cubes; y the sphere's and cylinder's radius,
+    // 0.25 to 0.5.
     shape: vec4<f32>,
+    // Lines on the surfaces (the reference editor's Display Grids and Edges): x the
+    // grid's width in voxels (0 off), y its spacing, z 1 for the ground
+    // only; w the edges' width (0 off). Colours linear.
+    lines: vec4<f32>,
+    grid_color: vec4<f32>,
+    edge_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -90,6 +97,9 @@ struct Params {
 // How many of a pixel's samples met something: summed, then divided by the
 // sample count in the post pass, it is the pixel's opacity.
 @group(0) @binding(9) var<storage, read_write> coverage: array<f32>;
+// Marching cubes cases (`mc_table` in pathtrace.rs): two vec4 a case, the
+// triangle count first, then each triangle's corners at six bits apiece.
+@group(0) @binding(10) var<uniform> mc_table: array<vec4<u32>, 512>;
 
 const KIND_DIFFUSE: u32 = 0u;
 const KIND_METAL: u32 = 1u;
@@ -222,6 +232,50 @@ fn voxel_at(cell: vec3<i32>) -> u32 {
     return textureLoad(volume, cell, 0).r;
 }
 
+// Whether a step from `cell` toward `toward` (a tangent of the face, zero
+// when the point is not by that border) crosses an edge of the model: the
+// face ends there (nothing beside the cell), or another face rises (a voxel
+// beside the cell's open side).
+fn edge_toward(cell: vec3<i32>, toward: vec3<i32>, out: vec3<i32>) -> bool {
+    if (all(toward == vec3<i32>(0))) {
+        return false;
+    }
+    return voxel_at(cell + toward) == 0u || voxel_at(cell + toward + out) != 0u;
+}
+
+// The colour a surface point shows with the render's lines drawn over it.
+// `point` is in voxel space; `cell` is the voxel hit, unused on the ground.
+// Each face draws its own half of a line, so a line is `width` across.
+fn lined(base: vec3<f32>, point: vec3<f32>, normal: vec3<f32>, cell: vec3<i32>, ground: bool) -> vec3<f32> {
+    // The face's own axis, left out: lines run along the other two.
+    let across = vec3<f32>(abs(normal) > vec3<f32>(0.5));
+    var colour = base;
+    if (p.lines.x > 0.0 && (ground || p.lines.z < 0.5)) {
+        let q = point / p.lines.y;
+        let d = abs(q - round(q)) * p.lines.y + across * 1e3;
+        if (min(d.x, min(d.y, d.z)) < p.lines.x * 0.5) {
+            colour = p.grid_color.rgb;
+        }
+    }
+    if (!ground && p.lines.w > 0.0) {
+        let local = point - vec3<f32>(cell);
+        let w = p.lines.w * 0.5;
+        // Per tangent axis, the neighbour whose border the point is within
+        // `w` of: -1, +1, or 0.
+        let near = (select(vec3<i32>(0), vec3<i32>(-1), local < vec3<f32>(w))
+            + select(vec3<i32>(0), vec3<i32>(1), local > vec3<f32>(1.0 - w)))
+            * vec3<i32>(1.0 - across);
+        let out = vec3<i32>(round(normal));
+        if (edge_toward(cell, near * vec3<i32>(1, 0, 0), out)
+            || edge_toward(cell, near * vec3<i32>(0, 1, 0), out)
+            || edge_toward(cell, near * vec3<i32>(0, 0, 1), out)
+            || (dot(abs(near), vec3<i32>(1)) == 2 && edge_toward(cell, near, out))) {
+            colour = p.edge_color.rgb;
+        }
+    }
+    return colour;
+}
+
 struct Hit {
     hit: bool,
     cell: vec3<i32>,
@@ -274,6 +328,9 @@ struct ShapeHit {
     t: f32,
     normal: vec3<f32>,
     point: vec3<f32>,
+    // The voxel whose colour the point takes, for the shapes that reach
+    // beyond their own cell (marching cubes).
+    cell: vec3<i32>,
 };
 
 fn no_shape() -> ShapeHit {
@@ -420,6 +477,100 @@ fn clay_in(origin: vec3<f32>, dir: vec3<f32>, t_in: f32, t_out: f32, entry: vec3
     return h;
 }
 
+// Marching cubes, as the *mc* export: cells whose corners are voxel centres,
+// each holding the polygons of its case through the midpoints of the edges
+// between solid and empty corners. A voxel overlaps eight such cells, a
+// half-cell of each; the nearest of their triangles within the voxel, met
+// from outside, is the hit, coloured as the nearest solid corner.
+fn mc_corner(packed: u32) -> vec3<f32> {
+    return vec3<f32>(f32(packed & 3u), f32((packed >> 2u) & 3u), f32((packed >> 4u) & 3u)) * 0.5;
+}
+
+fn mc_in(origin: vec3<f32>, dir: vec3<f32>, cell: vec3<i32>, t_in: f32, t_out: f32) -> ShapeHit {
+    // Which of the voxel and its 26 neighbours are solid: bit
+    // (x + 1) + 3 (y + 1) + 9 (z + 1).
+    var around = 0u;
+    for (var k = 0; k < 27; k = k + 1) {
+        let o = vec3<i32>(k % 3, (k / 3) % 3, k / 9) - vec3<i32>(1);
+        if (voxel_at(cell + o) != 0u) {
+            around = around | (1u << u32(k));
+        }
+    }
+    var best = no_shape();
+    var best_t = t_out;
+    var best_base = vec3<i32>(0);
+    var best_case = 0u;
+    let near = max(t_in, 0.0);
+    for (var d = 0; d < 8; d = d + 1) {
+        // The marching cell's first corner, from the voxel: -1 or 0 a side.
+        let base = vec3<i32>(d & 1, (d >> 1u) & 1, (d >> 2u) & 1) - vec3<i32>(1);
+        var case_index = 0u;
+        for (var i = 0; i < 8; i = i + 1) {
+            let c = base + vec3<i32>(i & 1, (i >> 1u) & 1, (i >> 2u) & 1) + vec3<i32>(1);
+            case_index = case_index | (((around >> u32(c.x + 3 * c.y + 9 * c.z)) & 1u) << u32(i));
+        }
+        let head = mc_table[case_index * 2u];
+        let tail = mc_table[case_index * 2u + 1u];
+        let count = head.x;
+        let first = vec3<f32>(cell + base) + vec3<f32>(0.5);
+        for (var j = 1u; j <= count; j = j + 1u) {
+            // Triangle j is in head.yzw, then tail.xy; picked by masks,
+            // not by a variable index into a vector.
+            let packed = select(select(select(head.w, head.z, j == 2u), head.y, j == 1u), select(tail.y, tail.x, j == 4u), j > 3u);
+            let a = first + mc_corner(packed);
+            let b = first + mc_corner(packed >> 6u);
+            let c = first + mc_corner(packed >> 12u);
+            // Moller-Trumbore, the front side only: the polygons wind
+            // counter-clockwise seen from outside.
+            let e1 = b - a;
+            let e2 = c - a;
+            let n = cross(e1, e2);
+            if (dot(n, dir) >= 0.0) {
+                continue;
+            }
+            let pv = cross(dir, e2);
+            let det = dot(e1, pv);
+            let inv = 1.0 / det;
+            let tv = origin - a;
+            let u = dot(tv, pv) * inv;
+            let qv = cross(tv, e1);
+            let v = dot(dir, qv) * inv;
+            let t = dot(e2, qv) * inv;
+            if (u < 0.0 || v < 0.0 || u + v > 1.0 || t < near || t > best_t) {
+                continue;
+            }
+            best.hit = true;
+            best_t = t;
+            best.normal = normalize(n);
+            best_base = cell + base;
+            best_case = case_index;
+        }
+    }
+    if (best.hit) {
+        best.t = best_t;
+        best.point = origin + dir * best_t;
+        var nearest = 1e9;
+        for (var i = 0; i < 8; i = i + 1) {
+            let corner = vec3<i32>(i & 1, (i >> 1u) & 1, (i >> 2u) & 1);
+            let offset = best.point - (vec3<f32>(best_base + corner) + vec3<f32>(0.5));
+            let dist = dot(offset, offset);
+            if (((best_case >> u32(i)) & 1u) != 0u && dist < nearest) {
+                nearest = dist;
+                best.cell = best_base + corner;
+            }
+        }
+    }
+    return best;
+}
+
+// Whether marching cubes can reach into an empty voxel: only from a solid
+// neighbour across one of its faces.
+fn mc_reaches(cell: vec3<i32>) -> bool {
+    return voxel_at(cell + vec3<i32>(1, 0, 0)) != 0u || voxel_at(cell - vec3<i32>(1, 0, 0)) != 0u
+        || voxel_at(cell + vec3<i32>(0, 1, 0)) != 0u || voxel_at(cell - vec3<i32>(0, 1, 0)) != 0u
+        || voxel_at(cell + vec3<i32>(0, 0, 1)) != 0u || voxel_at(cell - vec3<i32>(0, 0, 1)) != 0u;
+}
+
 // The shape in a solid cell, entered through the face `entry` points out of.
 fn shape_in(origin: vec3<f32>, dir: vec3<f32>, cell: vec3<i32>, t_in: f32, t_out: f32, entry: vec3<f32>) -> ShapeHit {
     let kind = u32(p.shape.x + 0.5);
@@ -435,6 +586,9 @@ fn shape_in(origin: vec3<f32>, dir: vec3<f32>, cell: vec3<i32>, t_in: f32, t_out
     }
     if (kind == 4u) {
         return clay_in(origin, dir, t_in, t_out, entry);
+    }
+    if (kind == 5u) {
+        return mc_in(origin, dir, cell, t_in, t_out);
     }
     // Bricks: the voxel is a cube.
     var h: ShapeHit;
@@ -522,12 +676,23 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, mode: u32) 
         // Voxels drawn as other shapes: the shape in the cell, or on.
         if (SHAPES && mode == 0u && p.shape.x > 0.5) {
             let t_out = min(min(t_max.x, t_max.y), t_max.z);
+            let marching = u32(p.shape.x + 0.5) == 5u;
             if (stop && shaped(voxel_at(cell))) {
                 let s = shape_in(origin, direction, cell, travelled, t_out, normal);
                 stop = false;
                 if (s.hit) {
                     result.hit = true;
-                    result.cell = cell;
+                    result.cell = select(cell, s.cell, marching);
+                    result.normal = s.normal;
+                    result.distance = s.t;
+                    result.point = s.point;
+                    return result;
+                }
+            } else if (!stop && marching && mc_reaches(cell)) {
+                let s = mc_in(origin, direction, cell, travelled, t_out);
+                if (s.hit) {
+                    result.hit = true;
+                    result.cell = s.cell;
                     result.normal = s.normal;
                     result.distance = s.t;
                     result.point = s.point;
@@ -1194,7 +1359,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             pulled_back = 0.0;
             let horizon = normalize(vec3<f32>(direction.xy, 0.02 * length(direction.xy)));
             radiance = radiance + throughput * fade * background(horizon);
-            throughput = throughput * (1.0 - fade) * p.ground_color.rgb;
+            throughput = throughput * (1.0 - fade) * lined(p.ground_color.rgb, point, up, vec3<i32>(0), true);
 
             // A diffuse surface like any other: sun, emitters, a bounce.
             let to_sun = normalize(p.sun_direction.xyz);
@@ -1224,7 +1389,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         met = true;
 
         let index = voxel_at(hit.cell);
-        let albedo = palette[index].rgb;
+        var albedo = palette[index].rgb;
+        // Lines follow the cubes' faces; other shapes go without.
+        if (p.shape.x < 0.5 && (p.lines.x > 0.0 || p.lines.w > 0.0)) {
+            albedo = lined(albedo, hit.point, hit.normal, hit.cell, false);
+        }
         let m = materials[index];
         let surface = hit.point;
         // Offset off the surface, or the next ray re-hits the voxel it left.

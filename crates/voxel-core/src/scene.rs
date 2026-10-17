@@ -44,6 +44,11 @@ pub struct Scene {
     pub nodes: Vec<SceneNode>,
     /// The animation frame `instances` show, and that edits key.
     pub frame: u32,
+    /// the reference editor's Global Time off (`aset global 0`) inside an open
+    /// group: `(transform node, frame)`, the node's subtree showing `frame`
+    /// above while everything else -- the node's own placement included --
+    /// stays at this frame. `None` animates the whole scene.
+    pub held: Option<(i32, u32)>,
 }
 
 impl Scene {
@@ -67,13 +72,13 @@ impl Scene {
         } else {
             file.nodes.clone()
         };
-        let instances = flatten(&nodes, models.len(), frame);
-        Self { instances, models, nodes, frame }
+        let instances = flatten(&nodes, models.len(), frame, None);
+        Self { instances, models, nodes, frame, held: None }
     }
 
     /// Recomputes `instances` after the nodes or the model list changed.
     pub fn rebuild(&mut self) {
-        self.instances = flatten(&self.nodes, self.models.len(), self.frame);
+        self.instances = flatten(&self.nodes, self.models.len(), self.frame, self.held);
     }
 
     /// How many animation frames the file declares, from the largest shape.
@@ -249,7 +254,10 @@ impl Scene {
 /// is one model keyed by animation frame, each entry tagged with `_f`.
 /// Drawing them all would stack every frame of the animation on top of
 /// itself.
-fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance> {
+///
+/// With `held`, see [`Scene::held`]: each step carries the frame its subtree
+/// shows.
+fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32, held: Option<(i32, u32)>) -> Vec<Instance> {
     // Index nodes by id so children resolve in constant time.
     let by_id: std::collections::HashMap<i32, &SceneNode> = nodes.iter().map(|n| (n.id(), n)).collect();
 
@@ -264,6 +272,7 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
         owner: Option<(i32, Transform)>,
         hidden: bool,
         depth: u32,
+        frame: u32,
     }
     let hides = |d: &vox_format::Dict| d.get("_hidden") == Some("1");
     let root = nodes.first().map(|n| n.id()).unwrap_or(0);
@@ -274,6 +283,7 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
         owner: None,
         hidden: false,
         depth: 0,
+        frame: held.map_or(frame, |(_, f)| f),
     }];
     const MAX_DEPTH: u32 = 1024;
     // In a well-formed file the graph is a tree: each node has one parent.
@@ -293,7 +303,7 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
 
         match node {
             SceneNode::Transform(t) => {
-                let local = crate::anim::local_at(t, frame);
+                let local = crate::anim::local_at(t, step.frame);
                 stack.push(Step {
                     id: t.child,
                     transform: local.then(&step.transform),
@@ -301,6 +311,7 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
                     owner: Some((t.id, step.transform)),
                     hidden: step.hidden || hides(&t.attributes),
                     depth: step.depth + 1,
+                    frame: if held.is_some_and(|(id, _)| id == t.id) { frame } else { step.frame },
                 });
             }
             SceneNode::Group(g) => {
@@ -313,11 +324,12 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
                         owner: None,
                         hidden: step.hidden || hides(&g.attributes),
                         depth: step.depth + 1,
+                        frame: step.frame,
                     });
                 }
             }
             SceneNode::Shape(s) => {
-                let chosen = crate::anim::model_at(s, frame);
+                let chosen = crate::anim::model_at(s, step.frame);
                 if let Some(m) = chosen {
                     let index = m.model_id as usize;
                     if index < model_count {
@@ -447,6 +459,42 @@ mod tests {
         assert!(started.elapsed().as_secs() < 1);
         assert_eq!(scene.instances.len(), 1);
     }
+
+    #[test]
+    fn a_held_scene_animates_only_the_open_group() {
+        use vox_format::{Dict, GroupNode, ShapeModel, ShapeNode, TransformNode};
+        // x = 0 at frame 0, x = 10 at frame 10.
+        let keyed = || {
+            vec![
+                Dict(vec![("_f".into(), "0".into()), ("_t".into(), "0 0 0".into())]),
+                Dict(vec![("_f".into(), "10".into()), ("_t".into(), "10 0 0".into())]),
+            ]
+        };
+        let t = |id: i32, child: i32, frames: Vec<Dict>| SceneNode::Transform(TransformNode { id, attributes: Dict::default(), child, layer: 0, frames });
+        let shape = |id: i32| SceneNode::Shape(ShapeNode { id, attributes: Dict::default(), models: vec![ShapeModel { model_id: 0, attributes: Dict::default() }] });
+        let mut file = VoxFile::new_single([2, 2, 2]);
+        // 0 -> group 1 -> [2 -> shape 3, 4 -> group 5 -> [6 -> shape 7]]; 2, 4 and 6 keyed.
+        file.nodes = vec![
+            t(0, 1, vec![Dict::default()]),
+            SceneNode::Group(GroupNode { id: 1, attributes: Dict::default(), children: vec![2, 4] }),
+            t(2, 3, keyed()),
+            shape(3),
+            t(4, 5, keyed()),
+            SceneNode::Group(GroupNode { id: 5, attributes: Dict::default(), children: vec![6] }),
+            t(6, 7, keyed()),
+            shape(7),
+        ];
+        let mut scene = Scene::from_file(&file);
+        let x = |s: &Scene| s.instances.iter().map(|i| i.transform.translation.x).collect::<Vec<_>>();
+        scene.frame = 10;
+        scene.rebuild();
+        assert_eq!(x(&scene), [10, 20]);
+        // Group 4 open, held at frame 0: model 2 and group 4's own key stay
+        // there; only 6, inside, moves.
+        scene.held = Some((4, 0));
+        scene.rebuild();
+        assert_eq!(x(&scene), [0, 10]);
+    }
     use super::*;
 
     fn scene_of(placements: &[([i32; 3], u8)]) -> Scene {
@@ -466,6 +514,7 @@ mod tests {
                 .collect(),
             nodes: Vec::new(),
             frame: 0,
+            held: None,
         }
     }
 

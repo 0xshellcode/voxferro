@@ -57,7 +57,7 @@ impl LoadedScene {
                 layers: layers_for(&file),
                 meta: file.meta.clone(),
                 cameras: file.cameras.clone(),
-                palette_order: file.index_map.clone().unwrap_or_else(voxel_core::identity_order),
+                palette_order: voxel_core::display_order(file.index_map.as_deref()),
             },
             source: file,
             path,

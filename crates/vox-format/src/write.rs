@@ -259,6 +259,19 @@ mod tests {
     }
 
     #[test]
+    fn a_palette_order_survives_the_round_trip() {
+        let mut file = sample();
+        assert!(VoxFile::parse(&file.to_bytes()).unwrap().index_map.is_none(), "no IMAP unless there is one");
+        let mut order = [0u8; 256];
+        for (i, slot) in order.iter_mut().enumerate() {
+            *slot = (255 - i) as u8;
+        }
+        file.index_map = Some(Box::new(order));
+        let reparsed = VoxFile::parse(&file.to_bytes()).unwrap();
+        assert_eq!(reparsed.index_map.as_deref(), Some(&order));
+    }
+
+    #[test]
     fn a_file_without_a_graph_gains_a_minimal_one() {
         let bytes = sample().to_bytes();
         let reparsed = VoxFile::parse(&bytes).unwrap();

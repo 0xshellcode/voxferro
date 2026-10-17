@@ -167,6 +167,7 @@ mod tests {
             }],
             nodes: Vec::new(),
             frame: 0,
+            held: None,
         }
     }
 

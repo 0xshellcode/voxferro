@@ -250,6 +250,10 @@ struct App {
     trace_cache: Option<trace_cache::TraceCache>,
     /// Animation playback.
     playing: bool,
+    /// the reference editor's Global Time (`aset global`): moving through time
+    /// animates the whole scene, or, off, only the open group's (Tab).
+    /// On at start, as there; not saved.
+    global_time: bool,
     fps: f32,
     /// Seconds of playback not yet turned into frames.
     play_clock: f64,
@@ -447,6 +451,7 @@ impl App {
             mesh_cache: Default::default(),
             trace_cache: None,
             playing: false,
+            global_time: true,
             fps: 10.0,
             play_clock: 0.0,
             export: None,

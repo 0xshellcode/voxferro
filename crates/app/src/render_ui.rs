@@ -203,6 +203,24 @@ impl App {
             if matches!(self.look.shape, VoxelShape::Sphere | VoxelShape::Cylinder) {
                 changed |= ui.add(egui::Slider::new(&mut self.look.size, 0.0..=1.0).text("size")).changed();
             }
+            // Lines on the faces (`pt_b_grid`, `pt_b_edge`): cubes only.
+            let lines = &mut self.look.lines;
+            ui.horizontal(|ui| {
+                changed |= ui.checkbox(&mut lines.grid, "Grid").changed();
+                changed |= egui::color_picker::color_edit_button_srgb(ui, &mut self.look.grid_rgb).changed();
+                changed |= ui.checkbox(&mut lines.grid_ground_only, "ground only").changed();
+            });
+            if lines.grid {
+                changed |= ui.add(egui::Slider::new(&mut lines.grid_spacing, 1..=64).text("spacing")).changed();
+                changed |= ui.add(egui::Slider::new(&mut lines.grid_width, 0.01..=1.0).text("width")).changed();
+            }
+            ui.horizontal(|ui| {
+                changed |= ui.checkbox(&mut lines.edge, "Edges").changed();
+                changed |= egui::color_picker::color_edit_button_srgb(ui, &mut self.look.edge_rgb).changed();
+            });
+            if lines.edge {
+                changed |= ui.add(egui::Slider::new(&mut lines.edge_width, 0.01..=1.0).text("width")).changed();
+            }
             if changed {
                 self.apply_look();
                 self.path_tracer.reset();
@@ -301,7 +319,7 @@ impl App {
             }
             Some("shape") => {
                 let Some(shape) = args.get(1).and_then(|w| VoxelShape::ALL.iter().find(|(_, n)| n == w)).map(|(s, _)| *s) else {
-                    return "env shape cube|sphere|cylinder|brick|clay [size 0-1]".to_owned();
+                    return "env shape cube|sphere|cylinder|brick|clay|mc [size 0-1]".to_owned();
                 };
                 self.look.shape = shape;
                 if let Some(size) = args.get(2).and_then(|v| v.parse::<f32>().ok()) {
@@ -311,6 +329,7 @@ impl App {
                 self.path_tracer.reset();
                 return format!("voxels as {}", args[1]);
             }
+            Some("grid" | "edge") => return self.lines_command(&args),
             Some("dof") => {
                 self.dof = args.get(1).is_none_or(|v| *v != "off");
                 self.environment.dof = self.dof;
@@ -363,7 +382,7 @@ impl App {
                 format!("vignette {}", env.vignette)
             }
             _ => {
-                return "env uniform | atmosphere [elev] | ibl [map] [i] [rot] | dof [on|off] | background sky|none|<colour> | shape <kind> [size] | \
+                return "env uniform | atmosphere [elev] | ibl [map] [i] [rot] | dof [on|off] | background sky|none|<colour> | shape <kind> [size] | grid|edge on|off [width] | \
                         lens [aperture] [blades] [angle] | bloom [mix] [scale] [aspect] [threshold] | vig <v> | fog <density> [g]"
                     .to_owned();
             }
@@ -389,21 +408,73 @@ fn stored_colour_edit(ui: &mut egui::Ui, colour: &mut Vec3) -> bool {
     changed
 }
 
-/// The render's look for the session: background and voxel shape.
+/// The render's look for the session: background, voxel shape, lines.
 pub struct Look {
     pub background: Background,
     pub background_rgb: [u8; 3],
     pub shape: VoxelShape,
     pub size: f32,
+    /// Colours kept here as sRGB bytes, handed over linear.
+    pub lines: crate::pathtrace::Lines,
+    pub grid_rgb: [u8; 3],
+    pub edge_rgb: [u8; 3],
 }
 
 impl Default for Look {
     fn default() -> Self {
-        Self { background: Background::Sky, background_rgb: [50, 50, 50], shape: VoxelShape::Cube, size: 1.0 }
+        Self {
+            background: Background::Sky,
+            background_rgb: [50, 50, 50],
+            shape: VoxelShape::Cube,
+            size: 1.0,
+            lines: Default::default(),
+            grid_rgb: [0, 0, 0],
+            edge_rgb: [0, 0, 0],
+        }
     }
 }
 
 impl App {
+    /// `env grid …` and `env edge …`: the render's lines, `args` from the
+    /// word `grid` or `edge` on.
+    pub fn lines_command(&mut self, args: &[&str]) -> String {
+        let grid = args[0] == "grid";
+        let usage = "env grid on|off [width] [spacing] [ground] | env edge on|off [width] | env grid|edge colour <colour>";
+        let lines = &mut self.look.lines;
+        if args.get(1).is_some_and(|w| matches!(*w, "colour" | "color")) {
+            let Some(c) = crate::palette_ops::parse_colour(&args[2..]) else { return usage.to_owned() };
+            *(if grid { &mut self.look.grid_rgb } else { &mut self.look.edge_rgb }) = [c.r, c.g, c.b];
+        } else {
+            let rest = args.get(2..).unwrap_or_default();
+            let on = match args.get(1) {
+                Some(&"on") => true,
+                Some(&"off") => false,
+                None => !(if grid { lines.grid } else { lines.edge }),
+                _ => return usage.to_owned(),
+            };
+            let width = rest.first().and_then(|v| v.parse::<f32>().ok()).map(|w| w.clamp(0.01, 1.0));
+            if grid {
+                lines.grid = on;
+                lines.grid_width = width.unwrap_or(lines.grid_width);
+                if let Some(s) = rest.get(1).and_then(|v| v.parse::<u32>().ok()) {
+                    lines.grid_spacing = s.max(1);
+                }
+                lines.grid_ground_only = rest.get(2).is_some_and(|w| *w == "ground");
+            } else {
+                lines.edge = on;
+                lines.edge_width = width.unwrap_or(lines.edge_width);
+            }
+        }
+        self.apply_look();
+        self.path_tracer.reset();
+        let l = &self.look.lines;
+        if grid {
+            format!("grid {} (width {}, every {})", if l.grid { "on" } else { "off" }, l.grid_width, l.grid_spacing)
+        } else {
+            format!("edges {} (width {})", if l.edge { "on" } else { "off" }, l.edge_width)
+        }
+    }
+
     /// Hands the session's look to the tracer's settings.
     pub fn apply_look(&mut self) {
         let e = &mut self.environment;
@@ -412,5 +483,11 @@ impl App {
         e.background_color = glam::Vec3::new(lin(self.look.background_rgb[0]), lin(self.look.background_rgb[1]), lin(self.look.background_rgb[2]));
         e.voxel_shape = self.look.shape;
         e.voxel_size = self.look.size;
+        let rgb = |c: [u8; 3]| glam::Vec3::new(lin(c[0]), lin(c[1]), lin(c[2]));
+        e.lines = crate::pathtrace::Lines {
+            grid_color: rgb(self.look.grid_rgb),
+            edge_color: rgb(self.look.edge_rgb),
+            ..self.look.lines
+        };
     }
 }

@@ -79,6 +79,13 @@ fn load_path(bytes: &[u8]) {
     let files = [VoxFile::parse(bytes).ok(), VoxFile::recover(bytes)];
     step("parsed");
     for file in files.into_iter().flatten() {
+        // What else the editor reads from it: the materials, the palette's
+        // display order, the saved cameras.
+        for m in &file.materials {
+            std::hint::black_box(m.resolve());
+        }
+        std::hint::black_box(voxel_core::display_order(file.index_map.as_deref()));
+        std::hint::black_box(voxel_core::saved_camera::slots(&file.cameras));
         if file.models.is_empty() {
             continue;
         }
@@ -95,6 +102,14 @@ fn load_path(bytes: &[u8]) {
             step("meshed");
             let _ = scene.bake(|_| true, 64 * 1024 * 1024);
             step("baked");
+            // Global Time off inside a group: the graph walked at two frames.
+            let mut held = scene.clone();
+            held.held = file.nodes.iter().skip(1).find_map(|n| match n {
+                vox_format::SceneNode::Transform(t) => Some((t.id, frame + 3)),
+                _ => None,
+            });
+            held.rebuild();
+            std::hint::black_box(held.instances.len());
         }
         let again = file.to_bytes();
         // What the editor writes, it must read back.
@@ -185,7 +200,35 @@ fn seeds(args: &[String]) -> Vec<Vec<u8>> {
     tiny.models[0].voxels.push(vox_format::Voxel { x: 0, y: 0, z: 0, index: 1 });
     out.push(tiny.to_bytes());
     out.push(VoxFile::new_single([4, 4, 4]).to_bytes());
+    out.push(newer_chunks_seed());
     out
+}
+
+/// A file with what the readers learnt last: a palette order (`IMAP`), a
+/// Blend material, a camera with a roll, and a looping animation.
+fn newer_chunks_seed() -> Vec<u8> {
+    use vox_format::{Camera, Dict, Material, SceneNode};
+    let mut file = VoxFile::new_single([3, 3, 3]);
+    file.models[0].voxels.push(vox_format::Voxel { x: 1, y: 1, z: 0, index: 7 });
+    file.index_map = Some(Box::new(std::array::from_fn(|k| (255 - k) as u8)));
+    let dict = |pairs: &[(&str, &str)]| Dict(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
+    file.materials.push(Material { id: 7, properties: dict(&[("_type", "_blend"), ("_metal", "0.3"), ("_trans", "0.2"), ("_emit", "0.5")]) });
+    file.cameras.push(Camera {
+        id: 0,
+        attributes: dict(&[("_mode", "pers"), ("_focus", "0 0 0"), ("_angle", "30 45 12"), ("_radius", "40"), ("_frustum", "0.4"), ("_fov", "45")]),
+    });
+    for node in &mut file.nodes {
+        if let SceneNode::Transform(t) = node
+            && t.id != 0
+        {
+            t.attributes.set("_loop", "1");
+            t.frames = vec![dict(&[("_f", "0"), ("_t", "0 0 0")]), dict(&[("_f", "4"), ("_t", "5 0 2"), ("_r", "20")])];
+        }
+    }
+    let bytes = file.to_bytes();
+    let back = VoxFile::parse(&bytes).expect("the seed reads back");
+    assert!(back.index_map.is_some() && !back.cameras.is_empty() && !back.materials.is_empty());
+    bytes
 }
 
 /// Seeds for the other formats, written from the `.vox` seeds' models.
