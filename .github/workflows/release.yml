@@ -52,6 +52,9 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           mkdir -p target/dist
           ditto -c -k --keepParent target/Voxferro.app "target/dist/Voxferro-$version-macos-arm64.zip"
+          # The disk image, laid out with its background and arrow.
+          brew install create-dmg
+          ./scripts/make-dmg.sh
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -67,6 +70,7 @@ jobs:
           name: release-${{ matrix.os }}
           path: |
             target/dist/Voxferro-*.zip
+            target/dist/Voxferro-*.dmg
             target/dist/*.tar.gz
             target/dist/*.AppImage
           if-no-files-found: error
