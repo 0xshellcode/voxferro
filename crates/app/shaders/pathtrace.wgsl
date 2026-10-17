@@ -398,11 +398,13 @@ fn clay_in(origin: vec3<f32>, dir: vec3<f32>, t_in: f32, t_out: f32, entry: vec3
     h.hit = true;
     h.t = hi;
     h.point = origin + dir * hi;
+    // The gradient, an axis at a time. No component is written by a
+    // variable index: FXC cannot address one, and unrolls loops to try.
     var grad = vec3<f32>(0.0);
     for (var axis = 0; axis < 3; axis = axis + 1) {
-        var e = vec3<f32>(0.0);
-        e[axis] = 0.05;
-        grad[axis] = clay_field(h.point + e) - clay_field(h.point - e);
+        let unit = vec3<f32>(vec3<i32>(axis) == vec3<i32>(0, 1, 2));
+        let e = unit * 0.05;
+        grad = grad + unit * (clay_field(h.point + e) - clay_field(h.point - e));
     }
     h.normal = select(entry, -normalize(grad), dot(grad, grad) > 1e-12);
     if (dot(h.normal, dir) > 0.0) {
