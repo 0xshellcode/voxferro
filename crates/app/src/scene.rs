@@ -38,7 +38,7 @@ impl LoadedScene {
         Self::from_file(VoxFile::new_single(size), None)
     }
 
-    fn from_file(file: VoxFile, path: Option<String>) -> Self {
+    pub fn from_file(file: VoxFile, path: Option<String>) -> Self {
         let name = match &path {
             Some(p) => std::path::Path::new(p)
                 .file_name()

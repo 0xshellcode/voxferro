@@ -1,0 +1,285 @@
+//! Exporting to the reference editor's other formats, and importing models from
+//! files (see `voxel_core::formats`).
+//!
+//! `export [format] <path>`, the format being one of [`FORMATS`]; without
+//! it, the path's extension decides (`.obj`, `.ply`, `.xraw`, `.qb`), and a
+//! bare `export` asks for an OBJ path. The mesh formats (obj, ply, cube,
+//! point) take every visible model, placed in the world; the volume
+//! formats (xraw, qb, slab, slice) take the selected model, since each holds
+//! one grid.
+//!
+//! `import <path>` adds the models of another file to this scene, each a new
+//! model and instance, all one undo step: a the reference editor `.vox` (each model
+//! where that file puts it, unturned), XRAW, Qubicle QB or SLAB6 -- told apart by their content,
+//! not their extension, since SLAB6's is `.vox` too. Their colours move to
+//! the nearest colours of this palette (the reference editor's "Match Color").
+
+use crate::App;
+use voxel_core::formats::{self, Imported};
+
+/// The export formats, as the reference editor's Export buttons name them.
+pub const FORMATS: [(&str, &str, &str); 8] = [
+    ("obj", "obj", "Merged faces, Y up, with a palette texture"),
+    ("ply", "ply", "A quad per visible face, coloured, scale 0.1"),
+    ("cube", "ply", "Every voxel a separate cube, scale 0.1"),
+    ("point", "ply", "A coloured point per voxel"),
+    ("xraw", "xraw", "The selected model as an XRAW volume"),
+    ("qb", "qb", "The selected model as Qubicle Binary"),
+    ("slab", "vox", "The selected model as a SLAB6 .vox"),
+    ("slice", "png", "The selected model's layers stacked in one PNG"),
+];
+
+/// `io_ply`, `io_cube` and `io_point` in the reference editor's `config.txt`.
+const MESH_SCALE: f32 = 0.1;
+const CUBE_MARGIN: f32 = 0.1;
+
+impl App {
+    pub fn export_command(&mut self, line: &str) -> String {
+        let words: Vec<&str> = line.split_whitespace().skip(1).collect();
+        let (format, path) = match words.as_slice() {
+            [] => return self.export_obj(None).unwrap_or_else(|| "export cancelled".to_owned()),
+            [f, rest @ ..] if FORMATS.iter().any(|(n, ..)| n == f) => (f.to_string(), (!rest.is_empty()).then(|| rest.join(" "))),
+            path => {
+                let path = path.join(" ");
+                let ext = std::path::Path::new(&path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
+                let format = match ext.as_deref() {
+                    Some("ply") => "ply",
+                    Some("xraw") => "xraw",
+                    Some("qb") => "qb",
+                    _ => "obj",
+                };
+                (format.to_owned(), Some(path))
+            }
+        };
+        if format == "obj" {
+            return self.export_obj(path.as_deref()).unwrap_or_else(|| "export cancelled".to_owned());
+        }
+        let ext = FORMATS.iter().find(|(n, ..)| *n == format).map_or("dat", |(_, e, _)| *e);
+        let path = match path {
+            Some(p) => p,
+            None => match self.export_panel(&format, ext) {
+                Some(p) => p,
+                None => return "export cancelled".to_owned(),
+            },
+        };
+        let bytes = match self.export_bytes(&format) {
+            Ok(b) => b,
+            Err(e) => return format!("error: {e}"),
+        };
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => format!("exported {format} to {path} ({} bytes)", bytes.len()),
+            Err(e) => format!("error: could not write {path}: {e}"),
+        }
+    }
+
+    fn export_bytes(&self, format: &str) -> Result<Vec<u8>, String> {
+        let loaded = self.scene.as_ref().ok_or("nothing open")?;
+        let (scene, palette) = (&loaded.doc.scene, &loaded.doc.palette);
+        let visible = self.visibility();
+        let keep = |i: &voxel_core::Instance| visible.shows(i);
+        let selected = || {
+            let model = self.selected_model().ok_or("no model selected")?;
+            scene.models.get(model).ok_or("no model selected")
+        };
+        Ok(match format {
+            "ply" => formats::ply_mesh(scene, palette, keep, MESH_SCALE).into_bytes(),
+            "cube" => formats::ply_cubes(scene, palette, keep, MESH_SCALE, CUBE_MARGIN).into_bytes(),
+            "point" => formats::ply_points(scene, palette, keep, 1.0, glam::Vec3::ZERO).into_bytes(),
+            "xraw" => formats::xraw(selected()?, palette),
+            "qb" => {
+                let name = std::path::Path::new(&loaded.name).file_stem().map_or("model".to_owned(), |s| s.to_string_lossy().into_owned());
+                formats::qb(selected()?, palette, &name)
+            }
+            "slab" => formats::slab(selected()?, palette),
+            "slice" => {
+                let (w, h, rgba) = formats::slices(selected()?, palette);
+                voxel_core::export::png_rgba(w, h, &rgba)
+            }
+            other => return Err(format!("unknown format {other}")),
+        })
+    }
+
+    fn export_panel(&self, format: &str, ext: &str) -> Option<String> {
+        let stem = self
+            .scene
+            .as_ref()
+            .and_then(|s| std::path::Path::new(&s.name).file_stem().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "model".to_owned());
+        let suffix = match format {
+            "cube" => "-cubes",
+            "point" => "-points",
+            "slab" => "-slab6",
+            "slice" => "-slices",
+            _ => "",
+        };
+        rfd::FileDialog::new()
+            .add_filter(format, &[ext])
+            .set_file_name(format!("{stem}{suffix}.{ext}"))
+            .save_file()
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+
+    /// `import materials|render|cameras|palette <file.vox>`: one part of
+    /// another project, as one undo step (the reference editor's File tab imports
+    /// these from its own component files; here from a `.vox`, which holds
+    /// them all).
+    fn import_component(&mut self, what: &str, path: &str) -> String {
+        let other = match crate::scene::LoadedScene::load(path) {
+            Ok(s) => s.doc,
+            Err(e) => return format!("error: {path}: {e}"),
+        };
+        let Some(loaded) = self.scene.as_mut() else { return "nothing open".to_owned() };
+        let doc = &loaded.doc;
+        let command = match what {
+            "materials" => voxel_core::Command::Batch(
+                (1..=255u8)
+                    .filter_map(|i| {
+                        let (before, after) = (doc.material(i).cloned(), other.material(i).cloned());
+                        (before != after).then_some(voxel_core::Command::SetMaterial { index: i, before, after })
+                    })
+                    .collect(),
+            ),
+            "palette" => voxel_core::Command::Batch(
+                (1..=255u8)
+                    .filter_map(|i| {
+                        let (before, after) = (doc.palette.color(i), other.palette.color(i));
+                        (before != after).then_some(voxel_core::Command::SetColor { index: i, before, after })
+                    })
+                    .collect(),
+            ),
+            "render" => voxel_core::Command::SetRender { before: doc.render.clone(), after: other.render.clone() },
+            "cameras" => voxel_core::Command::SetCameras { before: doc.cameras.clone(), after: other.cameras.clone() },
+            _ => return "import materials|render|cameras|palette <file.vox>".to_owned(),
+        };
+        self.history.end_gesture();
+        let changed = self.history.exec_alone(&mut loaded.doc, command);
+        // Through `refresh_document`, which resyncs colours and render settings.
+        self.mesh_dirty = true;
+        if changed { format!("imported the {what} of {path}") } else { format!("{path}: nothing new in its {what}") }
+    }
+
+    pub fn import_command(&mut self, line: &str) -> String {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if words.get(1) == Some(&"notes") {
+            return "palette notes are not imported: this editor keeps them only as the file had them".to_owned();
+        }
+        if let Some(what) = words.get(1).filter(|w| matches!(**w, "materials" | "render" | "cameras" | "palette")) {
+            let path = words[2..].join(" ");
+            if path.is_empty() {
+                return format!("import {what} <file.vox>");
+            }
+            return self.import_component(what, &path);
+        }
+        let path = line.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+        let path = if path.is_empty() {
+            match rfd::FileDialog::new()
+                .add_filter("Models", &["vox", "xraw", "qb"])
+                .pick_file()
+            {
+                Some(p) => p.to_string_lossy().into_owned(),
+                None => return "import cancelled".to_owned(),
+            }
+        } else {
+            path
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => return format!("error: {path}: {e}"),
+        };
+        let Some(palette) = self.scene.as_ref().map(|s| s.doc.palette.clone()) else {
+            return "nothing open to import into".to_owned();
+        };
+        // Each model and where its corner goes (None: beside the scene).
+        let models: Vec<(voxel_core::Volume, Option<glam::IVec3>)> = match read_any(&bytes, &path) {
+            Ok(Read::Vox(scene)) => {
+                // Placed as in that file: its instances' corners, unturned.
+                scene
+                    .doc
+                    .scene
+                    .instances
+                    .iter()
+                    .filter_map(|i| {
+                        let v = scene.doc.scene.models.get(i.model_index)?;
+                        let corner = i.transform.translation - v.pivot().as_ivec3();
+                        let colours = formats::Imported {
+                            name: String::new(),
+                            size: v.size(),
+                            position: corner,
+                            cells: formats::Cells::Indexed(indices(v), Box::new(*scene.doc.palette.as_slice())),
+                        };
+                        Some((colours.to_volume(&palette), Some(corner)))
+                    })
+                    .collect()
+            }
+            // Qubicle's matrices keep their places relative to each other; a
+            // single model goes beside the scene.
+            Ok(Read::Models(list)) => {
+                let several = list.len() > 1;
+                list.iter().map(|m| (m.to_volume(&palette), several.then_some(m.position))).collect()
+            }
+            Err(e) => return format!("error: {path}: {e}"),
+        };
+        if models.is_empty() {
+            return format!("{path}: no models");
+        }
+        // Models that keep their places relative to each other move together
+        // to beside the scene, so the import doesn't land inside it.
+        let models = beside_scene(models, self.scene.as_ref().and_then(|s| s.doc.scene.declared_bounds()));
+        self.history.begin_group();
+        let mut added = 0;
+        for (volume, corner) in models {
+            if self.add_model(volume, corner).is_ok() {
+                added += 1;
+            }
+        }
+        self.history.end_group();
+        self.mesh_dirty = true;
+        format!("imported {added} model(s) from {path}")
+    }
+}
+
+enum Read {
+    Vox(Box<crate::scene::LoadedScene>),
+    Models(Vec<Imported>),
+}
+
+/// Tells the formats apart by content.
+fn read_any(bytes: &[u8], path: &str) -> Result<Read, String> {
+    if bytes.starts_with(b"VOX ") {
+        return crate::scene::LoadedScene::load(path).map(|s| Read::Vox(Box::new(s)));
+    }
+    if bytes.starts_with(b"XRAW") {
+        return formats::read_xraw(bytes).map(|m| Read::Models(vec![m]));
+    }
+    if formats::looks_like_slab(bytes) {
+        return formats::read_slab(bytes).map(|m| Read::Models(vec![m]));
+    }
+    if bytes.len() > 24 && bytes[..4] == [1, 1, 0, 0] {
+        return formats::read_qb(bytes).map(Read::Models);
+    }
+    Err("not a format this editor reads (vox, xraw, qb, SLAB6)".to_owned())
+}
+
+fn beside_scene(
+    models: Vec<(voxel_core::Volume, Option<glam::IVec3>)>,
+    bounds: Option<(glam::Vec3, glam::Vec3)>,
+) -> Vec<(voxel_core::Volume, Option<glam::IVec3>)> {
+    let Some(min_x) = models.iter().filter_map(|(_, c)| c.map(|c| c.x)).min() else { return models };
+    let right = bounds.map_or(0, |(_, max)| max.x.ceil() as i32);
+    let shift = glam::IVec3::new(right + 2 - min_x, 0, 0);
+    models.into_iter().map(|(v, c)| (v, c.map(|c| c + shift))).collect()
+}
+
+/// A model's indices, x fastest, then y, then z.
+fn indices(v: &voxel_core::Volume) -> Vec<u8> {
+    let [sx, sy, sz] = v.size();
+    let mut out = Vec::with_capacity((sx * sy * sz) as usize);
+    for z in 0..sz {
+        for y in 0..sy {
+            for x in 0..sx {
+                out.push(v.get(x, y, z));
+            }
+        }
+    }
+    out
+}

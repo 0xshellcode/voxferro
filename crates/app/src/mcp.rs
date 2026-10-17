@@ -309,6 +309,9 @@ pub fn write_target(line: &str, current: Option<&str>) -> Option<Result<std::pat
         ["save"] => Some(current.map(path).ok_or_else(|| "this model has never been saved: give a path".to_owned())),
         ["save", p, ..] => Some(Ok(path(p))),
         ["export"] => Some(Err("export needs a path".to_owned())),
+        ["export", f, p, ..] if crate::exchange::FORMATS.iter().any(|(n, ..)| n == f) => Some(Ok(if *f == "obj" { path(p).with_extension("obj") } else { path(p) })),
+        ["export", f] if crate::exchange::FORMATS.iter().any(|(n, ..)| n == f) => Some(Err(format!("export {f} needs a path"))),
+        ["export", p, ..] if p.to_ascii_lowercase().ends_with(".ply") || p.ends_with(".xraw") || p.ends_with(".qb") => Some(Ok(path(p))),
         ["export", p, ..] => Some(Ok(path(p).with_extension("obj"))),
         ["anim", "export", dir, ..] => Some(Ok(path(dir))),
         ["render", "save", p, ..] => Some(Ok(path(p))),
@@ -326,7 +329,11 @@ pub fn write_target(line: &str, current: Option<&str>) -> Option<Result<std::pat
 /// Lines that would open a native file panel when run without a path:
 /// the panel would block the editor waiting for someone at the screen.
 pub fn needs_path(line: &str) -> bool {
-    matches!(line.split_whitespace().collect::<Vec<_>>().as_slice(), ["open"])
+    match line.split_whitespace().collect::<Vec<_>>().as_slice() {
+        ["open"] | ["import"] | ["export"] => true,
+        ["export", f] => crate::exchange::FORMATS.iter().any(|(n, ..)| n == f),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -348,6 +355,9 @@ mod tests {
         assert!(matches!(write_target("save", None), Some(Err(_))));
         assert_eq!(write_target("save b.vox", None), Some(Ok("b.vox".into())));
         assert_eq!(write_target("export m", None), Some(Ok("m.obj".into())));
+        assert_eq!(write_target("export qb m.qb", None), Some(Ok("m.qb".into())));
+        assert_eq!(write_target("export m.ply", None), Some(Ok("m.ply".into())));
+        assert!(matches!(write_target("export slab", None), Some(Err(_))));
         assert_eq!(write_target("anim export out 8", None), Some(Ok("out".into())));
         assert_eq!(write_target("render save r.png", None), Some(Ok("r.png".into())));
         assert_eq!(write_target("palette save p.png", None), Some(Ok("p.png".into())));
@@ -356,5 +366,6 @@ mod tests {
         assert_eq!(write_target("box 0 0 0 1 1 1 2", None), None);
         assert!(needs_path("open"));
         assert!(!needs_path("open a.vox"));
+        assert!(needs_path("import") && needs_path("export ply") && !needs_path("export ply a.ply"));
     }
 }

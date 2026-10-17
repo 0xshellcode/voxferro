@@ -11,6 +11,7 @@ mod document;
 pub mod graph;
 mod env_map;
 pub mod export;
+pub mod formats;
 pub mod greedy;
 pub mod kernels;
 mod mesh;

@@ -82,6 +82,63 @@ impl VoxFile {
     }
 
     /// Parses a whole `.vox` file.
+    /// the reference editor's *Recover*: the models and palette of a damaged file,
+    /// and nothing else. The chunk tree isn't trusted: every `SIZE` chunk
+    /// followed by an `XYZI` is taken wherever it sits, a truncated `XYZI`
+    /// keeps the voxels that are there, voxels outside their box are
+    /// dropped, and the last whole `RGBA` is the palette. `None` when no
+    /// model is found.
+    pub fn recover(data: &[u8]) -> Option<Self> {
+        let u32_at = |i: usize| -> Option<u32> { Some(u32::from_le_bytes(data.get(i..i + 4)?.try_into().ok()?)) };
+        let mut models = Vec::new();
+        let mut palette = Palette::specification_default();
+        let mut i = 0usize;
+        while i + 12 <= data.len() {
+            match &data[i..i + 4] {
+                b"SIZE" if u32_at(i + 4) == Some(12) => {
+                    let size = [u32_at(i + 12), u32_at(i + 16), u32_at(i + 20)];
+                    let next = i + 24;
+                    if let [Some(x), Some(y), Some(z)] = size
+                        && [x, y, z].iter().all(|s| (1..=256).contains(s))
+                        && data.get(next..next + 4) == Some(b"XYZI")
+                        && let Some(n) = u32_at(next + 12)
+                    {
+                        let start = next + 16;
+                        let available = data.len().saturating_sub(start) / 4;
+                        let voxels = data[start..start + 4 * (n as usize).min(available)]
+                            .chunks_exact(4)
+                            .filter(|v| (v[0] as u32) < x && (v[1] as u32) < y && (v[2] as u32) < z && v[3] != 0)
+                            .map(|v| Voxel { x: v[0], y: v[1], z: v[2], index: v[3] })
+                            .collect();
+                        models.push(Model { size: [x, y, z], voxels });
+                        i = start;
+                        continue;
+                    }
+                }
+                b"RGBA" if u32_at(i + 4) == Some(1024) && data.len() >= i + 12 + 1024 => {
+                    let mut entries = [Color::default(); 256];
+                    for (k, slot) in entries.iter_mut().enumerate() {
+                        let c = &data[i + 12 + 4 * k..i + 16 + 4 * k];
+                        *slot = Color { r: c[0], g: c[1], b: c[2], a: c[3] };
+                    }
+                    palette = Palette::from_chunk(&entries);
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        if models.is_empty() {
+            return None;
+        }
+        let mut file = Self::new_single([1, 1, 1]);
+        file.version = crate::VERSION_150;
+        file.models = models;
+        file.palette = palette;
+        file.nodes.clear();
+        file.layers.clear();
+        Some(file)
+    }
+
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut r = Reader::new(data);
 
@@ -309,5 +366,28 @@ impl VoxFile {
     /// Total voxels across every model.
     pub fn voxel_count(&self) -> usize {
         self.models.iter().map(|m| m.voxels.len()).sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recover_reads_models_from_a_broken_file() {
+        let mut file = VoxFile::new_single([4, 4, 4]);
+        file.models[0].voxels.push(Voxel { x: 1, y: 2, z: 3, index: 9 });
+        file.models[0].voxels.push(Voxel { x: 0, y: 0, z: 0, index: 5 });
+        let mut bytes = file.to_bytes();
+        // Break the header and cut the file short of its scene graph.
+        bytes[0] = b'X';
+        let xyzi = bytes.windows(4).position(|w| w == b"XYZI").unwrap();
+        bytes.truncate(xyzi + 16 + 8);
+        assert!(VoxFile::parse(&bytes).is_err());
+        let back = VoxFile::recover(&bytes).unwrap();
+        assert_eq!(back.models.len(), 1);
+        assert_eq!(back.models[0].size, [4, 4, 4]);
+        assert_eq!(back.models[0].voxels.len(), 2);
+        assert!(VoxFile::recover(b"nothing here at all").is_none());
     }
 }

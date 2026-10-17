@@ -15,6 +15,8 @@ pub enum Discarding {
     Open(Option<String>),
     /// Start a new empty model of this size.
     New([u32; 3]),
+    /// the reference editor's *Recover*: the models and palette of a damaged file.
+    Recover(String),
     Quit,
 }
 
@@ -55,6 +57,23 @@ impl App {
             Discarding::New(size) => {
                 self.install(state, scene::LoadedScene::new_empty(size));
                 self.console_log.push(format!("new model {}x{}x{}", size[0], size[1], size[2]));
+            }
+            Discarding::Recover(path) => {
+                let message = match std::fs::read(&path) {
+                    Ok(bytes) => match vox_format::VoxFile::recover(&bytes) {
+                        Some(file) => {
+                            let (models, voxels) = (file.models.len(), file.voxel_count());
+                            let mut recovered = scene::LoadedScene::from_file(file, None);
+                            let stem = std::path::Path::new(&path).file_stem().map_or("model".into(), |s| s.to_string_lossy());
+                            recovered.name = format!("{stem}-recovered.vox");
+                            self.install(state, recovered);
+                            format!("recovered {models} model(s), {voxels} voxels, from {path}: save to keep them")
+                        }
+                        None => format!("{path}: no models found to recover"),
+                    },
+                    Err(e) => format!("error: {path}: {e}"),
+                };
+                self.console_log.push(message);
             }
             Discarding::Quit => {
                 self.allow_close = true;
@@ -327,6 +346,13 @@ impl App {
                     String::new()
                 }
             }
+            "recover" => match args.is_empty() {
+                true => "recover <file.vox>".to_owned(),
+                false => {
+                    self.request(Discarding::Recover(args.join(" ")), ctx, state);
+                    if self.confirm.is_some() { "unsaved changes: save or discard them first".to_owned() } else { String::new() }
+                }
+            },
             _ => match args.first() {
                 Some(path) => self.save_to(path),
                 None => self.save().unwrap_or_else(|| "save cancelled".to_owned()),

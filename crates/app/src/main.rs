@@ -16,6 +16,7 @@ mod camera_tools;
 mod compute;
 mod console;
 mod edit;
+mod exchange;
 mod files;
 mod icon;
 mod image_out;
@@ -268,6 +269,8 @@ struct App {
     /// Whether a pattern opened from another file takes this palette's
     /// nearest colours.
     pattern_match: bool,
+    /// Colours copied with `palette copy`.
+    palette_clip: Vec<vox_format::Color>,
     /// The GPU, for the shader brush, which runs from mouse handling.
     gpu: egui_wgpu::RenderState,
     /// The next click takes its colour from a voxel instead of editing.
@@ -398,6 +401,7 @@ impl App {
             pattern: None,
             pattern_own_colours: true,
             pattern_match: true,
+            palette_clip: Vec::new(),
             gpu: state.clone(),
             picking: false,
             camera_slot: 0,
@@ -783,14 +787,24 @@ impl App {
             {
                 self.console_log.push(m);
             }
-            if ui
-                .add_enabled(has_doc, egui::Button::new("Export OBJ…"))
-                .on_hover_text("Merged faces, Y up, with a palette texture")
-                .clicked()
-                && let Some(m) = self.export_obj(None)
-            {
+            if ui.add_enabled(has_doc, egui::Button::new("Import…")).on_hover_text("Add the models of a .vox, XRAW, QB or SLAB6 file").clicked() {
+                let m = self.import_command("import");
                 self.console_log.push(m);
+                if self.mesh_dirty {
+                    self.refresh_document(state);
+                }
             }
+        });
+        ui.add_enabled_ui(self.scene.is_some(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Export");
+                for (name, _, hint) in exchange::FORMATS {
+                    if ui.small_button(name).on_hover_text(hint).clicked() {
+                        let m = self.export_command(&format!("export {name}"));
+                        self.console_log.push(m);
+                    }
+                }
+            });
         });
         self.recent_ui(ui, state);
         ui.label(&self.status);
@@ -1234,9 +1248,17 @@ impl App {
         }
 
         if line.split_whitespace().next() == Some("export") {
-            let path = line.split_whitespace().nth(1);
-            let message = self.export_obj(path).unwrap_or_else(|| "export cancelled".to_owned());
+            let message = self.export_command(line);
             self.console_log.push(message);
+            return;
+        }
+
+        if line.split_whitespace().next() == Some("import") {
+            let message = self.import_command(line);
+            self.console_log.push(message);
+            if self.mesh_dirty {
+                self.refresh_document(state);
+            }
             return;
         }
 
@@ -1264,7 +1286,7 @@ impl App {
             return;
         }
 
-        if matches!(line.split_whitespace().next(), Some("save" | "open" | "new")) {
+        if matches!(line.split_whitespace().next(), Some("save" | "open" | "new" | "recover")) {
             let message = self.file_command(line, ctx, state);
             if !message.is_empty() {
                 self.console_log.push(message);

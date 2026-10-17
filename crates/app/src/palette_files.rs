@@ -9,8 +9,17 @@
 //!   (`palette/pal0.png`...), from a local install -- they are its files,
 //!   not shipped here, like its sample models.
 //!
-//! Replacing the palette is one undo step. Voxels keep their indices, so
-//! they take the new colours.
+//! And the palette's own editing, as the reference editor's palette offers it:
+//!
+//! - `palette swap <a> <b>`: two colours change places, with their
+//!   materials (the reference editor's Ctrl+drag);
+//! - `palette gradient <a> <b>`: the colours between two indices blend from
+//!   one to the other (Ctrl+Alt+drag);
+//! - `palette copy <a> <b>`, `palette paste <i>`: a run of colours copied
+//!   and written again from another index (Copy and Paste Palette Region).
+//!
+//! Each is one undo step. Voxels keep their indices, so they take the new
+//! colours.
 
 use crate::App;
 use eframe::egui_wgpu;
@@ -50,6 +59,11 @@ pub fn write_png(colours: &[Color; 256]) -> Vec<u8> {
         rgba.extend_from_slice(&[c.r, c.g, c.b, 255]);
     }
     voxel_core::export::png_rgba(256, 1, &rgba)
+}
+
+/// A palette index for editing: 1 to 255.
+fn index(word: &str) -> Option<u8> {
+    word.parse::<u8>().ok().filter(|&i| i > 0)
 }
 
 /// the reference editor's default palette `n`, from the first install that has it.
@@ -94,8 +108,80 @@ impl App {
                 },
                 None => "palette default 0|1|2|3".to_owned(),
             },
+            ["swap", a, b] => match (index(a), index(b)) {
+                (Some(a), Some(b)) => {
+                    let Some(loaded) = self.scene.as_ref() else { return Some("no document".to_owned()) };
+                    let doc = &loaded.doc;
+                    let (ca, cb) = (doc.palette.color(a), doc.palette.color(b));
+                    let (ma, mb) = (doc.material(a).cloned(), doc.material(b).cloned());
+                    // A material names its index: moved, it is renumbered.
+                    let renumber = |m: Option<vox_format::Material>, i: u8| m.map(|mut m| { m.id = i as i32; m });
+                    let commands = vec![
+                        Command::SetColor { index: a, before: ca, after: cb },
+                        Command::SetColor { index: b, before: cb, after: ca },
+                        Command::SetMaterial { index: a, before: ma.clone(), after: renumber(mb.clone(), a) },
+                        Command::SetMaterial { index: b, before: mb, after: renumber(ma, b) },
+                    ];
+                    self.palette_batch(commands, &format!("swapped colours {a} and {b}"), state)
+                }
+                _ => "palette swap <1-255> <1-255>".to_owned(),
+            },
+            ["gradient", a, b] => match (index(a), index(b)) {
+                (Some(a), Some(b)) if a.abs_diff(b) >= 2 => {
+                    let (lo, hi) = (a.min(b), a.max(b));
+                    let Some(loaded) = self.scene.as_ref() else { return Some("no document".to_owned()) };
+                    let (from, to) = (loaded.doc.palette.color(lo), loaded.doc.palette.color(hi));
+                    let span = (hi - lo) as f32;
+                    let mix = |p: u8, q: u8, t: f32| (p as f32 + (q as f32 - p as f32) * t).round() as u8;
+                    let commands = (lo + 1..hi)
+                        .map(|i| {
+                            let t = (i - lo) as f32 / span;
+                            let after = Color { r: mix(from.r, to.r, t), g: mix(from.g, to.g, t), b: mix(from.b, to.b, t), a: 255 };
+                            Command::SetColor { index: i, before: loaded.doc.palette.color(i), after }
+                        })
+                        .collect();
+                    self.palette_batch(commands, &format!("gradient from {lo} to {hi}"), state)
+                }
+                _ => "palette gradient <a> <b>, at least one colour between them".to_owned(),
+            },
+            ["copy", a, b] => match (index(a), index(b)) {
+                (Some(a), Some(b)) => {
+                    let Some(loaded) = self.scene.as_ref() else { return Some("no document".to_owned()) };
+                    let (lo, hi) = (a.min(b), a.max(b));
+                    self.palette_clip = (lo..=hi).map(|i| loaded.doc.palette.color(i)).collect();
+                    format!("copied colours {lo} to {hi}")
+                }
+                _ => "palette copy <a> <b>".to_owned(),
+            },
+            ["paste", at] => match index(at) {
+                Some(at) if !self.palette_clip.is_empty() => {
+                    let Some(loaded) = self.scene.as_ref() else { return Some("no document".to_owned()) };
+                    let commands = self
+                        .palette_clip
+                        .iter()
+                        .zip(at..=255)
+                        .map(|(c, i)| Command::SetColor { index: i, before: loaded.doc.palette.color(i), after: *c })
+                        .collect();
+                    self.palette_batch(commands, &format!("pasted {} colours at {at}", self.palette_clip.len()), state)
+                }
+                Some(_) => "nothing copied: palette copy <a> <b> first".to_owned(),
+                None => "palette paste <1-255>".to_owned(),
+            },
             _ => return None,
         })
+    }
+
+    fn palette_batch(&mut self, commands: Vec<Command>, what: &str, state: &egui_wgpu::RenderState) -> String {
+        let Some(loaded) = self.scene.as_mut() else { return "no document".to_owned() };
+        self.history.end_gesture();
+        if self.history.exec_alone(&mut loaded.doc, Command::Batch(commands)) {
+            self.refresh_colors(state);
+            // Materials decide what the tracer samples as light.
+            self.upload_trace_volume(state);
+            what.to_owned()
+        } else {
+            format!("{what}: nothing changed")
+        }
     }
 
     /// The buttons under the palette: open, save, reset, and the reference editor's

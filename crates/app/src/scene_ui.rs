@@ -117,27 +117,41 @@ impl App {
     /// Adds an empty model beside the scene, sitting on the ground, with one
     /// instance; both in one undo step.
     fn new_model(&mut self, size: [u32; 3]) -> String {
-        let Some(loaded) = self.scene.as_mut() else { return "nothing open".to_owned() };
+        match self.add_model(Volume::new(size), None) {
+            Ok(i) => format!("new model {}x{}x{}, instance {i}", size[0], size[1], size[2]),
+            Err(e) => e,
+        }
+    }
+
+    /// Adds `volume` as a new model with one instance, its corner at
+    /// `corner` in the world, or beside the scene on the ground; both in
+    /// one undo step. Returns the new instance's index.
+    pub(crate) fn add_model(&mut self, volume: Volume, corner: Option<IVec3>) -> Result<usize, String> {
+        let Some(loaded) = self.scene.as_mut() else { return Err("nothing open".to_owned()) };
         let scene = &loaded.doc.scene;
-        let right = scene.declared_bounds().map_or(0.0, |(_, max)| max.x);
-        let world = Transform {
-            translation: IVec3::new(right as i32 + 2 + size[0] as i32 / 2, 0, size[2] as i32 / 2),
-            ..Default::default()
+        let size = volume.size();
+        let pivot = volume.pivot().as_ivec3();
+        let translation = match corner {
+            Some(c) => c + pivot,
+            None => {
+                let right = scene.declared_bounds().map_or(0.0, |(_, max)| max.x);
+                IVec3::new(right as i32 + 2 + size[0] as i32 / 2, 0, size[2] as i32 / 2)
+            }
         };
+        let world = Transform { translation, ..Default::default() };
         let mut with_model = scene.clone();
-        with_model.models.push(Volume::new(size));
-        let nodes = match with_model.with_new_instance(with_model.models.len() - 1, world) {
-            Ok(n) => n,
-            Err(e) => return format!("error: {e}"),
-        };
+        with_model.models.push(volume.clone());
+        let nodes = with_model
+            .with_new_instance(with_model.models.len() - 1, world)
+            .map_err(|e| format!("error: {e}"))?;
         let command = Command::Batch(vec![
-            Command::PushModel { volume: Volume::new(size) },
+            Command::PushModel { volume },
             Command::SetGraph { before: scene.nodes.clone(), after: nodes },
         ]);
         self.history.exec_alone(&mut loaded.doc, command);
         let count = loaded.doc.scene.instances.len();
         self.selected = count - 1;
         self.after_graph_change();
-        format!("new model {}x{}x{}, instance {}", size[0], size[1], size[2], count - 1)
+        Ok(count - 1)
     }
 }
