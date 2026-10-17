@@ -361,46 +361,49 @@ fn clay_field(q: vec3<f32>) -> f32 {
 }
 
 fn clay_in(origin: vec3<f32>, dir: vec3<f32>, t_in: f32, t_out: f32, entry: vec3<f32>) -> ShapeHit {
+    // One loop: eight steps across the cell until the field crosses one
+    // half, then halving the last step. A single call to the field keeps
+    // the shader small -- it is inlined wherever a ray is traced, and the
+    // DirectX software rasteriser would not take a larger one.
     let a = max(t_in, 0.0);
-    var prev = a;
-    var inside = clay_field(origin + dir * a) >= 0.5;
+    var lo = a;
+    var hi = t_out;
     var t = a;
-    if (!inside) {
-        let steps = 8;
-        var found = false;
-        for (var i = 1; i <= steps; i = i + 1) {
-            t = mix(a, t_out, f32(i) / f32(steps));
-            if (clay_field(origin + dir * t) >= 0.5) {
-                found = true;
+    var found = false;
+    for (var i = 0; i < 18; i = i + 1) {
+        if (found) {
+            t = 0.5 * (lo + hi);
+        } else {
+            t = mix(a, t_out, f32(i) / 8.0);
+            if (i > 8) {
+                return no_shape();
+            }
+        }
+        let inside = clay_field(origin + dir * t) >= 0.5;
+        if (found) {
+            if (inside) { hi = t; } else { lo = t; }
+        } else if (inside) {
+            if (i == 0) {
+                lo = t;
+                hi = t;
                 break;
             }
-            prev = t;
+            found = true;
+            hi = t;
+        } else {
+            lo = t;
         }
-        if (!found) {
-            return no_shape();
-        }
-        var lo = prev;
-        var hi = t;
-        for (var i = 0; i < 10; i = i + 1) {
-            let mid = 0.5 * (lo + hi);
-            if (clay_field(origin + dir * mid) >= 0.5) {
-                hi = mid;
-            } else {
-                lo = mid;
-            }
-        }
-        t = hi;
     }
     var h: ShapeHit;
     h.hit = true;
-    h.t = t;
-    h.point = origin + dir * t;
-    let e = 0.05;
-    let grad = vec3<f32>(
-        clay_field(h.point + vec3<f32>(e, 0.0, 0.0)) - clay_field(h.point - vec3<f32>(e, 0.0, 0.0)),
-        clay_field(h.point + vec3<f32>(0.0, e, 0.0)) - clay_field(h.point - vec3<f32>(0.0, e, 0.0)),
-        clay_field(h.point + vec3<f32>(0.0, 0.0, e)) - clay_field(h.point - vec3<f32>(0.0, 0.0, e))
-    );
+    h.t = hi;
+    h.point = origin + dir * hi;
+    var grad = vec3<f32>(0.0);
+    for (var axis = 0; axis < 3; axis = axis + 1) {
+        var e = vec3<f32>(0.0);
+        e[axis] = 0.05;
+        grad[axis] = clay_field(h.point + e) - clay_field(h.point - e);
+    }
     h.normal = select(entry, -normalize(grad), dot(grad, grad) > 1e-12);
     if (dot(h.normal, dir) > 0.0) {
         h.normal = entry;
