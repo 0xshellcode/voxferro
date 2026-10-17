@@ -357,7 +357,7 @@ mod tests {
             for y in 0..7 {
                 for x in 0..9 {
                     seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-                    if (seed >> 16) % 5 != 0 {
+                    if !(seed >> 16).is_multiple_of(5) {
                         v.set(x, y, z, 1 + (seed >> 8) as u8 % 200);
                     }
                 }

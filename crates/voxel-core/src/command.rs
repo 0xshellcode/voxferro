@@ -329,16 +329,14 @@ impl History {
         // A new edit invalidates anything that was undone.
         self.redo.clear();
 
-        if self.coalescing {
-            if let Some((id, previous)) = self.undo.last_mut() {
-                if previous.absorb(&command) {
+        if self.coalescing
+            && let Some((id, previous)) = self.undo.last_mut()
+                && previous.absorb(&command) {
                     // The merged step leads somewhere new: a save taken in
                     // the middle of a drag must not still count as current.
                     *id = self.last_id;
                     return true;
                 }
-            }
-        }
         self.undo.push((self.last_id, command));
         self.coalescing = true;
         true

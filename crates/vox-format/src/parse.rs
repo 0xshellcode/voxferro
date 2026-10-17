@@ -106,7 +106,7 @@ impl VoxFile {
                         let start = next + 16;
                         let available = data.len().saturating_sub(start) / 4;
                         let voxels = data[start..start + 4 * (n as usize).min(available)]
-                            .chunks_exact(4)
+                            .as_chunks::<4>().0.iter()
                             .filter(|v| (v[0] as u32) < x && (v[1] as u32) < y && (v[2] as u32) < z && v[3] != 0)
                             .map(|v| Voxel { x: v[0], y: v[1], z: v[2], index: v[3] })
                             .collect();

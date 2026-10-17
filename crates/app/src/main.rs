@@ -11,6 +11,7 @@
 //! so nothing goes through the deprecated OpenGL stack.
 
 mod anim_ui;
+mod autosave;
 mod camera;
 mod camera_tools;
 mod compute;
@@ -368,6 +369,8 @@ struct App {
     scripted_strokes: Vec<(egui::Vec2, egui::Vec2)>,
     /// `history.revision()` at the last load or save.
     saved_revision: u64,
+    /// Copies of unsaved work, and the recovery of a crashed session's.
+    autosave: autosave::Autosave,
     /// The unsaved-changes prompt, while it is open.
     confirm: Option<files::Confirm>,
     /// Set once the user agreed to quit, so the close is not intercepted.
@@ -427,6 +430,7 @@ impl App {
             mcp_capture: None,
             scripted_strokes: Vec::new(),
             saved_revision: 0,
+            autosave: autosave::Autosave::start(None, false),
             confirm: None,
             allow_close: false,
             window_title: String::new(),
@@ -549,6 +553,7 @@ impl App {
             .any(|f| args.iter().any(|a| a == f))
             || std::env::var_os("VOXFERRO_NO_RECENT").is_some();
         app.remember_files = !scripted;
+        app.autosave = autosave::Autosave::start(recent::settings_dir().map(|d| d.join("autosave")), !scripted);
         app.load(state, &path);
         // No model to start from -- a fresh clone has no the reference editor
         // samples, or the file named is gone: start with an empty one, so
@@ -954,6 +959,12 @@ impl App {
         let shown: String = line.chars().take(120).collect();
         let more = if shown.len() < line.len() { " …" } else { "" };
         self.console_log.push(format!("> {shown}{more}"));
+
+        if line.split_whitespace().next() == Some("autosave") {
+            let message = self.autosave_command(line, state);
+            self.console_log.push(message);
+            return;
+        }
 
         if line.split_whitespace().next() == Some("env") {
             let message = self.env_command(line, state);
@@ -1756,6 +1767,12 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// A normal exit: the user has saved, or chosen not to, so the copy of
+    /// unsaved work goes.
+    fn on_exit(&mut self) {
+        self.autosave.finish();
+    }
+
     /// Runs before every `ui`, and also while the window is hidden or
     /// covered, whenever something asks for a repaint -- which `ui` is not:
     /// eframe skips the egui pass for a window nobody can see. Agents' MCP
@@ -1831,6 +1848,8 @@ impl eframe::App for App {
         self.move_input(&ctx);
         self.animate(&ctx);
         self.confirm_ui(&ctx, &state);
+        self.recovery_ui(&ctx, &state);
+        self.autosave_tick();
         self.project_confirm_ui(&ctx, &state);
         self.mcp_confirm_ui(&ctx, &state);
         let title = self.title();

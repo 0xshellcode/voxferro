@@ -128,14 +128,13 @@ impl Volume {
     }
 
     pub fn set(&mut self, x: u32, y: u32, z: u32, value: u8) {
-        if let Some(i) = self.index(x, y, z) {
-            if self.voxels[i] != value {
+        if let Some(i) = self.index(x, y, z)
+            && self.voxels[i] != value {
                 self.voxels[i] = value;
                 let d = self.chunk_dims();
                 let (cx, cy, cz) = (x / CHUNK, y / CHUNK, z / CHUNK);
                 self.versions[(cx + cy * d[0] + cz * d[0] * d[1]) as usize] = fresh_version();
             }
-        }
     }
 
     /// The cells, x fastest, then y, then z.
@@ -153,12 +152,11 @@ impl Volume {
                 continue;
             }
             let (x, y, z) = (p.x as u32, p.y as u32, p.z as u32);
-            if let Some(i) = self.index(x, y, z) {
-                if self.voxels[i] != value {
+            if let Some(i) = self.index(x, y, z)
+                && self.voxels[i] != value {
                     self.voxels[i] = value;
                     touched[(x / CHUNK + y / CHUNK * d[0] + z / CHUNK * d[0] * d[1]) as usize] = true;
                 }
-            }
         }
         for (version, touched) in self.versions.iter_mut().zip(touched) {
             if touched {

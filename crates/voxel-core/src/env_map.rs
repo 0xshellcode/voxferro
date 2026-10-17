@@ -70,13 +70,12 @@ impl EnvMap {
             if line.is_empty() {
                 break;
             }
-            if let Some(format) = line.strip_prefix(b"FORMAT=") {
-                if format != b"32-bit_rle_rgbe" {
+            if let Some(format) = line.strip_prefix(b"FORMAT=")
+                && format != b"32-bit_rle_rgbe" {
                     return Err(HdrError::UnsupportedFormat(
                         String::from_utf8_lossy(format).into_owned(),
                     ));
                 }
-            }
         }
         let resolution = next_line(&mut pos).ok_or(HdrError::Truncated)?;
         let text = String::from_utf8_lossy(resolution).into_owned();
@@ -150,8 +149,8 @@ impl EnvMap {
                 let bytes = body
                     .get(at..at + 4 * width as usize)
                     .ok_or(HdrError::Truncated)?;
-                for (px, chunk) in scanline.iter_mut().zip(bytes.chunks_exact(4)) {
-                    *px = [chunk[0], chunk[1], chunk[2], chunk[3]];
+                for (px, chunk) in scanline.iter_mut().zip(bytes.as_chunks::<4>().0) {
+                    *px = *chunk;
                 }
                 at += 4 * width as usize;
             }

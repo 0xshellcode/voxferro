@@ -450,11 +450,10 @@ impl Scene {
                 }
             }
         }
-        if let Some(SceneNode::Group(g)) = nodes.iter_mut().find(|n| n.id() == container) {
-            if let Some(at) = g.children.iter().position(|&c| c == node) {
+        if let Some(SceneNode::Group(g)) = nodes.iter_mut().find(|n| n.id() == container)
+            && let Some(at) = g.children.iter().position(|&c| c == node) {
                 g.children.splice(at..=at, group.children.iter().copied());
             }
-        }
         nodes.retain(|n| n.id() != node && n.id() != group.id);
         Ok(compact(nodes))
     }

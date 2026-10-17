@@ -46,12 +46,14 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **268 tests
+Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **271 tests
 passing**; 41 and 42 (Windows and Linux) are prepared and built in CI, not
 yet tried on real machines. Working today:
 
 - Reading **and writing** `.vox` (versions 150 and 200), validated against the
   real corpus and against `dot_vox`
+- Autosave: unsaved work is copied every two minutes, and after a crash
+  the editor offers to recover it
 - Viewer with greedy meshing (coplanar faces merged) in cached chunks:
   editing a 256³ model rebuilds only what was touched (~8 ms in release)
 - Scene graph with transforms and animation frames; editing and rendering
@@ -222,7 +224,7 @@ Enter keeps and Esc drops a pending mouse transform.
 | Group | Commands |
 |---|---|
 | History | `undo`, `redo` |
-| Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `recover <path>`, `export [obj\|ply\|mc\|cube\|point\|xraw\|qb\|slab\|slice\|iso\|2d] <path>`, `import <path>`, `import <file.obj> [size] [fill]`, `import materials\|render\|cameras\|palette <file.vox\|file.txt>`, `export materials\|render\|cameras <file.txt>` |
+| Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `recover <path>`, `export [obj\|ply\|mc\|cube\|point\|xraw\|qb\|slab\|slice\|iso\|2d] <path>`, `import <path>`, `import <file.obj> [size] [fill]`, `import materials\|render\|cameras\|palette <file.vox\|file.txt>`, `export materials\|render\|cameras <file.txt>`, `autosave [on\|off\|<minutes>\|recover\|discard]` |
 | Project | `project [list \| dir <path> \| open <name> \| rename <name> \| dup \| delete]` |
 | Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|square\|circle\|face\|fill\|shader\|pattern]`, `brush size <1-64>`, `brush tip cube\|sphere\|2d\|3d`, `brush centre fill\|ring\|even\|odd`, `brush project on\|off`, `brush face color\|geo\|4\|8\|palette\|voxel`, `brush mirror\|axis <axes>`, `brush region same\|color\|geo [4\|8]`, `brush pick` (eyedropper), `color <n>` |
 | Pattern | `pattern selection\|open <file.vox>\|match on\|off\|turn x\|y\|z\|colours own\|brush\|clear` |
