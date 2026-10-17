@@ -12,7 +12,7 @@
 //! | U | full: the box filled with the colour |
 //! | I | fill: every voxel repainted with the colour |
 //! | Cmd+I | invert the selection |
-//! | Delete, Backspace | the selection deleted, or with none, the model cleared |
+//! | Delete, Backspace | the selection deleted; with none, nothing (a hint) |
 //! | 5 | frame the selection or the model (Shift+F everything) |
 //! | 6 | snapshot of the viewport |
 //! | 7 8 | save the camera to the slot, load it |
@@ -38,6 +38,7 @@ impl App {
         let mut lines: Vec<String> = Vec::new();
         let mut edits: Vec<&str> = Vec::new();
         let mut snap = false;
+        let mut hint = false;
         ctx.input(|i| {
             let (cmd, shift, alt) = (i.modifiers.command, i.modifiers.shift, i.modifiers.alt);
             let plain = !cmd && !alt;
@@ -104,8 +105,12 @@ impl App {
             if cmd && !shift && pressed(Key::I) {
                 lines.push("select invert".to_owned());
             }
+            // the reference editor clears the whole model here. Not this editor: a
+            // selection dropped without noticing, then Delete, would empty
+            // the model when a piece was meant. Clear in the Edit panel
+            // (`zero`) does it on purpose.
             if !cmd && (pressed(Key::Delete) || pressed(Key::Backspace)) && self.active_selection().is_none() {
-                edits.push("zero");
+                hint = true;
             }
         });
         for line in lines {
@@ -124,6 +129,9 @@ impl App {
         for verb in edits {
             let message = self.edit_command(verb);
             self.console_log.push(message);
+        }
+        if hint {
+            self.console_log.push("nothing selected; Clear in the Edit panel empties the model".to_owned());
         }
         if snap {
             let message = self.snap(None, state);

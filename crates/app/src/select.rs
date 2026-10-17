@@ -405,7 +405,7 @@ impl App {
             if (cmd && i.key_pressed(egui::Key::D)) || i.key_pressed(egui::Key::Escape) {
                 commands.push("select none");
             }
-            // With nothing selected, `hotkeys` clears the model instead.
+            // With nothing selected, `hotkeys` leaves a hint instead.
             if (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) && self.active_selection().is_some() {
                 commands.push("delete");
             }

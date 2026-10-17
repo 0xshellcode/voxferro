@@ -218,7 +218,7 @@ X, Y, Z give a quarter turn.
 **Keyboard,** the reference editor's (its `hotkey.txt`): V F B L C P brush shape
 (voxel, face, box, line, shader, pattern), T R G mode (attach, erase,
 paint), M marquee and N region select, 1 2 3 mirror and Cmd+1 2 3 axis on
-x, y, z, U full, I fill, Delete clears the model when nothing is selected,
+x, y, z, U full, I fill,
 Alt+click takes a voxel's colour, 5 frames (Shift+F everything), 6
 snapshot, 7 and 8 save and load the camera slot, comma and period step
 the animation's frames, F5 and F6 add and remove a key. The editor's own:
