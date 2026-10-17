@@ -2,7 +2,7 @@
 
 <img src="assets/icon/icon.png" alt="Voxferro icon" width="128">
 
-A voxel editor in Rust, native on Apple Silicon, compatible with the reference editor's `.vox` format.
+A voxel editor in Rust, native on macOS (Apple silicon and Intel), Windows and Linux, compatible with the reference editor's `.vox` format.
 
 A learning project: the goal is to understand modern graphics and Rust by
 building something real, not to clone the reference editor line by line. File
@@ -46,8 +46,9 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–49 of the [ROADMAP](ROADMAP.md) are complete, with **259 tests
-passing**. Working today:
+Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **264 tests
+passing**; 41 and 42 (Windows and Linux) are prepared and built in CI, not
+yet tried on real machines. Working today:
 
 - Reading **and writing** `.vox` (versions 150 and 200), validated against the
   real corpus and against `dot_vox`
@@ -65,7 +66,8 @@ passing**. Working today:
   brush, region rules for fills (same colour, or connected by colour or
   geometry), mirror and axis modes
 - Selection (box marquee, square or circle on a layer, face, color), copy/cut/paste, move; rotate, mirror,
-  crop and resize the model
+  crop and resize the model; move, scale, turn and wrap the selection with
+  the mouse (wrap repeats it to fill a stretched box)
 - the reference editor's Edit panel: full, reverse, double and halve, loop, scale,
   shear, any-angle rotation, repeat, mirror and diagonal symmetry, shapes,
   hull, flood, dilation and erosion, with the formulas of its own kernels
@@ -86,8 +88,8 @@ passing**. Working today:
 - Camera: frame selection or scene, axis and isometric views,
   the reference editor's four modes -- perspective, free (look around and fly with
   W A S D Q E), orthographic and isometric -- also in the path tracer and
-  in saved cameras, panning, a view cube, and snapshots of the viewport or
-  the whole window
+  in saved cameras, panning, a view cube with a camera ruler (drag to turn
+  in 5° steps), and snapshots of the viewport or the whole window
 - Display switches: voxel edges, frame, grid, background objects,
   wireframe and shadows, with the reference editor's shortcuts (Cmd+E, F, G, B, M)
 - Render settings (sun, uniform / atmospheric / HDR sky, ground, lens,
@@ -105,7 +107,7 @@ passing**. Working today:
 - Lighting with HDR maps, oriented and normalized as in the reference editor
 - Atmospheric sky with Rayleigh and Mie scattering, and a sun that reddens at sunset
 
-Native arm64 on Metal: `[voxferro] graphics backend: Metal on Apple M2`.
+The backend wgpu picks is logged at startup; on an Apple M2, for example: `[voxferro] graphics backend: Metal on Apple M2`.
 
 ## Download
 
@@ -126,6 +128,24 @@ cargo run -p voxferro -- assets/vox/monu1.vox --render 200 --screenshot out.bmp
 cargo run -p voxferro -- --run "new 16" --run "brush attach box" --drag 0.3 0.7 0.6 0.8 --screenshot out.bmp
 ```
 
+| Flag | What it does |
+|---|---|
+| `[model.vox]` | The file to open (default: the bundled `monu1.vox`, or an empty model) |
+| `--run <command>` | A console line run before the first frame; repeatable, in order |
+| `--script <file>` | A file of console lines, one per line (`#` comments and blank lines skipped) |
+| `--screenshot <file.bmp>` | Saves the viewport (or the render) as a BMP, then quits |
+| `--render <samples>` | Path traces that many samples before the screenshot |
+| `--render-mode` | Opens in Render mode, interactively |
+| `--camera <azimuth> <elevation>` | View direction in degrees; azimuth -90 is the front view |
+| `--click <fx> <fy>` | A click at that fraction of the viewport |
+| `--drag <fx0> <fy0> <fx1> <fy1>` | Press, move, release, in fractions of the viewport |
+| `--mcp [port]` | Starts the MCP server (port 47800 by default) |
+| `--timings` | Prints rebuild timings and each console command's duration |
+| `--icon <out.png>` | Like `--screenshot`, written as the app icon |
+
+`--make-ico` and `--make-icon-set` are packaging tooling, used by the icon
+and package scripts.
+
 To let an agent use the editor over MCP (only on `127.0.0.1`, off by
 default; it can also be turned on from the *Agents (MCP)* section of the panel):
 
@@ -133,6 +153,17 @@ default; it can also be turned on from the *Agents (MCP)* section of the panel):
 cargo run -p voxferro -- --mcp                          # listens on 127.0.0.1:47800
 claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp
 ```
+
+| Tool | What it does |
+|---|---|
+| `run_command` | Runs one console line; edits go into the undo history |
+| `run_commands` | Runs several lines in order as one undo step, stopping at the first failure |
+| `get_palette` | Lists indices 1–255 with their colours as hex, and non-diffuse materials |
+| `describe_scene` | The open document as JSON: models, instances, layers, colours in use, frame, unsaved changes |
+| `set_voxels` | Sets voxels of the selected model (its own cells, z up; colour 0 erases), as one undo step |
+| `open_file` | Opens a `.vox`; with unsaved changes the editor asks first |
+| `save_file` | Saves as `.vox`; writing over an existing file waits for the user's permission |
+| `capture_view` | The editor view as a PNG, or the path traced image after some samples |
 
 As a macOS application, with its icon:
 
@@ -180,32 +211,34 @@ the ground; Shift+drag, up and down; Cmd+drag turns around z;
 X, Y, Z give a quarter turn.
 
 **Keyboard:** I eyedropper, F frames (Shift+F everything), 1–7 fixed views, O orthographic, W A S D Q E fly (free camera);
-Cmd+E/F/G/B/M display switches;
-Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z; with a selection,
-Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
+Cmd+E/F/G/B/M display switches (Shadow has none: Cmd+W closes the window);
+Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z or Cmd+Y; with a selection,
+Cmd+A, Esc or Cmd+D to deselect, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it;
+Enter keeps and Esc drops a pending mouse transform.
 
-**Console** (left panel; `help` for the model commands):
+**Console** (along the bottom; `help` lists the commands):
 
 | Group | Commands |
 |---|---|
+| History | `undo`, `redo` |
 | Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `recover <path>`, `export [obj\|ply\|mc\|cube\|point\|xraw\|qb\|slab\|slice\|iso\|2d] <path>`, `import <path>`, `import <file.obj> [size] [fill]`, `import materials\|render\|cameras\|palette <file.vox\|file.txt>`, `export materials\|render\|cameras <file.txt>` |
 | Project | `project [list \| dir <path> \| open <name> \| rename <name> \| dup \| delete]` |
-| Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|square\|circle\|face\|fill\|shader\|pattern]`, `brush size <1-64>`, `brush tip cube\|sphere\|2d\|3d`, `brush centre fill\|ring\|even\|odd`, `brush project on\|off`, `brush face color\|geo\|4\|8\|palette\|voxel`, `brush mirror\|axis <axes>`, `brush region same\|color\|geo [4\|8]`, `color <n>` |
+| Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|square\|circle\|face\|fill\|shader\|pattern]`, `brush size <1-64>`, `brush tip cube\|sphere\|2d\|3d`, `brush centre fill\|ring\|even\|odd`, `brush project on\|off`, `brush face color\|geo\|4\|8\|palette\|voxel`, `brush mirror\|axis <axes>`, `brush region same\|color\|geo [4\|8]`, `brush pick` (eyedropper), `color <n>` |
 | Pattern | `pattern selection\|open <file.vox>\|match on\|off\|turn x\|y\|z\|colours own\|brush\|clear` |
-| Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz`, `transform scale <axes> <f>`, `transform rotate <axis> <deg>`, `transform drag move\|scale\|turn\|off`, `transform keep\|drop` |
-| Model | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
+| Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz`, `transform scale <axes> <f>`, `transform rotate <axis> <deg>`, `transform wrap <x\|-x\|y\|-y\|z\|-z> <cells> [two]`, `transform spacing <x> <y> <z>`, `transform drag move\|scale\|turn\|wrap\|off`, `transform keep\|drop` |
+| Model | `rotate x\|y\|z` (or `rot90`), `mirror x\|y\|z` (or `flip`), `crop` (or `shrink`), `resize x y z`, `fill`, `clear`, `box`, `sphere`, `voxels x y z c …`, `gpu …` |
 | Scene | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
 | Palette | `palette open\|save <file.png>`, `palette reset`, `palette default 0-3`, `palette swap\|gradient\|copy <a> <b>`, `palette paste <i>`, `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [key=value]…` |
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]` |
-| Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|free\|frame [all\|selection\|instance]`, `snap [file.png]` |
-| View | `view [edges\|frame\|grid\|bg\|wire\|shadow] [on\|off]` |
+| Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|free\|frame [all\|selection\|group\|instance]` (`orth`, `pers` also), `camera zoom <f>\|slots\|save <0-9>\|load <0-9>`, `snap [file.png]`, `snap window [file.png]`, `render save <file.png>` |
+| View | `view [edges\|frame\|grid\|bg\|wire\|shadow] [on\|off]`, `view cube [on\|off]`, `view ruler [on\|off]` |
 | Edit | `full`, `zero`, `rev`, `x2`, `xh`, `loop <axis> <n>`, `scale <axes> <f>`, `shear <axis> <a> <b>`, `rot <axis> <deg>`, `repeat <axes> <n>`, `mir <axis>`, `dia <axis>`, `prim elli\|cyli\|pyra\|cone`, `flood [c]`, `hull`, `dil\|ero [6\|18\|26]`, `mask`, `tex` |
 | Scripts | `xs [-n passes] [-c c1,c2,…] <script> [args…]`, `xs list`, `xs use <script> [args…]` |
 | Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>` |
 
 For testing without a mouse: `--click fx fy` and `--drag fx0 fy0 fx1 fy1`, in
-fractions of the viewport.
+fractions of the viewport (see the flags above).
 
 ## Stack
 
@@ -217,6 +250,8 @@ fractions of the viewport.
 | GPU bytes | `bytemuck` 1 | `#[derive(Pod)]` for the buffers |
 | Dialogs | `rfd` 0.17 | Native open and save panels |
 | PNG | `miniz_oxide` 0.9 | DEFLATE for the exported frames |
+| Icons | `egui-phosphor` 0.14 | Phosphor's icons, built for egui 0.36 |
+| MCP | `rmcp` 3.5 | The official Rust MCP SDK, for the agent server |
 
 `eframe` and `wgpu` resolve to a **single** `wgpu v30.0.1` in the graph. If
 two versions show up, the types stop being assignable to each other and the

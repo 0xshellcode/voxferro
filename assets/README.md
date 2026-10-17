@@ -26,3 +26,23 @@ Sample scripts for the `xs` command, written for Voxferro in WGSL and
 licensed with it. the reference editor's own GLSL samples (its `shader/` folder) are
 not copied here: the editor finds them in a local install, the same way it
 finds environment maps, and runs them unchanged.
+
+## `showcase/` — gallery scenes
+
+The README's gallery: each scene as a list of console commands (`.cmds`,
+run with `--script`), the `.vox` it builds, and the images rendered from
+it. Made with Voxferro and licensed with it; `shapes.cmds` is also the CI
+smoke test's scene.
+
+## `icon/` — the app icon
+
+`icon.cmds` builds the icon's model. `scripts/make-icon.sh` (or
+`make-icon.ps1`) path traces it into `icon.png` (with the macOS icon shape,
+transparent around it) and `icon-square.png` (filling the canvas, for the
+`.icns`), and makes the Windows `icon.ico` from `icon.png`.
+
+## `materials_demo.vox`
+
+A small scene with metal, glass and emissive materials, written by
+`cargo run -p voxel-core --example materials_demo`. It is bundled with the
+packages.

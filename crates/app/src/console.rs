@@ -34,16 +34,16 @@ pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut Histo
         "help" => Outcome::Ok {
             message: "model: fill <c> | clear | box <x0..z1 c> | voxels <x y z c>... | sphere <c> | gpu <shape> | \
                       rotate|mirror x|y|z | crop | resize x y z; \
-                      brush [attach|erase|paint|select|move] [voxel|box|line|face|fill] | brush mirror <xyz|off> | brush pick | color <n>; \
+                      brush [attach|erase|paint|select|move] [voxel|box|line|square|circle|face|fill|shader|pattern] | brush mirror|axis <xyz|off> | brush pick | color <n>; \
                       select all|none|invert|color [n] | delete | paint | copy | cut | paste | \
-                      move dx dy dz | transform scale axes f | transform rotate a deg | transform drag move|scale|turn|off | transform keep|drop; brush size n | brush tip cube|sphere|2d|3d | brush centre fill|ring|even|odd | brush project on|off | brush face color|geo|4|8|palette|voxel; palette <i> r g b | material <i> <kind> [k=v]; \
+                      move dx dy dz | transform scale axes f | transform rotate a deg | transform wrap x|-x|y|-y|z|-z cells [two] | transform spacing x y z | transform drag move|scale|turn|wrap|off | transform keep|drop; brush size n | brush tip cube|sphere|2d|3d | brush centre fill|ring|even|odd | brush project on|off | brush face color|geo|4|8|palette|voxel; palette <i> r g b | material <i> <kind> [k=v]; \
                       instance list|select i|move|place|turn|dup|delete|new; \
                       group [i ...] | ungroup | node name|hide|show|move|turn|into; layer list|new|hide|show|name|assign; \
                       anim play|stop|frame n|fps n|key|unkey|newframe|movekey a b|moveframe a b|range a b|export dir [n]; \
-                      camera front|back|left|right|top|bottom|iso|ortho|persp|free|frame [all|selection|instance]|slots|save n|load n; \
-                      full | zero | rev | x2 | xh | loop a n | scale axes f | shear a s t | rot a deg | repeat axes n | mir a | dia a | prim elli|cyli|pyra|cone | flood [c] | hull | dil|ero [6|18|26]; \
-                      render save <file.png>; snap [file.png] | snap window [file.png]; view cube [on|off]; view [edges|frame|grid|bg|wire|shadow] [on|off]; shrink; xs [-n passes] [-c c1,c2] <script> [args] | xs list | xs use <script> [args]; \
-                      pattern [selection|open f|match on|off|turn a|colours own|brush|clear]; project [list|dir p|open n|rename n|dup|delete]; palette open|save <file.png> | palette reset | palette default 0-3 | palette swap|gradient|copy a b | palette paste i; brush axis <axes> | brush region same|color|geo [4|8]; \
+                      camera front|back|left|right|top|bottom|iso|ortho|orth|persp|pers|free|frame [all|selection|group|instance]|zoom f|slots|save n|load n; \
+                      full | zero | rev | x2 | xh | loop a n | scale axes f | shear a s t | rot a deg | repeat axes n | mir a | dia a | prim elli|cyli|pyra|cone | flood [c] | hull | dil|ero [6|18|26] | mask | tex; \
+                      render save <file.png>; snap [file.png] | snap window [file.png]; view cube|ruler [on|off]; view [edges|frame|grid|bg|wire|shadow] [on|off]; shrink | flip | rot90 (the reference editor's names for crop, mirror, rotate); xs [-n passes] [-c c1,c2] <script> [args] | xs list | xs use <script> [args]; \
+                      pattern [selection|open f|match on|off|turn a|colours own|brush|clear]; project [list|dir p|open n|rename n|dup|delete]; palette open|save <file.png> | palette reset | palette default 0-3 | palette swap|gradient|copy a b | palette paste i; brush region same|color|geo [4|8]; \
                       open | new | save | recover f | export [obj|ply|mc|cube|point|xraw|qb|slab|slice|iso|2d] <file> | import <file> | import <file.obj> [size] [fill] | import materials|render|cameras|palette <file.vox|file.txt> | export materials|render|cameras <file.txt>; env …; undo | redo"
                 .to_owned(),
             changed: false,

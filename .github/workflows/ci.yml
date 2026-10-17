@@ -1,6 +1,9 @@
-# Build, lint and test on every push to master, on Linux and Windows.
-# macOS (whose runner minutes count ten times in a private repo) runs only
-# when started by hand: Actions > CI > Run workflow.
+# Build, lint and test on every push to master and every pull request, on
+# Linux and Windows, then smoke-test the app itself on a software GPU (the
+# editor view, a path traced render and a scripted MCP session). macOS
+# (whose runner minutes count ten times in a private repo) runs only when
+# started by hand: Actions > CI > Run workflow; the optional `package` input
+# there also builds the Linux tarball and the Windows zip as artifacts.
 name: CI
 
 on:

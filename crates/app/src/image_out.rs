@@ -138,7 +138,7 @@ mod tests {
             255, 255, 0, 255, // bottom-right: yellow
         ];
 
-        let path = std::env::temp_dir().join("mvr_bmp_test.bmp");
+        let path = std::env::temp_dir().join("voxferro_bmp_test.bmp");
         let path = path.to_str().unwrap();
         write_bmp(path, 2, 2, &rgba).unwrap();
 
@@ -157,7 +157,7 @@ mod tests {
         // A 3-pixel row is 9 bytes and must be padded to 12, or every row
         // after the first lands shifted.
         let rgba = vec![128u8; 3 * 2 * 4];
-        let path = std::env::temp_dir().join("mvr_bmp_pad.bmp");
+        let path = std::env::temp_dir().join("voxferro_bmp_pad.bmp");
         let path = path.to_str().unwrap();
         write_bmp(path, 3, 2, &rgba).unwrap();
 
