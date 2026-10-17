@@ -197,8 +197,8 @@ impl App {
         }
     }
 
-    /// Option+click in the viewport: selects the outermost group holding
-    /// the model under the cursor; each further Option+click on it steps one
+    /// Option+Shift+click in the viewport: selects the outermost group holding
+    /// the model under the cursor; each further Option+Shift+click steps one
     /// group inward, then to the model itself, then out again. Returns
     /// whether a model was hit.
     pub fn select_group_at(&mut self, ray: crate::edit::Ray) -> bool {

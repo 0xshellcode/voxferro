@@ -175,9 +175,10 @@ impl App {
         message
     }
 
-    /// F frames the selection or model, Shift+F everything; 1-7 pick the
-    /// fixed views in the order of the panel; O toggles the projection.
-    /// Skipped while a text field has focus.
+    /// Shift+F frames everything (5 frames the selection or model, in
+    /// `hotkeys`); Alt+1 to Alt+7 pick the fixed views in the order of the
+    /// panel; O toggles the projection. Skipped while a text field has
+    /// focus.
     pub fn camera_input(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() {
             return;
@@ -221,17 +222,14 @@ impl App {
             if i.modifiers.command {
                 return;
             }
-            if i.key_pressed(egui::Key::F) {
-                lines.push(if i.modifiers.shift { "camera frame all" } else { "camera frame" }.to_owned());
+            if i.modifiers.shift && i.key_pressed(egui::Key::F) {
+                lines.push("camera frame all".to_owned());
             }
-            if i.key_pressed(egui::Key::I) {
-                self.picking = !self.picking;
-            }
-            if i.key_pressed(egui::Key::O) {
+            if !i.modifiers.alt && i.key_pressed(egui::Key::O) {
                 lines.push(if self.camera.ortho() { "camera persp" } else { "camera ortho" }.to_owned());
             }
             for (key, (_, name)) in keys.iter().zip(View::ALL) {
-                if i.key_pressed(*key) {
+                if i.modifiers.alt && i.key_pressed(*key) {
                     lines.push(format!("camera {name}"));
                 }
             }

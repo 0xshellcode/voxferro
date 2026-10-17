@@ -270,7 +270,7 @@ impl App {
 
     /// The eyedropper: takes the clicked voxel's colour for the brush and
     /// goes back to the brush. A click on empty space leaves it waiting.
-    fn pick_colour(&mut self, ray: Ray) -> bool {
+    pub fn pick_colour(&mut self, ray: Ray) -> bool {
         let Some((instance, hit)) = self.pick_visible(ray) else { return false };
         let Some(loaded) = &self.scene else { return false };
         let scene = &loaded.doc.scene;

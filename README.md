@@ -206,14 +206,21 @@ without one, `open <path>` in the console always works.
 (or dragging with the right button) orbits; Shift + drag or the middle
 button pans; the scroll wheel zooms in.
 
-**Option+click** on a model selects its group (again: one level further
+**Option+Shift+click** on a model selects its group (again: one level further
 in).
 
 **Move tool:** dragging moves the model (or its selected group) along
 the ground; Shift+drag, up and down; Cmd+drag turns around z;
 X, Y, Z give a quarter turn.
 
-**Keyboard:** I eyedropper, F frames (Shift+F everything), 1–7 fixed views, O orthographic, W A S D Q E fly (free camera);
+**Keyboard,** the reference editor's (its `hotkey.txt`): V F B L C P brush shape
+(voxel, face, box, line, shader, pattern), T R G mode (attach, erase,
+paint), M marquee and N region select, 1 2 3 mirror and Cmd+1 2 3 axis on
+x, y, z, U full, I fill, Delete clears the model when nothing is selected,
+Alt+click takes a voxel's colour, 5 frames (Shift+F everything), 6
+snapshot, 7 and 8 save and load the camera slot, comma and period step
+the animation's frames, F5 and F6 add and remove a key. The editor's own:
+Alt+1–7 fixed views, O orthographic, - and + brush size, W A S D Q E fly (free camera);
 Cmd+E/F/G/B/M display switches (Shadow has none: Cmd+W closes the window);
 Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z or Cmd+Y; with a selection,
 Cmd+A, Esc or Cmd+D to deselect, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it;

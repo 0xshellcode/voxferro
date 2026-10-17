@@ -378,7 +378,7 @@ impl App {
             let tools = [
                 (self.moving, icon::ARROWS_OUT_CARDINAL, "Move: drag a model or group. Shift: up and down. Cmd: turn."),
                 (self.selecting, icon::SELECTION, "Select: Shift adds, Option subtracts; the shape decides how"),
-                (self.picking, icon::EYEDROPPER, "Pick the colour of the next voxel clicked (I)"),
+                (self.picking, icon::EYEDROPPER, "Pick the colour of the next voxel clicked (or Alt+click)"),
             ];
             if let Some(i) = toggle_row(ui, &tools) {
                 match i {
@@ -524,8 +524,8 @@ impl App {
             for line in [
                 "Drag on the model to edit, elsewhere (or right-drag) to orbit.",
                 "Shift+drag or middle-drag pans; scroll zooms.",
-                "Option+click selects a group (again: one level in).",
-                "F frame, 1-7 views, O ortho, I eyedropper, - + brush size.",
+                "Option+Shift+click selects a group (again: one level in).",
+                "the reference editor's keys: V F B L C P shapes, T R G modes, M N select, 1 2 3 mirror, Cmd+1 2 3 axis, U full, I fill, 5 frame, Alt+click eyedropper; Alt+1-7 views, O ortho, - + brush size.",
                 "Cmd+E/F/G/B/M display switches; Cmd+Z undo.",
                 "Free camera: W A S D Q E fly.",
             ] {

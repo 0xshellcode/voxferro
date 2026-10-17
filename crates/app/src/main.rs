@@ -12,6 +12,7 @@
 
 mod anim_ui;
 mod autosave;
+mod hotkeys;
 mod camera;
 mod camera_tools;
 mod compute;
@@ -1557,9 +1558,13 @@ impl App {
                             true
                         } else if self.selecting {
                             self.begin_select(ray, pos, modifiers)
+                        } else if modifiers.alt && !modifiers.shift {
+                            // the reference editor's Alt+click: the voxel's colour.
+                            self.pick_colour(ray)
                         } else if modifiers.alt {
-                            // Option+click picks groups instead of painting
-                            // (Option subtracts only in the Select tool).
+                            // Option+Shift+click picks groups instead of
+                            // painting (Option subtracts only in the Select
+                            // tool).
                             self.select_group_at(ray)
                         } else if self.moving {
                             self.begin_move(ray, pos.x, modifiers)
@@ -1674,7 +1679,7 @@ impl App {
             );
         }
 
-        // The selected group's box, so a group picked with Option+click (or in
+        // The selected group's box, so a group picked with Option+Shift+click (or in
         // the outline) shows what it holds.
         let group_box = self.move_target_bounds().or_else(|| self.bounds_group());
         let vp = self.camera.view_proj(aspect);
@@ -1842,6 +1847,7 @@ impl eframe::App for App {
         self.take_window_snap(&ctx, &state);
         self.view_input(&ctx);
         self.brush_input(&ctx);
+        self.hotkeys(&ctx, &state);
         if !self.view.background && self.meshed_for != Some(self.selected) {
             self.mesh_dirty = true;
         }
