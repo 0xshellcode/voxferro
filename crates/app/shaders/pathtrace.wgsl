@@ -253,9 +253,16 @@ fn is_glass(cell: vec3<i32>) -> bool {
 
 // --- Voxels drawn as other shapes ------------------------------------------
 //
+// Only in a second build of this shader, with SHAPES set when the render
+// draws voxels as something else than cubes: in the usual build the shape
+// code compiles away, and the shader stays as small as it was. (Inlined
+// wherever a ray is traced, it made the shader more than the DirectX
+// software rasteriser renders correctly.)
 // Each test looks for the shape inside one cell, between the distances
 // t_in (where the ray enters the cell) and t_out (where it leaves); a miss
 // lets the walk go on to the next cell. Glass and media stay cubes.
+
+override SHAPES: bool = false;
 
 fn shaped(index: u32) -> bool {
     let k = materials[index].kind;
@@ -513,7 +520,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, mode: u32) 
             stop = !is_glass(cell);
         }
         // Voxels drawn as other shapes: the shape in the cell, or on.
-        if (mode == 0u && p.shape.x > 0.5) {
+        if (SHAPES && mode == 0u && p.shape.x > 0.5) {
             let t_out = min(min(t_max.x, t_max.y), t_max.z);
             if (stop && shaped(voxel_at(cell))) {
                 let s = shape_in(origin, direction, cell, travelled, t_out, normal);

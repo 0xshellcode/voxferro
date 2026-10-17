@@ -692,6 +692,11 @@ struct Target {
 
 pub struct PathTracer {
     pipeline: wgpu::ComputePipeline,
+    /// The same shader built with `SHAPES`, for voxels drawn as spheres,
+    /// bricks... -- made the first time it is wanted.
+    shaped_pipeline: Option<wgpu::ComputePipeline>,
+    shader: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
     layout: wgpu::BindGroupLayout,
     post_pipeline: wgpu::ComputePipeline,
     post_layout: wgpu::BindGroupLayout,
@@ -856,6 +861,9 @@ impl PathTracer {
 
         Self {
             pipeline,
+            shaped_pipeline: None,
+            shader,
+            pipeline_layout,
             layout,
             post_pipeline,
             post_layout,
@@ -1217,6 +1225,16 @@ impl PathTracer {
         environment: &Environment,
         volume_offset: Vec3,
     ) -> Option<egui::TextureId> {
+        if environment.voxel_shape != VoxelShape::Cube && self.shaped_pipeline.is_none() {
+            self.shaped_pipeline = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("path tracer pipeline, shaped voxels"),
+                layout: Some(&self.pipeline_layout),
+                module: &self.shader,
+                entry_point: Some("main"),
+                compilation_options: wgpu::PipelineCompilationOptions { constants: &[("SHAPES", 1.0)], ..Default::default() },
+                cache: None,
+            }));
+        }
         // Size the target before borrowing the volume: ensure_target needs
         // &mut self, which cannot coexist with a live borrow of self.volume.
         self.volume.as_ref()?;
@@ -1390,7 +1408,10 @@ impl PathTracer {
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(match (&self.shaped_pipeline, environment.voxel_shape) {
+                (Some(shaped), shape) if shape != VoxelShape::Cube => shaped,
+                _ => &self.pipeline,
+            });
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
         }
