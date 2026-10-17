@@ -28,10 +28,16 @@ samples.*
 | ![Shapes from the GPU kernels](assets/showcase/shapes.jpg) | ![A house built by an AI agent over MCP](assets/showcase/house.jpg) |
 | *Shapes from the GPU compute kernels: a gold metal torus, a glass shell with a glowing core and a rounded box ([`shapes.cmds`](assets/showcase/shapes.cmds)).* | *A house built by Claude through the MCP server: it chose the palette, built it in `run_commands` batches and checked its own renders ([`house.vox`](assets/showcase/house.vox)).* |
 
+| | |
+|---|---|
+| ![Voxel scripts: terrain, a Menger sponge and an eroded ball](assets/showcase/scripts.jpg) | ![The island exported as isometric pixel sprites](assets/showcase/island-iso.png) |
+| *Made by voxel scripts alone: hills from the `terrain` script in three colour bands, a gold Menger sponge from `menger`, a stone ball worn by three passes of `erode` ([`scripts.cmds`](assets/showcase/scripts.cmds)); 256 samples.* | *The island exported with `export iso`: four isometric pixel-art views, lit as the reference editor's iso export lights them.* |
+
 ![The editor](assets/showcase/editor.png)
 
-*The editor with the island open: palette, brushes, saved camera slots and
-the model's box and floor grid.*
+*The editor with the island open, laid out as the reference editor is: palette and
+brush on the left, the Edit and Project panels on the right, the console
+and camera modes along the bottom.*
 
 To rebuild a scene and render it yourself:
 

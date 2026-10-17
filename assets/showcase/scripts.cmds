@@ -1,0 +1,26 @@
+# Voxferro's own voxel scripts (assets/scripts): rolling hills from value
+# noise, a Menger sponge in gold, and a stone ball worn by erosion.
+new 96 96 24
+palette 30 104 160 72
+palette 31 140 112 80
+palette 32 120 182 86
+xs -c 31,30,32 terrain 0.8 30 7
+# The sponge.
+palette 20 230 180 80
+material 20 metal metal=0.6 rough=0.3
+color 20
+instance new 27 27 27
+xs menger 3
+instance place -14 -6 27
+# The worn ball.
+palette 24 150 148 160
+color 24
+instance new 22 22 22
+xs sphere 1
+xs -n 3 erode 0.4
+instance place 24 20 24
+env atmosphere 35
+camera iso
+camera persp
+camera frame all
+camera zoom 0.8
