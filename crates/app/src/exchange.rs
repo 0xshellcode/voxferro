@@ -42,6 +42,12 @@ const CUBE_MARGIN: f32 = 0.1;
 impl App {
     pub fn export_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().skip(1).collect();
+        if let [what @ ("materials" | "render" | "cameras"), path @ ..] = words.as_slice() {
+            if path.is_empty() {
+                return format!("export {what} <file.txt>");
+            }
+            return self.export_component(what, &path.join(" "));
+        }
         let (format, path) = match words.as_slice() {
             [] => return self.export_obj(None).unwrap_or_else(|| "export cancelled".to_owned()),
             [f, rest @ ..] if FORMATS.iter().any(|(n, ..)| n == f) => (f.to_string(), (!rest.is_empty()).then(|| rest.join(" "))),
@@ -142,6 +148,18 @@ impl App {
     /// these from its own component files; here from a `.vox`, which holds
     /// them all).
     fn import_component(&mut self, what: &str, path: &str) -> String {
+        // A component file (the reference editor's text format) rather than a project.
+        if path.to_ascii_lowercase().ends_with(".txt") && what != "palette" {
+            let command = match std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|t| self.component_command(what, &t)) {
+                Ok(c) => c,
+                Err(e) => return format!("error: {path}: {e}"),
+            };
+            let Some(loaded) = self.scene.as_mut() else { return "nothing open".to_owned() };
+            self.history.end_gesture();
+            let changed = self.history.exec_alone(&mut loaded.doc, command);
+            self.mesh_dirty = true;
+            return if changed { format!("imported the {what} of {path}") } else { format!("{path}: nothing new in its {what}") };
+        }
         let other = match crate::scene::LoadedScene::load(path) {
             Ok(s) => s.doc,
             Err(e) => return format!("error: {path}: {e}"),

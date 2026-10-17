@@ -41,7 +41,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–49 of the [ROADMAP](ROADMAP.md) are complete, with **257 tests
+Phases 0–40 and 43–49 of the [ROADMAP](ROADMAP.md) are complete, with **259 tests
 passing**. Working today:
 
 - Reading **and writing** `.vox` (versions 150 and 200), validated against the
@@ -81,7 +81,8 @@ passing**. Working today:
 - Camera: frame selection or scene, axis and isometric views,
   the reference editor's four modes -- perspective, free (look around and fly with
   W A S D Q E), orthographic and isometric -- also in the path tracer and
-  in saved cameras, panning, and snapshots of the viewport
+  in saved cameras, panning, a view cube, and snapshots of the viewport or
+  the whole window
 - Display switches: voxel edges, frame, grid, background objects,
   wireframe and shadows, with the reference editor's shortcuts (Cmd+E, F, G, B, M)
 - Render settings (sun, uniform / atmospheric / HDR sky, ground, lens,
@@ -175,7 +176,7 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 
 | Group | Commands |
 |---|---|
-| Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `recover <path>`, `export [obj\|ply\|mc\|cube\|point\|xraw\|qb\|slab\|slice\|iso\|2d] <path>`, `import <path>`, `import <file.obj> [size] [fill]`, `import materials\|render\|cameras\|palette <file.vox>` |
+| Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `recover <path>`, `export [obj\|ply\|mc\|cube\|point\|xraw\|qb\|slab\|slice\|iso\|2d] <path>`, `import <path>`, `import <file.obj> [size] [fill]`, `import materials\|render\|cameras\|palette <file.vox\|file.txt>`, `export materials\|render\|cameras <file.txt>` |
 | Project | `project [list \| dir <path> \| open <name> \| rename <name> \| dup \| delete]` |
 | Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|square\|circle\|face\|fill\|shader\|pattern]`, `brush size <1-64>`, `brush tip cube\|sphere\|2d\|3d`, `brush centre fill\|ring\|even\|odd`, `brush project on\|off`, `brush face color\|geo\|4\|8\|palette\|voxel`, `brush mirror\|axis <axes>`, `brush region same\|color\|geo [4\|8]`, `color <n>` |
 | Pattern | `pattern selection\|open <file.vox>\|match on\|off\|turn x\|y\|z\|colours own\|brush\|clear` |

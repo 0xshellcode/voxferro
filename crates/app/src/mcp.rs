@@ -309,6 +309,7 @@ pub fn write_target(line: &str, current: Option<&str>) -> Option<Result<std::pat
         ["save"] => Some(current.map(path).ok_or_else(|| "this model has never been saved: give a path".to_owned())),
         ["save", p, ..] => Some(Ok(path(p))),
         ["export"] => Some(Err("export needs a path".to_owned())),
+        ["export", "materials" | "render" | "cameras", p, ..] => Some(Ok(path(p))),
         ["export", f, p, ..] if crate::exchange::FORMATS.iter().any(|(n, ..)| n == f) => Some(Ok(if *f == "obj" { path(p).with_extension("obj") } else { path(p) })),
         ["export", f] if crate::exchange::FORMATS.iter().any(|(n, ..)| n == f) => Some(Err(format!("export {f} needs a path"))),
         ["export", p, ..] if p.to_ascii_lowercase().ends_with(".ply") || p.ends_with(".xraw") || p.ends_with(".qb") => Some(Ok(path(p))),
@@ -316,7 +317,8 @@ pub fn write_target(line: &str, current: Option<&str>) -> Option<Result<std::pat
         ["anim", "export", dir, ..] => Some(Ok(path(dir))),
         ["render", "save", p, ..] => Some(Ok(path(p))),
         ["palette", "save", p, ..] => Some(Ok(path(p))),
-        ["snap", p, ..] => Some(Ok(path(p))),
+        ["snap", "window", p, ..] => Some(Ok(path(p))),
+        ["snap", p, ..] if *p != "window" => Some(Ok(path(p))),
         ["project", "rename", name @ ..] => Some(match current {
             Some(c) => crate::project::renamed(std::path::Path::new(c), &name.join(" ")),
             None => Err("this model has never been saved".to_owned()),
@@ -331,7 +333,7 @@ pub fn write_target(line: &str, current: Option<&str>) -> Option<Result<std::pat
 /// the panel would block the editor waiting for someone at the screen.
 pub fn needs_path(line: &str) -> bool {
     match line.split_whitespace().collect::<Vec<_>>().as_slice() {
-        ["open"] | ["import"] | ["export"] | ["snap"] => true,
+        ["open"] | ["import"] | ["export"] | ["snap"] | ["snap", "window"] => true,
         ["export", f] => crate::exchange::FORMATS.iter().any(|(n, ..)| n == f),
         _ => false,
     }

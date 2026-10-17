@@ -14,6 +14,7 @@ mod anim_ui;
 mod camera;
 mod camera_tools;
 mod compute;
+mod components;
 mod console;
 mod edit;
 mod exchange;
@@ -40,6 +41,7 @@ mod scene_ui;
 mod select;
 mod tools;
 mod transform;
+mod view_cube;
 mod view_options;
 mod trace_cache;
 #[cfg(windows)]
@@ -307,6 +309,11 @@ struct App {
     /// The instance the mesh was built around, while the background is
     /// hidden: selecting another must remesh.
     meshed_for: Option<usize>,
+    /// A `snap window` waiting for the window's screenshot.
+    window_snap: Option<String>,
+    window_snap_sent: bool,
+    /// The view cube in the viewport's corner.
+    view_cube_shown: bool,
     /// A `snap` waiting for the viewport's first frame.
     pending_snap: Option<String>,
     /// The Edit panel's text fields.
@@ -433,6 +440,9 @@ impl App {
             view: view_options::ViewOptions::default(),
             meshed_for: None,
             pending_snap: None,
+            view_cube_shown: true,
+            window_snap: None,
+            window_snap_sent: false,
             edit_fields: model_edit::Fields::default(),
             project: project::ProjectState::default(),
             resize_for: None,
@@ -1300,6 +1310,27 @@ impl App {
             return;
         }
 
+        if line.split_whitespace().next() == Some("snap") && line.split_whitespace().nth(1) == Some("window") {
+            // the reference editor's Capture Window: the whole window, panels and
+            // all, as egui draws it; written when the screenshot arrives.
+            let path = match line.split_whitespace().nth(2) {
+                Some(p) => p.to_owned(),
+                None => match rfd::FileDialog::new().add_filter("PNG image", &["png"]).set_file_name("window.png").save_file() {
+                    Some(p) => p.to_string_lossy().into_owned(),
+                    None => {
+                        self.console_log.push("snapshot cancelled".to_owned());
+                        return;
+                    }
+                },
+            };
+            // Asked for from the next drawn frame: a request sent before the
+            // window has drawn (a startup line) would be lost.
+            self.window_snap = Some(path.clone());
+            self.window_snap_sent = false;
+            self.console_log.push(format!("{path} will be saved with the next frame"));
+            return;
+        }
+
         if line.split_whitespace().next() == Some("snap") {
             let message = self.snap(line.split_whitespace().nth(1), state);
             self.console_log.push(message);
@@ -1510,6 +1541,40 @@ impl App {
         format!("gpu {shape_name}: {count} voxels in {elapsed:.1?}")
     }
 
+    /// Writes a window screenshot a `snap window` asked for, once egui
+    /// delivers it.
+    fn take_window_snap(&mut self, ctx: &egui::Context) {
+        if self.window_snap.is_none() {
+            return;
+        }
+        if !self.window_snap_sent {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+            self.window_snap_sent = true;
+            ctx.request_repaint();
+            return;
+        }
+        let image = ctx.input(|i| {
+            i.raw.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        let Some(image) = image else {
+            // The capture comes back with a later frame: keep drawing.
+            ctx.request_repaint();
+            return;
+        };
+        let Some(path) = self.window_snap.take() else { return };
+        let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+        let [w, h] = image.size;
+        let message = match std::fs::write(&path, voxel_core::export::png_rgba(w as u32, h as u32, &rgba)) {
+            Ok(()) => format!("saved {path} ({w}x{h}, the window)"),
+            Err(e) => format!("error: could not write {path}: {e}"),
+        };
+        eprintln!("[voxferro] {message}");
+        self.console_log.push(message);
+    }
+
     /// the reference editor's Capture Image: the viewport as it is -- the editor's
     /// view in Model mode, the render in Render mode -- as a PNG. Without a
     /// path, asks where.
@@ -1675,8 +1740,10 @@ impl App {
             )
         });
         let pointer = response.hover_pos();
+        // A click on the view cube is the cube's alone.
+        let on_cube = self.view_cube_shown && pointer.is_some_and(|p| view_cube::cube_rect(rect).contains(p));
         if !headless {
-            if pressed && response.hovered() {
+            if pressed && response.hovered() && !on_cube {
                 let hit = !self.rendering
                     && pointer.is_some_and(|pos| {
                         let ray = ray_at(&self.camera, pos);
@@ -1822,6 +1889,9 @@ impl App {
                 ui.painter().line_segment([project(corners[a]), project(corners[b])], stroke);
             }
         }
+        if !headless {
+            self.view_cube(ui, rect);
+        }
     }
 }
 
@@ -1947,6 +2017,7 @@ impl eframe::App for App {
         self.file_input(&ctx, &state);
         self.selection_input(&ctx);
         self.camera_input(&ctx);
+        self.take_window_snap(&ctx);
         self.view_input(&ctx);
         self.brush_input(&ctx);
         if !self.view.background && self.meshed_for != Some(self.selected) {

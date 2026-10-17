@@ -78,6 +78,15 @@ impl App {
                     on(v.shadow)
                 );
             }
+            ["cube", rest @ ..] => {
+                self.view_cube_shown = match rest {
+                    [] => !self.view_cube_shown,
+                    ["on"] => true,
+                    ["off"] => false,
+                    _ => return "view cube [on|off]".to_owned(),
+                };
+                format!("view cube {}", if self.view_cube_shown { "on" } else { "off" })
+            }
             [word, rest @ ..] => {
                 let Some(slot) = self.view.slot(word) else {
                     return "view [edges|frame|grid|bg|wire|shadow] [on|off]".to_owned();
