@@ -228,6 +228,9 @@ impl VoxFile {
 
             b"SIZE" => {
                 let size = [c.u32()?, c.u32()?, c.u32()?];
+                if size.iter().any(|&s| s == 0 || s > limits::MAX_MODEL_SIDE) {
+                    return Err(VoxError::ImplausibleSize { size });
+                }
                 if pending_size.replace(size).is_some() {
                     return Err(VoxError::DanglingSize { size });
                 }
@@ -372,6 +375,19 @@ impl VoxFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_over_256_a_side_is_refused_before_any_allocation() {
+        // A fuzzed file declared 20 x 2147483647 x 20: meshing it never ended.
+        let mut file = VoxFile::new_single([4, 4, 4]);
+        let ok = file.to_bytes();
+        assert!(VoxFile::parse(&ok).is_ok());
+        for size in [[20, 0x7FFF_FFFF, 20], [257, 1, 1], [0, 4, 4]] {
+            file.models[0].size = size;
+            let err = VoxFile::parse(&file.to_bytes()).unwrap_err();
+            assert!(matches!(err, VoxError::ImplausibleSize { .. }), "{size:?}: {err}");
+        }
+    }
 
     #[test]
     fn recover_reads_models_from_a_broken_file() {

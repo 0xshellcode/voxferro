@@ -276,12 +276,20 @@ fn flatten(nodes: &[SceneNode], model_count: usize, frame: u32) -> Vec<Instance>
         depth: 0,
     }];
     const MAX_DEPTH: u32 = 1024;
+    // In a well-formed file the graph is a tree: each node has one parent.
+    // A node reached a second time -- a cycle, or a group naming a child
+    // twice -- is not expanded again: otherwise every level of such a file
+    // doubles the walk, and a thousand levels never finish.
+    let mut expanded = std::collections::HashSet::new();
 
     while let Some(step) = stack.pop() {
         if step.depth > MAX_DEPTH {
             continue;
         }
         let Some(node) = by_id.get(&step.id) else { continue };
+        if !expanded.insert(step.id) {
+            continue;
+        }
 
         match node {
             SceneNode::Transform(t) => {
@@ -420,6 +428,25 @@ fn box_entry(origin: Vec3, dir: Vec3, size: [u32; 3]) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_cyclic_or_shared_graph_is_walked_once() {
+        use vox_format::{Dict, GroupNode, ShapeModel, ShapeNode, TransformNode};
+        let t = |id: i32, child: i32| SceneNode::Transform(TransformNode { id, attributes: Dict::default(), child, layer: 0, frames: vec![Dict::default()] });
+        let mut file = VoxFile::new_single([2, 2, 2]);
+        // 0 -> group 1 -> [2, 2, 3]; 2 -> group 1 again (a cycle); 3 -> shape 4.
+        file.nodes = vec![
+            t(0, 1),
+            SceneNode::Group(GroupNode { id: 1, attributes: Dict::default(), children: vec![2, 2, 3] }),
+            t(2, 1),
+            t(3, 4),
+            SceneNode::Shape(ShapeNode { id: 4, attributes: Dict::default(), models: vec![ShapeModel { model_id: 0, attributes: Dict::default() }] }),
+        ];
+        let started = std::time::Instant::now();
+        let scene = Scene::from_file(&file);
+        assert!(started.elapsed().as_secs() < 1);
+        assert_eq!(scene.instances.len(), 1);
+    }
     use super::*;
 
     fn scene_of(placements: &[([i32; 3], u8)]) -> Scene {

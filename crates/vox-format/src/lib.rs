@@ -69,10 +69,16 @@ pub mod limits {
     pub const MAX_SHAPE_MODELS: u32 = 65536;
     pub const MAX_COLOR_NAMES: u32 = 1024;
     pub const MAX_CHUNK_DEPTH: u32 = 32;
+    /// A model's side: the reference editor's limit, and the editor's. A larger
+    /// `SIZE` would ask for gigabytes before a single voxel is read.
+    pub const MAX_MODEL_SIDE: u32 = 256;
 }
 
 #[derive(Debug, Error)]
 pub enum VoxError {
+    #[error("implausible model size {size:?}: each side must be 1 to {}", limits::MAX_MODEL_SIDE)]
+    ImplausibleSize { size: [u32; 3] },
+
     #[error("not a vox file: expected magic {:?}, found {found:?}", MAGIC)]
     BadMagic { found: [u8; 4] },
 
