@@ -8,10 +8,21 @@
 //! - `transform scale <axes> <factor>`: `transform scale xyz 2`;
 //! - `transform rotate <axis> <degrees>`: any angle.
 //!
-//! And with the mouse, as the reference editor's tool works: choose Move, Scale or
-//! Turn, then drag in the viewport -- right and left (and for Move, up and
-//! down) -- watching a preview; Enter keeps it as one undo step, Esc drops
-//! it. Shift snaps a turn to 15°.
+//! And with the mouse, as the reference editor's tool works: choose Move, Scale,
+//! Turn or Wrap, then drag in the viewport -- right and left (and for Move
+//! and Wrap, up and down) -- watching a preview; Enter keeps it as one undo
+//! step, Esc drops it. Shift snaps a turn to 15°.
+//!
+//! Wrap is the reference editor's (`the reference renderer`, hint "Wrap [N] : Commit [Enter] :
+//! Cancel [Esc] : Two-sided [SHIFT]"): the selection's box is stretched and
+//! the selection repeated to fill it ([`kernels::wrap`]), copies apart by
+//! the Wrap Spacing, every other one reflected on the axes whose Mirror
+//! toggle is on; a box pulled in smaller crops it. the reference editor drags a face
+//! of a box gizmo; here a drag moves the face the screen's right (or up)
+//! points to, a cell per 12 points, and pulls it in going back. Shift moves
+//! the opposite face too. `transform wrap <x|-x|y|-y|z|-z> <cells> [two]`
+//! does the same from the console, `transform spacing <x> <y> <z>` sets the
+//! gaps.
 //!
 //! The selected voxels are lifted out into their own box, transformed with
 //! the Edit panel's kernels (nearest cell, as there), and put back centred
@@ -54,12 +65,18 @@ pub fn place_moved(
     after: &Volume,
     offset: IVec3,
 ) -> (Vec<(IVec3, u8)>, Vec<IVec3>) {
+    let centre = corner.as_vec3() + Vec3::from_array(before_size.map(|s| s as f32)) * 0.5;
+    let new_corner = (centre - Vec3::from_array(after.size().map(|s| s as f32)) * 0.5).round().as_ivec3() + offset;
+    place_at(volume, selection, after, new_corner)
+}
+
+/// The writes that replace the lifted voxels by `after`, its corner at
+/// `new_corner`, and the cells `after` fills.
+pub fn place_at(volume: &Volume, selection: &Selection, after: &Volume, new_corner: IVec3) -> (Vec<(IVec3, u8)>, Vec<IVec3>) {
     let mut writes: BTreeMap<[i32; 3], u8> = BTreeMap::new();
     for p in selection.iter().filter(|p| volume.get_i(p.x, p.y, p.z) != 0) {
         writes.insert(p.to_array(), 0);
     }
-    let centre = corner.as_vec3() + Vec3::from_array(before_size.map(|s| s as f32)) * 0.5;
-    let new_corner = (centre - Vec3::from_array(after.size().map(|s| s as f32)) * 0.5).round().as_ivec3() + offset;
     let [sx, sy, sz] = volume.size();
     let inside = |p: IVec3| p.x >= 0 && p.y >= 0 && p.z >= 0 && (p.x as u32) < sx && (p.y as u32) < sy && (p.z as u32) < sz;
     let mut cells = Vec::new();
@@ -90,6 +107,59 @@ pub enum Handle {
     Move,
     Scale,
     Turn,
+    Wrap,
+}
+
+/// A wrap's box about the lifted one: its low and high corners, in cells
+/// from the lifted box's corner (high exclusive).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WrapBox {
+    pub lo: IVec3,
+    pub hi: IVec3,
+}
+
+impl WrapBox {
+    pub fn of(size: [u32; 3]) -> Self {
+        Self { lo: IVec3::ZERO, hi: IVec3::from_array(size.map(|s| s as i32)) }
+    }
+
+    /// Moves the face `face` points to out by `cells` (in, if negative);
+    /// with `two_sided`, the opposite face too. The box keeps a cell.
+    pub fn pull(&mut self, face: IVec3, cells: i32, two_sided: bool) {
+        for a in 0..3 {
+            let (high, low) = match face[a] {
+                1 => (true, two_sided),
+                -1 => (two_sided, true),
+                _ => continue,
+            };
+            if high {
+                self.hi[a] += cells;
+            }
+            if low {
+                self.lo[a] -= cells;
+            }
+            if self.hi[a] - self.lo[a] < 1 {
+                // Pulled through: keep a cell on the side that did not move.
+                if high && !low {
+                    self.hi[a] = self.lo[a] + 1;
+                } else if low && !high {
+                    self.lo[a] = self.hi[a] - 1;
+                } else {
+                    let mid = (self.lo[a] + self.hi[a]).div_euclid(2);
+                    (self.lo[a], self.hi[a]) = (mid, mid + 1);
+                }
+            }
+        }
+    }
+
+    pub fn size(&self) -> [u32; 3] {
+        (self.hi - self.lo).max(IVec3::ONE).as_uvec3().to_array()
+    }
+}
+
+/// `lifted` wrapped into `wrap`, and where its corner goes in the model.
+fn wrapped(lifted: &Volume, corner: IVec3, wrap: WrapBox, spacing: [u32; 3], mirror: [bool; 3]) -> (Volume, IVec3) {
+    (kernels::wrap(lifted, wrap.lo, wrap.size(), spacing, mirror), corner + wrap.lo)
 }
 
 /// A mouse transform in progress: what was lifted, and the preview applied
@@ -176,6 +246,20 @@ impl App {
                 }
                 (kernels::rotate_by(&drag.lifted, 2, deg), IVec3::ZERO)
             }
+            Handle::Wrap => {
+                let mut b = WrapBox::of(drag.lifted.size());
+                b.pull(dominant(basis.x_axis), (d.x / 12.0).round() as i32, shift);
+                b.pull(dominant(basis.y_axis), (-d.y / 12.0).round() as i32, shift);
+                let (after, at) = wrapped(&drag.lifted, drag.corner, b, self.wrap_spacing, self.mirror);
+                let Some(volume) = loaded.doc.scene.models.get(drag.model) else { return };
+                let (writes, cells) = place_at(volume, &drag.selection, &after, at);
+                let command = voxel_core::Command::set_voxels(&loaded.doc, drag.model, writes);
+                command.apply(&mut loaded.doc);
+                drag.preview = Some(command);
+                drag.cells = cells;
+                self.mesh_dirty = true;
+                return;
+            }
         };
         let Some(volume) = loaded.doc.scene.models.get(drag.model) else { return };
         let (writes, cells) = place_moved(volume, &drag.selection, drag.lifted.size(), drag.corner, &after, offset);
@@ -219,7 +303,8 @@ impl App {
 
     pub fn transform_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().skip(1).collect();
-        let usage = "transform scale <axes> <factor> | transform rotate <x|y|z> <degrees> | transform drag move|scale|turn|off | transform keep|drop";
+        let usage = "transform scale <axes> <factor> | transform rotate <x|y|z> <degrees> | transform wrap <x|-x|y|-y|z|-z> <cells> [two] | transform spacing <x> <y> <z> | transform drag move|scale|turn|wrap|off | transform keep|drop";
+        let mut wrap_box = None;
         let op: Box<dyn Fn(&Volume) -> Volume> = match words.as_slice() {
             ["scale", axes, f] => {
                 let Ok(f) = f.parse::<f32>() else { return usage.to_owned() };
@@ -234,13 +319,40 @@ impl App {
                 Box::new(move |v| kernels::scale(v, s))
             }
             ["keep"] | ["drop"] => return self.finish_transform(words[0] == "keep"),
+            ["spacing", x, y, z] => {
+                return match (x.parse::<u32>(), y.parse::<u32>(), z.parse::<u32>()) {
+                    (Ok(x), Ok(y), Ok(z)) if x.max(y).max(z) <= 256 => {
+                        self.wrap_spacing = [x, y, z];
+                        format!("wrap spacing {x} {y} {z}")
+                    }
+                    _ => "transform spacing <x> <y> <z>, each 0 to 256".to_owned(),
+                };
+            }
+            ["wrap", face, cells, rest @ ..] => {
+                let face = match *face {
+                    "x" | "+x" => IVec3::X,
+                    "-x" => IVec3::NEG_X,
+                    "y" | "+y" => IVec3::Y,
+                    "-y" => IVec3::NEG_Y,
+                    "z" | "+z" => IVec3::Z,
+                    "-z" => IVec3::NEG_Z,
+                    _ => return usage.to_owned(),
+                };
+                let (Ok(cells), two) = (cells.parse::<i32>(), rest == ["two"]) else { return usage.to_owned() };
+                if !(rest.is_empty() || two) || cells.abs() > 256 {
+                    return usage.to_owned();
+                }
+                wrap_box = Some((face, cells, two));
+                Box::new(|v: &Volume| v.clone())
+            }
             ["drag", h] => {
                 self.transform_tool = match *h {
                     "move" => Some(Handle::Move),
                     "scale" => Some(Handle::Scale),
                     "turn" | "rotate" => Some(Handle::Turn),
+                    "wrap" => Some(Handle::Wrap),
                     "off" => None,
-                    _ => return "transform drag move|scale|turn|off".to_owned(),
+                    _ => return "transform drag move|scale|turn|wrap|off".to_owned(),
                 };
                 return match self.transform_tool {
                     Some(_) => "drag in the viewport; Enter keeps, Esc drops".to_owned(),
@@ -264,8 +376,15 @@ impl App {
         let Some(loaded) = self.scene.as_mut() else { return "nothing open".to_owned() };
         let Some(volume) = loaded.doc.scene.models.get(model) else { return "no model".to_owned() };
         let Some((lifted, corner)) = lift(volume, &selection) else { return "transform: the selection has no voxels".to_owned() };
-        let after = op(&lifted);
-        let (writes, cells) = place(volume, &selection, lifted.size(), corner, &after);
+        let (writes, cells) = match wrap_box {
+            Some((face, n, two)) => {
+                let mut b = WrapBox::of(lifted.size());
+                b.pull(face, n, two);
+                let (after, at) = wrapped(&lifted, corner, b, self.wrap_spacing, self.mirror);
+                place_at(volume, &selection, &after, at)
+            }
+            None => place(volume, &selection, lifted.size(), corner, &op(&lifted)),
+        };
         let count = writes.len();
         self.history.end_gesture();
         self.history.set_voxels(&mut loaded.doc, model, writes);
@@ -289,15 +408,37 @@ impl App {
             line = Some(["transform rotate z 15", "transform rotate z -15"][i]);
         }
         let hint = "Drag in the viewport; Enter keeps, Esc drops";
+        let wrap_hint = "Wrap: drag to stretch the box and repeat the selection in it; Shift both sides; Enter keeps, Esc drops";
         let t = self.transform_tool;
-        let handles = [Handle::Move, Handle::Scale, Handle::Turn];
-        if let Some(i) = toggle_row(ui, &[(t == Some(Handle::Move), "Move", hint), (t == Some(Handle::Scale), "Scale", hint), (t == Some(Handle::Turn), "Turn", hint)]) {
+        let handles = [Handle::Move, Handle::Scale, Handle::Turn, Handle::Wrap];
+        if let Some(i) = toggle_row(
+            ui,
+            &[
+                (t == Some(Handle::Move), "Move", hint),
+                (t == Some(Handle::Scale), "Scale", hint),
+                (t == Some(Handle::Turn), "Turn", hint),
+                (t == Some(Handle::Wrap), "Wrap", wrap_hint),
+            ],
+        ) {
             let h = handles[i];
             self.transform_tool = if t == Some(h) { None } else { Some(h) };
             if self.transform_tool.is_none() {
                 let message = self.finish_transform(false);
                 self.console_log.push(message);
             }
+        }
+        if t == Some(Handle::Wrap) {
+            // the reference editor's Wrap Spacing: the gap between copies, per axis.
+            ui.horizontal(|ui| {
+                ui.label("Gap").on_hover_text("Wrap spacing: empty cells between copies, x y z");
+                let gap = ui.spacing().item_spacing.x;
+                let w = ((ui.available_width() - 2.0 * gap) / 3.0).max(16.0);
+                // A drag value is at least the interact width; narrower here.
+                ui.spacing_mut().interact_size.x = w;
+                for s in &mut self.wrap_spacing {
+                    ui.add_sized([w, 20.0], eframe::egui::DragValue::new(s).range(0..=256).speed(0.1));
+                }
+            });
         }
         if self.transform_drag.is_some()
             && let Some(i) = button_row(ui, &[("Keep", "Enter"), ("Drop", "Esc")])
@@ -315,6 +456,38 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wrap_box_pulls_one_face_or_both_and_keeps_a_cell() {
+        let mut b = WrapBox::of([4, 2, 2]);
+        b.pull(IVec3::X, 6, false);
+        assert_eq!((b.lo, b.hi), (IVec3::ZERO, IVec3::new(10, 2, 2)));
+        b.pull(IVec3::NEG_Y, 3, true);
+        assert_eq!((b.lo.y, b.hi.y), (-3, 5));
+        // Pulled in past the far face: one cell is left.
+        let mut c = WrapBox::of([4, 2, 2]);
+        c.pull(IVec3::NEG_X, -9, false);
+        assert_eq!((c.lo.x, c.hi.x), (3, 4));
+        assert_eq!(c.size(), [1, 2, 2]);
+    }
+
+    #[test]
+    fn wrapping_a_selection_repeats_it_beside_itself() {
+        let mut v = Volume::new([16, 4, 4]);
+        v.set(2, 1, 1, 5);
+        v.set(3, 1, 1, 6);
+        let mut s = Selection::new(0);
+        s.combine(&v, vec![IVec3::new(2, 1, 1), IVec3::new(3, 1, 1)], voxel_core::Combine::Replace);
+        let (lifted, corner) = lift(&v, &s).unwrap();
+        let mut b = WrapBox::of(lifted.size());
+        b.pull(IVec3::X, 4, false);
+        let (after, at) = wrapped(&lifted, corner, b, [1, 0, 0], [false; 3]);
+        let (writes, cells) = place_at(&v, &s, &after, at);
+        assert_eq!(cells.len(), 4, "the source and a copy: 5 6 _ 5 6 _");
+        assert!(cells.contains(&IVec3::new(5, 1, 1)) && cells.contains(&IVec3::new(6, 1, 1)));
+        // The source's own cells stay as they are; only the copy is new.
+        assert_eq!(writes.len(), 2);
+    }
 
     #[test]
     fn scaling_a_selection_keeps_its_centre() {

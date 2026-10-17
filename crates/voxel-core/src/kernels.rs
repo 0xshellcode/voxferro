@@ -11,7 +11,7 @@
 //! buttons promise.
 
 use crate::Volume;
-use glam::{Mat3, Vec3};
+use glam::{IVec3, Mat3, Vec3};
 
 /// Evaluates `map` at every cell centre of a `size` box.
 fn map_volume(size: [u32; 3], map: impl Fn(Vec3) -> u8 + Sync) -> Volume {
@@ -32,6 +32,31 @@ fn map_volume(size: [u32; 3], map: impl Fn(Vec3) -> u8 + Sync) -> Volume {
         }
     });
     Volume::from_cells(size, cells)
+}
+
+/// the reference editor's Transform *wrap* (`the reference renderer`): `source` repeated to
+/// fill a box `size` cells big whose corner is `offset` cells from the
+/// source's. The copies start at the source's own place and repeat every
+/// `size + spacing` cells along each axis, both ways; the gap between them
+/// is empty, and a box smaller than the source crops it. With `mirror` on
+/// an axis, every other copy along it is reflected, as the reference editor's
+/// Mirror toggles do.
+pub fn wrap(source: &Volume, offset: IVec3, size: [u32; 3], spacing: [u32; 3], mirror: [bool; 3]) -> Volume {
+    let src = source.size().map(|s| s as i32);
+    map_volume(size, |c| {
+        let p = c.floor().as_ivec3() + offset;
+        let mut at = [0u32; 3];
+        for a in 0..3 {
+            let period = src[a] + spacing[a] as i32;
+            let r = p[a].rem_euclid(period);
+            if r >= src[a] {
+                return 0;
+            }
+            let odd = p[a].div_euclid(period).rem_euclid(2) == 1;
+            at[a] = if mirror[a] && odd { src[a] - 1 - r } else { r } as u32;
+        }
+        source.get(at[0], at[1], at[2])
+    })
 }
 
 /// The kernels' `voxel()`: the cell `p` falls in, 0 outside the box.
@@ -486,6 +511,24 @@ mod tests {
     fn diagonal_reflects_through_x_equals_y() {
         let v = filled(&[[3, 1, 0]], [4, 4, 1]);
         assert_eq!(cells(&diagonal(&v, 2)), vec![[3, 1, 0], [1, 3, 0]]);
+    }
+
+    #[test]
+    fn wrap_tiles_with_gaps_mirrors_and_crops() {
+        // A 2-long bar along x: colours 1, 2.
+        let mut v = Volume::new([2, 1, 1]);
+        v.set(0, 0, 0, 1);
+        v.set(1, 0, 0, 2);
+        let row = |w: &Volume| (0..w.size()[0]).map(|x| w.get(x, 0, 0)).collect::<Vec<_>>();
+        let plain = wrap(&v, IVec3::ZERO, [7, 1, 1], [1, 0, 0], [false; 3]);
+        assert_eq!(row(&plain), vec![1, 2, 0, 1, 2, 0, 1]);
+        let mirrored = wrap(&v, IVec3::ZERO, [7, 1, 1], [1, 0, 0], [true, false, false]);
+        assert_eq!(row(&mirrored), vec![1, 2, 0, 2, 1, 0, 1]);
+        // Grown the other way: the copies go on before the source.
+        let back = wrap(&v, IVec3::new(-3, 0, 0), [5, 1, 1], [1, 0, 0], [false; 3]);
+        assert_eq!(row(&back), vec![1, 2, 0, 1, 2]);
+        // Smaller than the source: cropped.
+        assert_eq!(row(&wrap(&v, IVec3::ZERO, [1, 1, 1], [0; 3], [false; 3])), vec![1]);
     }
 
     #[test]

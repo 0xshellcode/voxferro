@@ -317,6 +317,8 @@ struct App {
     /// The Transform tool's mouse handle, when armed, and a transform in
     /// progress.
     transform_tool: Option<transform::Handle>,
+    /// The Transform tool's Wrap Spacing: empty cells between copies.
+    wrap_spacing: [u32; 3],
     transform_drag: Option<transform::TransformDrag>,
     /// The settings window and the console bar's drawer.
     settings_open: bool,
@@ -463,6 +465,7 @@ impl App {
             settings_open: false,
             drawer_open: false,
             transform_tool: None,
+            wrap_spacing: [0; 3],
             transform_drag: None,
             window_snap_sent: false,
             edit_fields: model_edit::Fields::default(),
