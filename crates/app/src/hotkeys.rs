@@ -20,6 +20,8 @@
 //! | Cmd+, Cmd+. | previous, next key; with Shift, first and last |
 //! | F5 F6 | add, remove an animation key |
 //! | Alt+click | take the voxel's colour (Alt+Shift+click picks a group) |
+//! | Tab, Shift+Tab | into and out of a group (in `objects.rs`) |
+//! | Cmd+E F G B M | display switches (in `view_options.rs`); in the render, Cmd+E and G its edges and grid |
 //!
 //! Where these took a key this editor had used, the editor's moved: the
 //! fixed views are Alt+1 to Alt+7, the eyedropper Alt+click, and framing

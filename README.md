@@ -76,14 +76,18 @@ yet tried on real machines. Working today:
   formulas of its own kernels
 - Several objects at once, as the reference editor's World mode: Shift+click and
   marquee selection; union, intersection, subtraction and replacement;
-  align, drop to the ground, flip; copy, copy as reference, cut and paste
+  align, drop to the ground, flip; copy, copy as reference, cut and paste;
+  a placement copied from one object and pasted on others (whole, only the
+  rotation or only the position); Tab into a group, Shift+Tab out
 - Editable scene: move, turn, duplicate, add and remove models; groups
   (create, move, turn, hide, dissolve, drag in the tree) and named layers with visibility, all
   saved in the file
 - Palette and materials editable from the interface, with undo
 - Animation: playback, transform keys (interpolated as in
   the reference editor a recent version), shape frames, range, timeline (with
-  draggable keys) and export of rendered frames to PNG
+  draggable keys) and export of rendered frames to PNG; stepping a frame
+  or a key at a time (`,` `.`, Cmd+`,` Cmd+`.`), loops, reversed keys, and
+  Global Time (off, only the open group animates)
 - Export to OBJ + MTL + palette texture, and to the reference editor's other
   formats: PLY (faces, cubes or points), a smooth surface by marching
   cubes, XRAW, Qubicle QB, SLAB6, PNG
@@ -97,7 +101,8 @@ yet tried on real machines. Working today:
   in saved cameras, panning, a view cube with a camera ruler (drag to turn
   in 5° steps), and snapshots of the viewport or the whole window
 - Display switches: voxel edges, frame, grid, background objects,
-  wireframe and shadows, with the reference editor's shortcuts (Cmd+E, F, G, B, M)
+  wireframe and shadows, with the reference editor's shortcuts (Cmd+E, F, G, B, M;
+  in the render, Cmd+E and Cmd+G switch its own edges and grid)
 - Palette tools: several colours selected, sorted by hue, saturation or
   value (the display order only), random recolouring, HSV and hex editing
 - Render: transparent or coloured background, the Blend material (a lamp
