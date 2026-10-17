@@ -1,6 +1,7 @@
 #!/bin/sh
 # Builds target/dist/Voxferro-<version>-macos-<arch>.dmg from
-# target/Voxferro.app (run scripts/bundle-macos.sh first).
+# target/Voxferro.app (run scripts/bundle-macos.sh first); <arch> is the
+# binary's, or "universal" when it holds both.
 #
 # With create-dmg (brew install create-dmg) the disk image opens on a window
 # laid out for installing: the background from packaging/macos (drawn by
@@ -13,7 +14,8 @@ cd "$(dirname "$0")/.."
 app=target/Voxferro.app
 [ -d "$app" ] || { echo "no $app: run scripts/bundle-macos.sh first" >&2; exit 1; }
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-arch=$(uname -m)
+arch=$(lipo -archs "$app/Contents/MacOS/voxferro")
+case "$arch" in *" "*) arch=universal ;; esac
 mkdir -p target/dist
 dmg="target/dist/Voxferro-$version-macos-$arch.dmg"
 rm -f "$dmg"

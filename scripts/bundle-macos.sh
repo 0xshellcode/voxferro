@@ -2,14 +2,31 @@
 # Builds target/Voxferro.app: the release binary, an Info.plist, and
 # the icon as an .icns made with sips and iconutil from the full-bleed
 # assets/icon/icon-square.png (the system gives it its rounded shape).
+#
+# With --universal the binary runs natively on Apple silicon and Intel:
+# built for aarch64-apple-darwin and x86_64-apple-darwin (rustup target add
+# both) and joined with lipo.
 set -eu
 cd "$(dirname "$0")/.."
-cargo build -q --release -p voxferro
+universal=false
+[ "${1:-}" = "--universal" ] && universal=true
+if $universal; then
+    for target in aarch64-apple-darwin x86_64-apple-darwin; do
+        cargo build -q --release -p voxferro --target "$target"
+    done
+    mkdir -p target/universal
+    lipo -create -output target/universal/voxferro \
+        target/aarch64-apple-darwin/release/voxferro target/x86_64-apple-darwin/release/voxferro
+    binary=target/universal/voxferro
+else
+    cargo build -q --release -p voxferro
+    binary=target/release/voxferro
+fi
 
 app=target/Voxferro.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/release/voxferro "$app/Contents/MacOS/voxferro"
+cp "$binary" "$app/Contents/MacOS/voxferro"
 # Sample models and environment maps travel inside the bundle, so the app
 # never reads the source tree (which macOS may guard, as in Documents).
 # They are third-party and not in git (see assets/README.md): copied when a
@@ -69,4 +86,4 @@ PLIST
 # Ad-hoc signature, so the bundle's resources are sealed and Gatekeeper
 # treats it as a locally built app.
 codesign --force --sign - "$app" >/dev/null 2>&1 || true
-echo "built $app"
+echo "built $app ($(lipo -archs "$app/Contents/MacOS/voxferro"))"

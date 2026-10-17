@@ -1,5 +1,5 @@
-# A release: pushing a tag like v0.1.0 builds Voxferro for macOS (Apple
-# silicon), Windows and Linux, and publishes a GitHub Release with the
+# A release: pushing a tag like v0.1.0 builds Voxferro for macOS (one
+# universal binary, Apple silicon and Intel), Windows and Linux, and publishes a GitHub Release with the
 # packages and install notes. The tag must match the workspace version.
 name: Release
 
@@ -27,6 +27,8 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
 
       - name: Check the tag against the version
@@ -48,10 +50,10 @@ jobs:
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
-          ./scripts/bundle-macos.sh
+          ./scripts/bundle-macos.sh --universal
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           mkdir -p target/dist
-          ditto -c -k --keepParent target/Voxferro.app "target/dist/Voxferro-$version-macos-arm64.zip"
+          ditto -c -k --keepParent target/Voxferro.app "target/dist/Voxferro-$version-macos-universal.zip"
           # The disk image, laid out with its background and arrow.
           brew install create-dmg
           ./scripts/make-dmg.sh

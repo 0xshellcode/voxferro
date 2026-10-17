@@ -110,7 +110,7 @@ Native arm64 on Metal: `[voxferro] graphics backend: Metal on Apple M2`.
 
 ## Download
 
-Packages for macOS (Apple silicon), Windows and Linux are on the
+Packages for macOS (universal: Apple silicon and Intel), Windows and Linux are on the
 [Releases](https://github.com/0xshellcode/voxferro/releases) page, with
 install notes. A release is built by `.github/workflows/release.yml` when a
 tag like `v0.1.0` (matching the workspace version) is pushed.
