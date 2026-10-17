@@ -440,60 +440,40 @@ impl App {
     }
 
     /// The Selection and Model panel sections.
+    /// The Edit panel's Select section: the reference editor's All, Inv, None,
+    /// Copy, Cut and Paste, with the editor's Delete, Paint and By colour,
+    /// then the Transform tool.
     pub fn selection_ui(&mut self, ui: &mut egui::Ui) {
+        use crate::layout::button_row;
         let ctx = ui.ctx().clone();
-        let run = |app: &mut App, line: &str| {
-            let message = app.select_command(line, &ctx);
-            app.console_log.push(message);
-        };
-
-
+        let mut line = None;
         let count = self.active_selection().map_or(0, Selection::len);
-        ui.label(format!("{count} voxels selected"));
-        ui.horizontal_wrapped(|ui| {
-            for (label, line) in [("All", "select all"), ("None", "select none"), ("Invert", "select invert"), ("Colour", "select color")] {
-                if ui.small_button(label).clicked() {
-                    run(self, line);
-                }
-            }
-        });
-        ui.add_enabled_ui(count > 0, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (label, line) in [("Delete", "delete"), ("Paint", "paint"), ("Copy", "copy"), ("Cut", "cut")] {
-                    if ui.small_button(label).clicked() {
-                        run(self, line);
-                    }
-                }
-            });
-        });
-        if ui.add_enabled(!self.clipboard.is_empty(), egui::Button::new("Paste").small()).clicked() {
-            run(self, "paste");
+        ui.label(egui::RichText::new(format!("{count} selected")).size(11.0));
+        if let Some(i) = button_row(ui, &[("All", "Cmd+A"), ("Inv", "Invert")]) {
+            line = Some(["select all", "select invert"][i]);
         }
-        ui.add_enabled_ui(count > 0, |ui| self.transform_ui(ui));
-
-        ui.label("Model");
-        // Fill the Resize fields from the model whenever it, or its size,
-        // changes; leave them alone while the user types.
-        let current = self.selected_model().and_then(|m| {
-            Some((m, self.scene.as_ref()?.doc.scene.models.get(m)?.size()))
-        });
-        if current.is_some() && current != self.resize_for {
-            self.resize_for = current;
-            if let Some((_, size)) = current {
-                self.resize_to = size;
-            }
+        if let Some(i) = button_row(ui, &[("None", "Esc"), ("Colour", "Every voxel of the brush colour")]) {
+            line = Some(["select none", "select color"][i]);
         }
-        ui.horizontal(|ui| {
-            if ui.small_button("Crop").clicked() {
-                run(self, "crop");
+        let has = count > 0;
+        ui.add_enabled_ui(has, |ui| {
+            if let Some(i) = button_row(ui, &[("Copy", "Cmd+C"), ("Cut", "Cmd+X")]) {
+                line = Some(["copy", "cut"][i]);
             }
-            for v in &mut self.resize_to {
-                ui.add(egui::DragValue::new(v).range(1..=256));
-            }
-            if ui.small_button("Resize").clicked() {
-                let [x, y, z] = self.resize_to;
-                run(self, &format!("resize {x} {y} {z}"));
+            if let Some(i) = button_row(ui, &[("Delete", "Delete"), ("Paint", "In the brush colour")]) {
+                line = Some(["delete", "paint"][i]);
             }
         });
+        ui.add_enabled_ui(!self.clipboard.is_empty(), |ui| {
+            if button_row(ui, &[("Paste", "Cmd+V")]).is_some() {
+                line = Some("paste");
+            }
+        });
+        if let Some(line) = line {
+            let message = self.select_command(line, &ctx);
+            self.console_log.push(message);
+        }
+        ui.add_space(4.0);
+        ui.add_enabled_ui(has, |ui| self.transform_ui(ui));
     }
 }

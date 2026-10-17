@@ -89,7 +89,7 @@ fn index(word: &str) -> Option<u8> {
 }
 
 /// the reference editor's default palette `n`, from the first install that has it.
-fn reference_editor_palette(n: u8) -> Option<std::path::PathBuf> {
+pub(crate) fn reference_editor_palette(n: u8) -> Option<std::path::PathBuf> {
     crate::reference_editor_dirs()
         .into_iter()
         .map(|d| d.join("palette").join(format!("pal{n}.png")))
@@ -203,38 +203,6 @@ impl App {
             what.to_owned()
         } else {
             format!("{what}: nothing changed")
-        }
-    }
-
-    /// The buttons under the palette: open, save, reset, and the reference editor's
-    /// four defaults when an install has them.
-    pub fn palette_files_ui(&mut self, ui: &mut eframe::egui::Ui, state: &egui_wgpu::RenderState) {
-        let mut line = None;
-        ui.horizontal_wrapped(|ui| {
-            if ui.small_button("Open…").on_hover_text("A palette image (PNG)").clicked()
-                && let Some(path) = rfd::FileDialog::new().add_filter("Palette", &["png"]).pick_file()
-            {
-                line = Some(format!("palette open {}", path.display()));
-            }
-            if ui.small_button("Save…").on_hover_text("As a 256 × 1 PNG, as the reference editor saves it").clicked()
-                && let Some(path) = rfd::FileDialog::new().add_filter("Palette", &["png"]).set_file_name("palette.png").save_file()
-            {
-                line = Some(format!("palette save {}", path.display()));
-            }
-            if ui.small_button("Reset").on_hover_text("The format's default palette").clicked() {
-                line = Some("palette reset".to_owned());
-            }
-            for n in 0..4u8 {
-                if reference_editor_palette(n).is_some()
-                    && ui.small_button(n.to_string()).on_hover_text(format!("the reference editor's default palette {n}")).clicked()
-                {
-                    line = Some(format!("palette default {n}"));
-                }
-            }
-        });
-        if let Some(line) = line {
-            let message = self.palette_file_command(&line, state).unwrap_or_default();
-            self.console_log.push(message);
         }
     }
 

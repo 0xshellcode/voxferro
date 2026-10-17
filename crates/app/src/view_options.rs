@@ -107,23 +107,6 @@ impl App {
         message
     }
 
-    /// The display switches, as a row of toggles.
-    pub fn view_ui(&mut self, ui: &mut egui::Ui) {
-        let mut lines = Vec::new();
-        ui.horizontal_wrapped(|ui| {
-            for (word, label, hint, _) in SWITCHES {
-                let on = *self.view.slot(word).expect("a switch");
-                if ui.selectable_label(on, label).on_hover_text(hint).clicked() {
-                    lines.push(format!("view {word}"));
-                }
-            }
-        });
-        for line in lines {
-            let message = self.view_command(&line);
-            self.console_log.push(message);
-        }
-    }
-
     /// Cmd+E, F, G, B and M, as in the reference editor.
     pub fn view_input(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() {

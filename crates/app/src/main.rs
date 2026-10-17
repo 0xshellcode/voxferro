@@ -20,6 +20,7 @@ mod edit;
 mod exchange;
 mod files;
 mod icon;
+mod layout;
 mod image_out;
 mod mcp;
 mod mcp_ui;
@@ -313,6 +314,9 @@ struct App {
     /// progress.
     transform_tool: Option<transform::Handle>,
     transform_drag: Option<transform::TransformDrag>,
+    /// The settings window and the console bar's drawer.
+    settings_open: bool,
+    drawer_open: bool,
     /// A `snap window` waiting for the window's screenshot.
     window_snap: Option<String>,
     window_snap_sent: bool,
@@ -446,6 +450,8 @@ impl App {
             pending_snap: None,
             view_cube_shown: true,
             window_snap: None,
+            settings_open: false,
+            drawer_open: false,
             transform_tool: None,
             transform_drag: None,
             window_snap_sent: false,
@@ -543,6 +549,7 @@ impl App {
         }
         #[cfg(target_os = "macos")]
         macos_open::set_waker(&cc.egui_ctx);
+        layout::apply_theme(&cc.egui_ctx);
 
         // Run before the first frame, so --screenshot captures the result.
         for command in &startup_commands {
@@ -801,164 +808,32 @@ impl App {
         -self.trace_origin.as_vec3()
     }
 
-    fn controls(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
-        ui.heading("Voxferro");
-        ui.label(&self.backend);
-        ui.separator();
-
-        let ctx = ui.ctx().clone();
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("New").on_hover_text("Cmd+N").clicked() {
-                self.request(files::Discarding::New(files::NEW_MODEL_SIZE), &ctx, state);
+    /// Render mode's settings, in place of the palette and brush.
+    fn render_column(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
+        ui.label(format!(
+            "{} samples, {} emissive voxels",
+            self.path_tracer.samples,
+            self.path_tracer.emitter_count()
+        ));
+        if ui.button("Save image…").on_hover_text("The render as it is now, as PNG").clicked() {
+            let stem = self.scene.as_ref().and_then(|s| {
+                std::path::Path::new(&s.name).file_stem().map(|n| n.to_string_lossy().into_owned())
+            });
+            let dialog = rfd::FileDialog::new()
+                .add_filter("PNG image", &["png"])
+                .set_file_name(format!("{}.png", stem.unwrap_or_else(|| "render".to_owned())));
+            if let Some(path) = dialog.save_file() {
+                let message = self.save_render(&path.to_string_lossy(), state);
+                self.console_log.push(message);
             }
-            if ui.button("Open…").on_hover_text("Cmd+O").clicked() {
-                self.request(files::Discarding::Open(None), &ctx, state);
-            }
-            let has_doc = self.scene.is_some();
-            if ui.add_enabled(has_doc, egui::Button::new("Save")).on_hover_text("Cmd+S").clicked()
-                && let Some(m) = self.save()
-            {
-                self.console_log.push(m);
-            }
-            if ui
-                .add_enabled(has_doc, egui::Button::new("Save as…"))
-                .on_hover_text("Cmd+Shift+S")
-                .clicked()
-                && let Some(m) = self.save_as()
-            {
-                self.console_log.push(m);
-            }
-            if ui.add_enabled(has_doc, egui::Button::new("Import…")).on_hover_text("Add the models of a .vox, XRAW, QB or SLAB6 file").clicked() {
-                let m = self.import_command("import");
-                self.console_log.push(m);
-                if self.mesh_dirty {
-                    self.refresh_document(state);
-                }
-            }
-        });
-        self.recent_ui(ui, state);
-        ui.label(&self.status);
-
-        // Read everything needed up front, so no borrow of `self.scene` is
-        // alive when a click calls back into `&mut self`.
-        let summary = self
-            .scene
-            .as_ref()
-            .map(|s| (s.name.clone(), s.doc.scene.instances.len(), s.doc.scene.total_voxels()));
-
-        if let Some((name, placed, voxels)) = summary {
-            ui.label(name);
-            ui.label(format!("{placed} placed models"));
-            ui.label(format!("{voxels} voxels"));
-            ui.label(format!("{} triangles", self.scene_renderer.triangle_count()));
         }
-
+        self.render_settings_ui(ui, state);
         ui.separator();
-        ui.horizontal(|ui| {
-            if ui.selectable_label(!self.rendering, "Model").clicked() {
-                self.rendering = false;
-            }
-            if ui.selectable_label(self.rendering, "Render").clicked() {
-                self.rendering = true;
-                self.path_tracer.reset();
-            }
-        });
+    }
 
-        ui.label("Camera");
-        self.camera_ui(ui);
-        ui.horizontal(|ui| {
-            ui.label("View");
-            self.view_ui(ui);
-        });
-        if ui.small_button("Snapshot…").on_hover_text("The viewport as a PNG (the reference editor's Capture Image)").clicked() {
-            let message = self.snap(None, state);
-            self.console_log.push(message);
-        }
-
-        if self.rendering {
-            ui.label(format!(
-                "{} samples, {} emissive voxels",
-                self.path_tracer.samples,
-                self.path_tracer.emitter_count()
-            ));
-            if ui.button("Save image…").on_hover_text("The render as it is now, as PNG").clicked() {
-                let stem = self.scene.as_ref().and_then(|s| {
-                    std::path::Path::new(&s.name).file_stem().map(|n| n.to_string_lossy().into_owned())
-                });
-                let dialog = rfd::FileDialog::new()
-                    .add_filter("PNG image", &["png"])
-                    .set_file_name(format!("{}.png", stem.unwrap_or_else(|| "render".to_owned())));
-                if let Some(path) = dialog.save_file() {
-                    let message = self.save_render(&path.to_string_lossy(), state);
-                    self.console_log.push(message);
-                }
-            }
-            self.render_settings_ui(ui, state);
-            ui.separator();
-        }
-
-        self.palette_grid(ui);
-        self.palette_files_ui(ui, state);
-        self.palette_editor_ui(ui, state);
-
-        ui.separator();
-        ui.heading("Brush");
-        ui.horizontal(|ui| {
-            for (mode, name) in voxel_core::BrushMode::ALL {
-                let on = !self.selecting && !self.moving && self.brush_mode == mode;
-                if ui.selectable_label(on, capitalised(name)).clicked() {
-                    self.brush_mode = mode;
-                    self.selecting = false;
-                    self.moving = false;
-                }
-            }
-            if ui
-                .selectable_label(self.selecting, "Select")
-                .on_hover_text("Shift adds, Option subtracts. Box drags a marquee.")
-                .clicked()
-            {
-                self.selecting = true;
-                self.moving = false;
-            }
-            if ui
-                .selectable_label(self.moving, "Move")
-                .on_hover_text("Drag a model (or its selected group). Shift: up and down. Cmd: turn. X/Y/Z: quarter turn.")
-                .clicked()
-            {
-                self.moving = true;
-                self.selecting = false;
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            for (shape, name) in voxel_core::BrushShape::ALL {
-                ui.selectable_value(&mut self.brush_shape, shape, capitalised(name));
-            }
-        });
-        self.brush_options_ui(ui);
-        ui.horizontal(|ui| {
-            ui.label("Mirror");
-            for (axis, name) in ["x", "y", "z"].iter().enumerate() {
-                if ui
-                    .selectable_label(self.mirror[axis], *name)
-                    .on_hover_text("Repeat strokes reflected through the model's centre")
-                    .clicked()
-                {
-                    self.mirror[axis] = !self.mirror[axis];
-                }
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("Axis");
-            for (axis, name) in ["x", "y", "z"].iter().enumerate() {
-                if ui
-                    .selectable_label(self.axis_lock[axis], *name)
-                    .on_hover_text("Strokes run through the whole model along this axis")
-                    .clicked()
-                {
-                    self.axis_lock[axis] = !self.axis_lock[axis];
-                }
-            }
-        });
+    /// The options that depend on the brush shape beyond `brush_options_ui`:
+    /// fill's region rule, the shader brush's script, the pattern.
+    fn brush_extra_ui(&mut self, ui: &mut egui::Ui) {
         match self.brush_shape {
             voxel_core::BrushShape::Fill if self.selecting || self.brush_mode != voxel_core::BrushMode::Attach => {
                 use voxel_core::brush::Region;
@@ -1000,96 +875,26 @@ impl App {
             voxel_core::BrushShape::Pattern => self.pattern_ui(ui),
             _ => {}
         }
-        ui.horizontal(|ui| {
-            ui.add(egui::Slider::new(&mut self.brush_color, 1..=255).text("colour"));
-            if ui
-                .selectable_label(self.picking, "Pick")
-                .on_hover_text("Take the colour of the next voxel clicked (I)")
-                .clicked()
-            {
-                self.picking = !self.picking;
-            }
-        });
-
-        // Show the colour the brush will actually paint.
-        if let Some(loaded) = &self.scene {
-            let c = loaded.doc.palette.color(self.brush_color);
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 16.0), egui::Sense::hover());
-            ui.painter()
-                .rect_filled(rect, 2.0, egui::Color32::from_rgb(c.r, c.g, c.b));
-        }
-
-
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(self.history.can_undo(), egui::Button::new("Undo"))
-                .clicked()
-            {
-                self.undo(state);
-            }
-            if ui
-                .add_enabled(self.history.can_redo(), egui::Button::new("Redo"))
-                .clicked()
-            {
-                self.redo(state);
-            }
-        });
-        ui.label(format!("{} undo steps", self.history.undo_depth()));
-
-
-
-        ui.separator();
-        self.mcp_panel(ui);
-
-        ui.separator();
-        ui.label("Drag on the model to edit, elsewhere (or right-drag) to orbit.");
-        ui.label("Shift+drag or middle-drag to pan, scroll to zoom.");
-        ui.label("Option+click selects a group (again: one level in).");
-        ui.label("F frame, 1-7 views, O ortho, Cmd+Z undo.");
-        ui.separator();
-        ui.label("Samples");
-
-        let mut pick = None;
-        egui::ScrollArea::vertical().max_height(220.0).id_salt("samples").show(ui, |ui| {
-            if let Ok(entries) = std::fs::read_dir(sample_dir()) {
-                let mut paths: Vec<_> = entries
-                    .flatten()
-                    .map(|e| e.path())
-                    .filter(|p| p.extension().is_some_and(|x| x == "vox"))
-                    .collect();
-                paths.sort();
-                for path in paths {
-                    let label = path
-                        .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    let selected = self.scene.as_ref().is_some_and(|s| s.name == label);
-                    if ui.selectable_label(selected, label).clicked() {
-                        pick = Some(path.to_string_lossy().into_owned());
-                    }
-                }
-            }
-        });
-        if let Some(path) = pick {
-            self.request(files::Discarding::Open(Some(path)), &ctx, state);
-        }
     }
+
 
     /// The 256 palette entries as a clickable grid.
     fn palette_grid(&mut self, ui: &mut egui::Ui) {
         let Some(loaded) = &self.scene else { return };
 
-        const COLS: usize = 16;
-        const CELL: f32 = 13.0;
-        let size = egui::vec2(COLS as f32 * CELL, (256 / COLS) as f32 * CELL);
+        // Eight wide and filling the column, as the reference editor shows it.
+        const COLS: usize = 8;
+        let cell_w = (ui.available_width() / COLS as f32).floor().max(8.0);
+        let cell_h = (cell_w * 0.72).floor();
+        let size = egui::vec2(COLS as f32 * cell_w, (256 / COLS) as f32 * cell_h);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
 
         let painter = ui.painter();
         for i in 0..256usize {
             let (cx, cy) = (i % COLS, i / COLS);
             let cell = egui::Rect::from_min_size(
-                rect.min + egui::vec2(cx as f32 * CELL, cy as f32 * CELL),
-                egui::vec2(CELL - 1.0, CELL - 1.0),
+                rect.min + egui::vec2(cx as f32 * cell_w, cy as f32 * cell_h),
+                egui::vec2(cell_w - 1.0, cell_h - 1.0),
             );
             let c = loaded.doc.palette.color(i as u8);
             painter.rect_filled(cell, 1.0, egui::Color32::from_rgb(c.r, c.g, c.b));
@@ -1105,7 +910,7 @@ impl App {
 
         if let (true, Some(pos)) = (response.clicked(), response.interact_pointer_pos()) {
             let local = pos - rect.min;
-            let (cx, cy) = ((local.x / CELL) as usize, (local.y / CELL) as usize);
+            let (cx, cy) = ((local.x / cell_w) as usize, (local.y / cell_h) as usize);
             if cx < COLS {
                 let index = cy * COLS + cx;
                 if index < 256 {
@@ -1114,36 +919,6 @@ impl App {
             }
         }
     }
-
-    /// Text command console, in the spirit of the editor's own F2 console.
-    fn console_ui(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
-        ui.heading("Console");
-
-        let entered = ui
-            .add(
-                egui::TextEdit::singleline(&mut self.console_input)
-                    .hint_text("help")
-                    .desired_width(f32::INFINITY),
-            )
-            .lost_focus()
-            && ui.input(|i| i.key_pressed(egui::Key::Enter));
-
-        if entered {
-            let line = std::mem::take(&mut self.console_input);
-            let ctx = ui.ctx().clone();
-            self.run_command(&line, &ctx, state);
-        }
-
-        egui::ScrollArea::vertical()
-            .max_height(80.0)
-            .id_salt("console log")
-            .show(ui, |ui| {
-                for entry in self.console_log.iter().rev().take(20) {
-                    ui.label(entry);
-                }
-            });
-    }
-
     fn run_command(&mut self, line: &str, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
         if line.trim().is_empty() {
             return;
@@ -2022,31 +1797,7 @@ impl eframe::App for App {
             self.window_title = title;
         }
 
-        // the reference editor's layout: palette, brush and view on the left; the
-        // Edit panel and the Project panel on the right; the console along
-        // the bottom.
-        egui::Panel::left("controls")
-            .default_size(250.0)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("controls scroll")
-                    .show(ui, |ui| self.controls(ui, &state));
-            });
-        egui::Panel::right("project")
-            .default_size(210.0)
-            .show(ui, |ui| self.project_panel(ui, &state));
-        egui::Panel::right("edit")
-            .default_size(190.0)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("edit scroll")
-                    .show(ui, |ui| self.edit_panel(ui));
-            });
-        egui::Panel::bottom("console")
-            .default_size(140.0)
-            .show(ui, |ui| self.console_ui(ui, &state));
-
-        egui::CentralPanel::default().show(ui, |ui| self.viewport(ui, &state));
+        self.layout(ui, &state);
         self.export_step(&ctx, &state);
         self.mcp_finish_capture(&ctx, &state);
 

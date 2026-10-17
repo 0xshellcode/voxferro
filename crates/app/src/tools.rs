@@ -476,52 +476,50 @@ impl App {
 
     /// The options of the chosen shape, under the shape buttons.
     pub fn brush_options_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use crate::layout::{caption, toggle_row};
         use eframe::egui;
         let o = &mut self.brush_options;
         match self.brush_shape {
             BrushShape::Voxel => {
-                ui.horizontal_wrapped(|ui| {
-                    ui.add(egui::Slider::new(&mut o.size, 1..=64).text("size")).on_hover_text("- and + change it");
-                    if ui.selectable_label(!o.sphere, "Cube").clicked() {
-                        o.sphere = false;
-                    }
-                    if ui.selectable_label(o.sphere, "Sphere").clicked() {
-                        o.sphere = true;
-                    }
-                    if ui.selectable_label(o.flat, "2D").on_hover_text("Flat on the face").clicked() {
-                        o.flat = true;
-                    }
-                    if ui.selectable_label(!o.flat, "3D").clicked() {
-                        o.flat = false;
-                    }
+                caption(ui, "VOXEL");
+                ui.horizontal(|ui| {
+                    ui.label("Size");
+                    ui.add(egui::DragValue::new(&mut o.size).range(1..=64).speed(0.2)).on_hover_text("- and + change it");
                 });
+                if let Some(i) = toggle_row(ui, &[(!o.sphere, "Cube", ""), (o.sphere, "Sphere", "")]) {
+                    o.sphere = i == 1;
+                }
+                if let Some(i) = toggle_row(ui, &[(o.flat, "2D", "Flat on the face"), (!o.flat, "3D", "A solid")]) {
+                    o.flat = i == 0;
+                }
             }
             BrushShape::Line => {
-                ui.checkbox(&mut o.project_line, "Project line on the surface");
+                caption(ui, "LINE");
+                if toggle_row(ui, &[(o.project_line, "Project", "Lay the line on the surface")]).is_some() {
+                    o.project_line = !o.project_line;
+                }
             }
             BrushShape::Square | BrushShape::Circle => {
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut o.fill_centre, "Fill centre");
-                    ui.checkbox(&mut o.even, "Even").on_hover_text("An even size, centred on a corner");
-                });
+                caption(ui, "GEOMETRY");
+                if let Some(i) = toggle_row(ui, &[(o.fill_centre, "Fill", "Fill the centre"), (o.even, "Even", "An even size, centred on a corner")]) {
+                    if i == 0 {
+                        o.fill_centre = !o.fill_centre;
+                    } else {
+                        o.even = !o.even;
+                    }
+                }
             }
             BrushShape::Face => {
-                ui.horizontal_wrapped(|ui| {
-                    if ui.selectable_label(o.face_by_colour, "Colour").on_hover_text("Connected voxels of the clicked colour").clicked() {
-                        o.face_by_colour = true;
-                    }
-                    if ui.selectable_label(!o.face_by_colour, "Geo").on_hover_text("Connected voxels of any colour").clicked() {
-                        o.face_by_colour = false;
-                    }
-                    if ui.selectable_label(!o.face_wide, "4").clicked() {
-                        o.face_wide = false;
-                    }
-                    if ui.selectable_label(o.face_wide, "8").on_hover_text("Through corners too").clicked() {
-                        o.face_wide = true;
-                    }
-                    ui.checkbox(&mut o.face_keep_colour, "Voxel colour")
-                        .on_hover_text("Extrude each voxel in its own colour, not the brush's");
-                });
+                caption(ui, "FACE");
+                if let Some(i) = toggle_row(ui, &[(o.face_by_colour, "Color", "Connected voxels of the clicked colour"), (!o.face_by_colour, "Geo", "Connected voxels of any colour")]) {
+                    o.face_by_colour = i == 0;
+                }
+                if let Some(i) = toggle_row(ui, &[(!o.face_wide, "4", "Through sides"), (o.face_wide, "8", "Through corners too")]) {
+                    o.face_wide = i == 1;
+                }
+                if let Some(i) = toggle_row(ui, &[(!o.face_keep_colour, "Palette", "Extrude in the brush colour"), (o.face_keep_colour, "Voxel", "Extrude each voxel in its own colour")]) {
+                    o.face_keep_colour = i == 1;
+                }
             }
             _ => {}
         }

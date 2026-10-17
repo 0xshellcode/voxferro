@@ -240,19 +240,17 @@ impl App {
 
     /// The right-hand Project panel: tabs above, Export folded below.
     pub fn project_panel(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
-        ui.heading("Project");
-        ui.horizontal(|ui| {
-            for (tab, label, hint) in [
-                (Tab::Project, "Project", "The project folder's models"),
-                (Tab::Pattern, "Pattern", "The pattern brush's model and library"),
-                (Tab::Shader, "Shader", "Voxel scripts"),
-                (Tab::Outline, "Outline", "The scene: models, groups, layers, animation"),
-            ] {
-                if ui.selectable_label(self.project.tab == tab, label).on_hover_text(hint).clicked() {
-                    self.project.tab = tab;
-                }
-            }
-        });
+        crate::layout::title(ui, "Project");
+        let tabs = [
+            (Tab::Project, "Files", "The project folder's models"),
+            (Tab::Pattern, "Pattern", "The pattern brush's model and library"),
+            (Tab::Shader, "Script", "Voxel scripts (the reference editor's shaders)"),
+            (Tab::Outline, "Scene", "The outline: models, groups, layers, animation"),
+        ];
+        let items: Vec<(bool, &str, &str)> = tabs.iter().map(|(t, l, h)| (self.project.tab == *t, *l, *h)).collect();
+        if let Some(i) = crate::layout::toggle_row(ui, &items) {
+            self.project.tab = tabs[i].0;
+        }
         ui.separator();
         // Export at the bottom, as there; the tab's content fills the rest.
         egui::Panel::bottom("project export").show(ui, |ui| {
@@ -270,7 +268,11 @@ impl App {
             });
         });
         egui::ScrollArea::vertical().id_salt("project tab").show(ui, |ui| match self.project.tab {
-            Tab::Project => self.project_ui(ui, state),
+            Tab::Project => {
+                self.project_ui(ui, state);
+                ui.separator();
+                self.recent_ui(ui, state);
+            }
             Tab::Pattern => self.pattern_ui(ui),
             Tab::Shader => self.scripts_ui(ui, state),
             Tab::Outline => {
@@ -305,7 +307,7 @@ impl App {
             }
         });
         let open = self.scene.as_ref().and_then(|s| s.path.clone()).map(PathBuf::from);
-        egui::ScrollArea::vertical().id_salt("project files").max_height(160.0).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("project files").max_height(420.0).show(ui, |ui| {
             for path in self.project_files() {
                 let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
                 let current = open.as_ref().is_some_and(|o| same_file(o, &path));

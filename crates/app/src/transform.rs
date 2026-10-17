@@ -279,43 +279,32 @@ impl App {
     }
 
     pub fn transform_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use crate::layout::{button_row, caption, toggle_row};
         let mut line = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Transform");
-            for (label, l, hint) in [
-                ("×2", "transform scale xyz 2", "Scale the selection up"),
-                ("×½", "transform scale xyz 0.5", "Scale the selection down"),
-                ("⟲ 15°", "transform rotate z 15", "Turn the selection 15° about z"),
-                ("⟳ 15°", "transform rotate z -15", "Turn the selection -15° about z"),
-            ] {
-                if ui.small_button(label).on_hover_text(hint).clicked() {
-                    line = Some(l);
-                }
+        caption(ui, "TRANSFORM");
+        if let Some(i) = button_row(ui, &[("×2", "Scale the selection up"), ("×½", "Scale the selection down")]) {
+            line = Some(["transform scale xyz 2", "transform scale xyz 0.5"][i]);
+        }
+        if let Some(i) = button_row(ui, &[("⟲ 15°", "Turn 15° about z"), ("⟳ 15°", "Turn -15° about z")]) {
+            line = Some(["transform rotate z 15", "transform rotate z -15"][i]);
+        }
+        let hint = "Drag in the viewport; Enter keeps, Esc drops";
+        let t = self.transform_tool;
+        let handles = [Handle::Move, Handle::Scale, Handle::Turn];
+        if let Some(i) = toggle_row(ui, &[(t == Some(Handle::Move), "Move", hint), (t == Some(Handle::Scale), "Scale", hint), (t == Some(Handle::Turn), "Turn", hint)]) {
+            let h = handles[i];
+            self.transform_tool = if t == Some(h) { None } else { Some(h) };
+            if self.transform_tool.is_none() {
+                let message = self.finish_transform(false);
+                self.console_log.push(message);
             }
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Drag");
-            for (label, handle) in [("Move", Handle::Move), ("Scale", Handle::Scale), ("Turn", Handle::Turn)] {
-                let on = self.transform_tool == Some(handle);
-                if ui.selectable_label(on, label).on_hover_text("Drag in the viewport; Enter keeps, Esc drops").clicked() {
-                    self.transform_tool = if on { None } else { Some(handle) };
-                    if self.transform_tool.is_none() {
-                        let message = self.finish_transform(false);
-                        self.console_log.push(message);
-                    }
-                }
-            }
-            if self.transform_drag.is_some() {
-                if ui.small_button("Keep").on_hover_text("Enter").clicked() {
-                    let message = self.finish_transform(true);
-                    self.console_log.push(message);
-                }
-                if ui.small_button("Drop").on_hover_text("Esc").clicked() {
-                    let message = self.finish_transform(false);
-                    self.console_log.push(message);
-                }
-            }
-        });
+        }
+        if self.transform_drag.is_some()
+            && let Some(i) = button_row(ui, &[("Keep", "Enter"), ("Drop", "Esc")])
+        {
+            let message = self.finish_transform(i == 0);
+            self.console_log.push(message);
+        }
         if let Some(l) = line {
             let message = self.transform_command(l);
             self.console_log.push(message);

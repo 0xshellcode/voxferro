@@ -152,17 +152,14 @@ impl App {
     /// the reference editor's Edit panel (`m_edit.ui`), in its order: Tool and
     /// Select open, the rest folded.
     pub fn edit_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Edit");
+        crate::layout::title(ui, "Edit");
         let mut lines: Vec<String> = Vec::new();
-        /// A row of buttons, each running a command.
+        /// A row of buttons filling the width, each running a command.
         fn row(ui: &mut egui::Ui, buttons: &[(&str, &str, &str)], lines: &mut Vec<String>) {
-            ui.horizontal_wrapped(|ui| {
-                for (label, line, hint) in buttons {
-                    if ui.button(*label).on_hover_text(*hint).clicked() {
-                        lines.push((*line).to_owned());
-                    }
-                }
-            });
+            let labels: Vec<(&str, &str)> = buttons.iter().map(|(l, _, h)| (*l, *h)).collect();
+            if let Some(i) = crate::layout::button_row(ui, &labels) {
+                lines.push(buttons[i].1.to_owned());
+            }
         }
         /// A text field and Apply, as the reference editor's numeric sections.
         fn field(ui: &mut egui::Ui, verb: &str, text: &mut String, hint: &str, lines: &mut Vec<String>) {
@@ -175,15 +172,13 @@ impl App {
             });
         }
         fn axes(ui: &mut egui::Ui, verb: &str, hint: &str, lines: &mut Vec<String>) {
-            ui.horizontal(|ui| {
-                for a in ["x", "y", "z"] {
-                    if ui.button(a.to_uppercase()).on_hover_text(hint).clicked() {
-                        lines.push(format!("{verb} {a}"));
-                    }
-                }
-            });
+            if let Some(i) = crate::layout::button_row(ui, &[("X", hint), ("Y", hint), ("Z", hint)]) {
+                lines.push(format!("{verb} {}", ["x", "y", "z"][i]));
+            }
         }
-        let section = |name: &str, open: bool| egui::CollapsingHeader::new(name).id_salt(("edit", name)).default_open(open);
+        let section = |name: &str, open: bool| {
+            egui::CollapsingHeader::new(egui::RichText::new(name).size(10.5)).id_salt(("edit", name)).default_open(open)
+        };
 
         section("TOOL", true).show(ui, |ui| {
             row(ui, &[("Full", "full", "Fill the whole box with the colour"), ("Fill", "fill", "Repaint every voxel with the colour")], &mut lines);
@@ -194,15 +189,13 @@ impl App {
         section("ROT", false).show(ui, |ui| axes(ui, "rotate", "A quarter turn about the axis", &mut lines));
         section("FLIP", false).show(ui, |ui| axes(ui, "flip", "Flip along the axis", &mut lines));
         section("LOOP", false).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for a in ["x", "y", "z"] {
-                    for (sign, step) in [("+", 1), ("-", -1)] {
-                        if ui.small_button(format!("{sign}{}", a.to_uppercase())).on_hover_text("Move, wrapping at the edges").clicked() {
-                            lines.push(format!("loop {a} {step}"));
-                        }
-                    }
+            for (sign, step) in [("+", 1), ("-", -1)] {
+                let labels = ["X", "Y", "Z"].map(|a| format!("{sign}{a}"));
+                let hint = "Move, wrapping at the edges";
+                if let Some(i) = crate::layout::button_row(ui, &[(&labels[0], hint), (&labels[1], hint), (&labels[2], hint)]) {
+                    lines.push(format!("loop {} {step}", ["x", "y", "z"][i]));
                 }
-            });
+            }
             field(ui, "loop", &mut self.edit_fields.loop_, "axis offset", &mut lines);
         });
         section("SCALE", false).show(ui, |ui| field(ui, "scale", &mut self.edit_fields.scale, "axes factor", &mut lines));
