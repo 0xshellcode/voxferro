@@ -41,7 +41,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–48 of the [ROADMAP](ROADMAP.md) are complete, with **241 tests
+Phases 0–40 and 43–49 of the [ROADMAP](ROADMAP.md) are complete, with **247 tests
 passing**. Working today:
 
 - Reading **and writing** `.vox` (versions 150 and 200), validated against the
@@ -53,8 +53,9 @@ passing**. Working today:
 - Open, new, save as, and a warning about unsaved changes; a Project
   panel (a folder of models opened with a click; rename, duplicate, move
   to the trash) and palette files (the reference editor's 256 × 1 PNGs)
-- Attach / erase / paint brushes with voxel, box, line, face and
-  fill shapes, with preview and one-step undo/redo per stroke; a shader
+- Attach / erase / paint brushes with voxel (1 to 64 across, cube or
+  sphere, flat or solid), box, line (optionally laid on the surface),
+  square, circle, face and fill shapes, with preview and one-step undo/redo per stroke; a shader
   brush (a voxel script's result, attached, erased or painted), a pattern
   brush, region rules for fills (same colour, or connected by colour or
   geometry), mirror and axis modes
@@ -174,9 +175,9 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 |---|---|
 | Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `recover <path>`, `export [obj\|ply\|cube\|point\|xraw\|qb\|slab\|slice] <path>`, `import <path>`, `import materials\|render\|cameras\|palette <file.vox>` |
 | Project | `project [list \| dir <path> \| open <name> \| rename <name> \| dup \| delete]` |
-| Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|face\|fill\|shader\|pattern]`, `brush mirror\|axis <axes>`, `brush region same\|color\|geo [4\|8]`, `color <n>` |
+| Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|square\|circle\|face\|fill\|shader\|pattern]`, `brush size <1-64>`, `brush tip cube\|sphere\|2d\|3d`, `brush centre fill\|ring\|even\|odd`, `brush project on\|off`, `brush face color\|geo\|4\|8\|palette\|voxel`, `brush mirror\|axis <axes>`, `brush region same\|color\|geo [4\|8]`, `color <n>` |
 | Pattern | `pattern selection\|open <file.vox>\|match on\|off\|turn x\|y\|z\|colours own\|brush\|clear` |
-| Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz` |
+| Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz`, `transform scale <axes> <f>`, `transform rotate <axis> <deg>` |
 | Model | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
 | Scene | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
 | Palette | `palette open\|save <file.png>`, `palette reset`, `palette default 0-3`, `palette swap\|gradient\|copy <a> <b>`, `palette paste <i>`, `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [key=value]…` |

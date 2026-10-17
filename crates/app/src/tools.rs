@@ -82,7 +82,7 @@ impl App {
     pub fn update_stroke(&mut self, ray: Ray) {
         let Some(stroke) = &self.stroke else { return };
         match self.brush_shape {
-            BrushShape::Box | BrushShape::Line => {
+            BrushShape::Box | BrushShape::Line | BrushShape::Square | BrushShape::Circle => {
                 if let Some(end) = self.project_to_stroke_plane(ray)
                     && end != stroke.end
                 {
@@ -136,14 +136,35 @@ impl App {
 
         // The voxel brush paints at `cell`, which may be off the clicked face
         // when dragging; the other shapes start from the hit itself.
+        let axis = brush::face_axis(hit.face);
+        let outward = if self.brush_mode == BrushMode::Attach { hit.face.offset()[axis] } else { 0 };
         let cells = match self.brush_shape {
-            BrushShape::Voxel => vec![cell],
+            BrushShape::Voxel => brush::tip_cells(cell, axis, outward, &self.brush_options),
             BrushShape::Fill if self.brush_mode != BrushMode::Attach => brush::region(volume, hit.voxel, self.region),
-            shape => brush::stroke_cells(volume, self.brush_mode, shape, &hit, cell),
+            shape => brush::stroke_cells(volume, self.brush_mode, shape, &hit, cell, &self.brush_options),
         };
         let cells = brush::through_axes(&cells, volume.size(), self.axis_lock);
         let cells = brush::mirrored(&cells, volume.size(), self.mirror);
-        let writes = brush::writes(volume, self.brush_mode, self.brush_color, &cells);
+        let writes = if self.brush_shape == BrushShape::Face
+            && self.brush_mode == BrushMode::Attach
+            && self.brush_options.face_keep_colour
+        {
+            // Extruding in each voxel's own colour: the colour of the voxel
+            // each new cell stands on.
+            let o = hit.face.offset();
+            let back = IVec3::new(o[0], o[1], o[2]);
+            let coloured: Vec<(IVec3, u8)> = cells
+                .iter()
+                .map(|&p| {
+                    let under = p - back;
+                    let c = volume.get_i(under.x, under.y, under.z);
+                    (p, if c == 0 { self.brush_color } else { c })
+                })
+                .collect();
+            brush::pattern_writes(volume, self.brush_mode, &coloured)
+        } else {
+            brush::writes(volume, self.brush_mode, self.brush_color, &cells)
+        };
         stroke.end = cell;
         if self.history.set_voxels(&mut loaded.doc, model, writes) > 0 {
             self.mesh_dirty = true;
@@ -159,7 +180,7 @@ impl App {
         }
         let Some(volume) = loaded.doc.scene.models.get(stroke.model) else { return };
         let end = clamp_to(volume.size(), end);
-        let cells = brush::stroke_cells(volume, self.brush_mode, self.brush_shape, &stroke.hit, end);
+        let cells = brush::stroke_cells(volume, self.brush_mode, self.brush_shape, &stroke.hit, end, &self.brush_options);
         let cells = brush::through_axes(&cells, volume.size(), self.axis_lock);
         let cells = brush::mirrored(&cells, volume.size(), self.mirror);
         let writes = brush::writes(volume, self.brush_mode, self.brush_color, &cells);
@@ -202,7 +223,7 @@ impl App {
         let pick = loaded
             .doc
             .scene
-            .pick(ray.origin, ray.direction, 10_000.0, |i| visible.shows(i))?;
+            .pick(ray.origin, ray.direction, crate::edit::PICK_RANGE, |i| visible.shows(i))?;
         Some((pick.instance, pick.hit))
     }
 
@@ -276,8 +297,8 @@ impl App {
         let loaded = self.scene.as_ref()?;
         let visible = self.visibility();
         let scene = &loaded.doc.scene;
-        scene.pick(ray.origin, ray.direction, 10_000.0, |i| visible.shows(i)).or_else(|| {
-            let places = matches!(self.brush_shape, BrushShape::Voxel | BrushShape::Box | BrushShape::Line);
+        scene.pick(ray.origin, ray.direction, crate::edit::PICK_RANGE, |i| visible.shows(i)).or_else(|| {
+            let places = matches!(self.brush_shape, BrushShape::Voxel | BrushShape::Box | BrushShape::Line | BrushShape::Square | BrushShape::Circle);
             let shown = scene.instances.get(self.selected).is_some_and(|i| visible.shows(i));
             if self.brush_mode == BrushMode::Attach && places && shown && !self.selecting && !self.moving && !self.picking {
                 scene.pick_floor(self.selected, ray.origin, ray.direction)
@@ -326,6 +347,9 @@ impl App {
                 }
                 let on: String = ['x', 'y', 'z'].iter().zip(self.mirror).filter(|(_, m)| *m).map(|(a, _)| *a).collect();
                 format!("mirror {}", if on.is_empty() { "off" } else { &on })
+            }
+            Some("brush") if matches!(line.split_whitespace().nth(1), Some("size" | "tip" | "centre" | "center" | "project" | "face")) => {
+                self.brush_option_command(line)
             }
             Some("brush") if line.split_whitespace().nth(1) == Some("axis") => {
                 match line.split_whitespace().nth(2) {
@@ -383,6 +407,139 @@ impl App {
                 };
                 format!("brush {mode} {}", self.brush_shape.name())
             }
+        }
+    }
+}
+
+impl App {
+    /// `brush size <1-64>`, `brush tip cube|sphere|2d|3d`, `brush centre
+    /// fill|ring|even|odd`, `brush project on|off`, `brush face
+    /// color|geo|4|8|palette|voxel`.
+    fn brush_option_command(&mut self, line: &str) -> String {
+        let words: Vec<&str> = line.split_whitespace().skip(1).collect();
+        let o = &mut self.brush_options;
+        let ok = match words.as_slice() {
+            ["size", n] => match n.parse::<u32>() {
+                Ok(n) if (1..=64).contains(&n) => {
+                    o.size = n;
+                    true
+                }
+                _ => false,
+            },
+            ["tip", w] => match *w {
+                "cube" => { o.sphere = false; true }
+                "sphere" => { o.sphere = true; true }
+                "2d" => { o.flat = true; true }
+                "3d" => { o.flat = false; true }
+                _ => false,
+            },
+            ["centre" | "center", w] => match *w {
+                "fill" => { o.fill_centre = true; true }
+                "ring" => { o.fill_centre = false; true }
+                "even" => { o.even = true; true }
+                "odd" => { o.even = false; true }
+                _ => false,
+            },
+            ["project", w] => match *w {
+                "on" => { o.project_line = true; true }
+                "off" => { o.project_line = false; true }
+                _ => false,
+            },
+            ["face", w] => match *w {
+                "color" | "colour" => { o.face_by_colour = true; true }
+                "geo" => { o.face_by_colour = false; true }
+                "4" => { o.face_wide = false; true }
+                "8" => { o.face_wide = true; true }
+                "palette" => { o.face_keep_colour = false; true }
+                "voxel" => { o.face_keep_colour = true; true }
+                _ => false,
+            },
+            _ => false,
+        };
+        if !ok {
+            return "brush size <1-64> | tip cube|sphere|2d|3d | centre fill|ring|even|odd | project on|off | face color|geo|4|8|palette|voxel".to_owned();
+        }
+        let o = self.brush_options;
+        format!(
+            "brush size {}, {} {}, {} {}, project {}, face {} {} {}",
+            o.size,
+            if o.sphere { "sphere" } else { "cube" },
+            if o.flat { "2d" } else { "3d" },
+            if o.fill_centre { "fill" } else { "ring" },
+            if o.even { "even" } else { "odd" },
+            if o.project_line { "on" } else { "off" },
+            if o.face_by_colour { "color" } else { "geo" },
+            if o.face_wide { 8 } else { 4 },
+            if o.face_keep_colour { "voxel" } else { "palette" },
+        )
+    }
+
+    /// The options of the chosen shape, under the shape buttons.
+    pub fn brush_options_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use eframe::egui;
+        let o = &mut self.brush_options;
+        match self.brush_shape {
+            BrushShape::Voxel => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(egui::Slider::new(&mut o.size, 1..=64).text("size")).on_hover_text("- and + change it");
+                    if ui.selectable_label(!o.sphere, "Cube").clicked() {
+                        o.sphere = false;
+                    }
+                    if ui.selectable_label(o.sphere, "Sphere").clicked() {
+                        o.sphere = true;
+                    }
+                    if ui.selectable_label(o.flat, "2D").on_hover_text("Flat on the face").clicked() {
+                        o.flat = true;
+                    }
+                    if ui.selectable_label(!o.flat, "3D").clicked() {
+                        o.flat = false;
+                    }
+                });
+            }
+            BrushShape::Line => {
+                ui.checkbox(&mut o.project_line, "Project line on the surface");
+            }
+            BrushShape::Square | BrushShape::Circle => {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut o.fill_centre, "Fill centre");
+                    ui.checkbox(&mut o.even, "Even").on_hover_text("An even size, centred on a corner");
+                });
+            }
+            BrushShape::Face => {
+                ui.horizontal_wrapped(|ui| {
+                    if ui.selectable_label(o.face_by_colour, "Colour").on_hover_text("Connected voxels of the clicked colour").clicked() {
+                        o.face_by_colour = true;
+                    }
+                    if ui.selectable_label(!o.face_by_colour, "Geo").on_hover_text("Connected voxels of any colour").clicked() {
+                        o.face_by_colour = false;
+                    }
+                    if ui.selectable_label(!o.face_wide, "4").clicked() {
+                        o.face_wide = false;
+                    }
+                    if ui.selectable_label(o.face_wide, "8").on_hover_text("Through corners too").clicked() {
+                        o.face_wide = true;
+                    }
+                    ui.checkbox(&mut o.face_keep_colour, "Voxel colour")
+                        .on_hover_text("Extrude each voxel in its own colour, not the brush's");
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// - and + resize the voxel brush, as in the reference editor.
+    pub fn brush_input(&mut self, ctx: &eframe::egui::Context) {
+        use eframe::egui::Key;
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let (down, up) = ctx.input(|i| (i.key_pressed(Key::Minus), i.key_pressed(Key::Equals) || i.key_pressed(Key::Plus)));
+        let size = &mut self.brush_options.size;
+        if down {
+            *size = size.saturating_sub(1).max(1);
+        }
+        if up {
+            *size = (*size + 1).min(64);
         }
     }
 }

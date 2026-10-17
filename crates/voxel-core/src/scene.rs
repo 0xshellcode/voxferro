@@ -169,7 +169,16 @@ impl Scene {
             let local_origin = instance.transform.inverse_apply(origin) + volume.pivot();
             // Rotations are orthonormal, so distances agree in both spaces.
             let local_dir = instance.transform.inverse_rotate(direction).normalize_or_zero();
-            let Some(hit) = raycast(volume, local_origin, local_dir, max_distance) else {
+            // Start the march where the ray enters the model's box: an
+            // orthographic ray starts far behind the eye, and stepping cell
+            // by cell from there would cost a cell per unit of the gap.
+            let Some(enter) = box_entry(local_origin, local_dir, volume.size()) else { continue };
+            let skip = (enter - 1.0).max(0.0);
+            if skip > max_distance {
+                continue;
+            }
+            let start = local_origin + local_dir * skip;
+            let Some(hit) = raycast(volume, start, local_dir, max_distance - skip) else {
                 continue;
             };
             let distance = entry_distance(local_origin, local_dir, hit.voxel);
@@ -390,6 +399,25 @@ pub struct ScenePick {
     pub distance: f32,
 }
 
+/// The distance along a ray (unit `dir`) at which it enters the box from
+/// the origin to `size`, 0 if it starts inside; `None` if it misses.
+fn box_entry(origin: Vec3, dir: Vec3, size: [u32; 3]) -> Option<f32> {
+    let max = Vec3::from_array(size.map(|s| s as f32));
+    let (mut near, mut far) = (0.0f32, f32::INFINITY);
+    for a in 0..3 {
+        if dir[a].abs() < 1e-12 {
+            if origin[a] < 0.0 || origin[a] > max[a] {
+                return None;
+            }
+            continue;
+        }
+        let (t0, t1) = ((0.0 - origin[a]) / dir[a], (max[a] - origin[a]) / dir[a]);
+        near = near.max(t0.min(t1));
+        far = far.min(t0.max(t1));
+    }
+    (near <= far).then_some(near)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,5 +505,21 @@ mod tests {
 
         let hidden = scene.pick(origin, Vec3::Y, 1000.0, |i| i.transform.translation.y == 10);
         assert_eq!(hidden.unwrap().instance, 0, "a filtered instance is not picked");
+    }
+
+    #[test]
+    fn a_pick_from_far_away_still_lands() {
+        // An orthographic click starts far behind the eye.
+        let mut scene = Scene::default();
+        let mut v = Volume::new([4, 4, 4]);
+        v.set(1, 1, 1, 5);
+        scene.models.push(v);
+        scene.instances.push(Instance { model_index: 0, ..Default::default() });
+        let far = Vec3::new(-0.5, -0.5, 60_000.0);
+        let pick = scene.pick(far, -Vec3::Z, 1.0e6, |_| true).expect("hit");
+        assert_eq!(pick.hit.voxel, glam::IVec3::new(1, 1, 1));
+        assert!((pick.distance - (60_000.0 - 0.0)).abs() < 2.0, "{}", pick.distance);
+        assert!(scene.pick(far, -Vec3::Z, 10_000.0, |_| true).is_none(), "out of reach");
+        assert!(scene.pick(far, Vec3::Z, 1.0e6, |_| true).is_none(), "facing away");
     }
 }

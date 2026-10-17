@@ -68,7 +68,7 @@ impl App {
         let visible = self.visibility();
         let Some(loaded) = &self.scene else { return false };
         let scene = &loaded.doc.scene;
-        let Some(pick) = scene.pick(ray.origin, ray.direction, 10_000.0, |i| visible.shows(i)) else {
+        let Some(pick) = scene.pick(ray.origin, ray.direction, crate::edit::PICK_RANGE, |i| visible.shows(i)) else {
             return false;
         };
         self.selected = pick.instance;

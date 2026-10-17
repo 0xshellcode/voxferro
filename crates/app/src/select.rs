@@ -127,7 +127,13 @@ impl App {
             return Vec::new();
         };
         match self.brush_shape {
-            BrushShape::Face => brush::face_region(volume, hit.voxel, hit.face),
+            BrushShape::Face => brush::face_region_with(
+                volume,
+                hit.voxel,
+                hit.face,
+                self.brush_options.face_by_colour,
+                self.brush_options.face_wide,
+            ),
             BrushShape::Fill => brush::region(volume, hit.voxel, self.region),
             _ => vec![hit.voxel],
         }
@@ -153,7 +159,7 @@ impl App {
         let pick = loaded
             .doc
             .scene
-            .pick(ray.origin, ray.direction, 10_000.0, |i| visible.shows(i))?;
+            .pick(ray.origin, ray.direction, crate::edit::PICK_RANGE, |i| visible.shows(i))?;
         Some((pick.instance, pick.hit))
     }
 
@@ -424,6 +430,7 @@ impl App {
         if ui.add_enabled(!self.clipboard.is_empty(), egui::Button::new("Paste").small()).clicked() {
             run(self, "paste");
         }
+        ui.add_enabled_ui(count > 0, |ui| self.transform_ui(ui));
 
         ui.heading("Model");
         // Fill the Resize fields from the model whenever it, or its size,

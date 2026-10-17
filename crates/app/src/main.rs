@@ -39,6 +39,7 @@ mod scene;
 mod scene_ui;
 mod select;
 mod tools;
+mod transform;
 mod view_options;
 mod trace_cache;
 #[cfg(windows)]
@@ -262,6 +263,9 @@ struct App {
     mirror: [bool; 3],
     /// Axis mode: strokes run through the whole model on these axes.
     axis_lock: [bool; 3],
+    /// The Brush panel's options: voxel size and tip, square and circle,
+    /// line projection, the face brush's region and colour.
+    brush_options: voxel_core::brush::BrushOptions,
     /// What a Fill click takes in, when erasing, painting or selecting.
     region: voxel_core::brush::Region,
     /// The pattern brush's model, and whether it keeps its own colours.
@@ -405,6 +409,7 @@ impl App {
             brush_mode: voxel_core::BrushMode::Attach,
             mirror: [false; 3],
             axis_lock: [false; 3],
+            brush_options: voxel_core::brush::BrushOptions::default(),
             region: voxel_core::brush::Region::default(),
             pattern: None,
             pattern_own_colours: true,
@@ -924,6 +929,7 @@ impl App {
                 ui.selectable_value(&mut self.brush_shape, shape, capitalised(name));
             }
         });
+        self.brush_options_ui(ui);
         ui.horizontal(|ui| {
             ui.label("Mirror");
             for (axis, name) in ["x", "y", "z"].iter().enumerate() {
@@ -1269,6 +1275,15 @@ impl App {
 
         if line.split_whitespace().next() == Some("instance") {
             let message = self.instance_command(line);
+            self.console_log.push(message);
+            if self.mesh_dirty {
+                self.refresh_document(state);
+            }
+            return;
+        }
+
+        if line.split_whitespace().next() == Some("transform") {
+            let message = self.transform_command(line);
             self.console_log.push(message);
             if self.mesh_dirty {
                 self.refresh_document(state);
@@ -1932,6 +1947,7 @@ impl eframe::App for App {
         self.selection_input(&ctx);
         self.camera_input(&ctx);
         self.view_input(&ctx);
+        self.brush_input(&ctx);
         if !self.view.background && self.meshed_for != Some(self.selected) {
             self.mesh_dirty = true;
         }

@@ -35,6 +35,10 @@ pub enum BrushShape {
     /// Flood fill: connected voxels of one colour for erase and paint; the
     /// enclosed empty region of a layer for attach.
     Fill,
+    /// A square in the face's plane, dragged out from its centre.
+    Square,
+    /// A circle in the face's plane, dragged out from its centre.
+    Circle,
     /// A click runs the chosen voxel script over the model, and its result
     /// is attached, erased or painted (the reference editor's shader mode).
     Shader,
@@ -59,10 +63,12 @@ impl BrushMode {
 }
 
 impl BrushShape {
-    pub const ALL: [(BrushShape, &'static str); 7] = [
+    pub const ALL: [(BrushShape, &'static str); 9] = [
         (BrushShape::Voxel, "voxel"),
         (BrushShape::Box, "box"),
         (BrushShape::Line, "line"),
+        (BrushShape::Square, "square"),
+        (BrushShape::Circle, "circle"),
         (BrushShape::Face, "face"),
         (BrushShape::Fill, "fill"),
         (BrushShape::Shader, "shader"),
@@ -79,8 +85,167 @@ impl BrushShape {
 
     /// Shapes defined by a press and a release, previewed while dragging.
     pub fn is_dragged(self) -> bool {
-        matches!(self, BrushShape::Box | BrushShape::Line)
+        matches!(self, BrushShape::Box | BrushShape::Line | BrushShape::Square | BrushShape::Circle)
     }
+}
+
+/// The brush options of the reference editor's Brush panel (`m_brush.ui`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrushOptions {
+    /// The voxel brush's size, 1 to 64 ("Voxel Size").
+    pub size: u32,
+    /// A round tip instead of a square one ("Cube/Sphere Shape").
+    pub sphere: bool,
+    /// A tip flat in the face's plane instead of a solid ("2D/3D Shape").
+    pub flat: bool,
+    /// Square and circle filled, not just their outline ("Fill Center").
+    pub fill_centre: bool,
+    /// Square and circle of even size, centred on a corner ("Even").
+    pub even: bool,
+    /// The line laid onto the surface below it ("Project Line").
+    pub project_line: bool,
+    /// The face brush's region: same colour only, or any ("Color/Geo").
+    pub face_by_colour: bool,
+    /// ... through edges as well as sides ("4/8 Neighbor").
+    pub face_wide: bool,
+    /// Extruding keeps each voxel's colour instead of the brush's ("Use
+    /// Voxel Color").
+    pub face_keep_colour: bool,
+}
+
+impl Default for BrushOptions {
+    fn default() -> Self {
+        Self {
+            size: 1,
+            sphere: false,
+            flat: false,
+            fill_centre: true,
+            even: false,
+            project_line: false,
+            face_by_colour: true,
+            face_wide: false,
+            face_keep_colour: false,
+        }
+    }
+}
+
+/// The two axes of a face's plane.
+fn plane_axes(axis: usize) -> (usize, usize) {
+    match axis {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    }
+}
+
+/// The voxel brush's tip at `centre`: `size` cells across, square or
+/// round, flat in the plane across `axis` or solid. A solid tip that
+/// `outward` is nonzero for (attaching) grows from the surface outward along
+/// that sign of `axis`; otherwise it is centred.
+pub fn tip_cells(centre: IVec3, axis: usize, outward: i32, o: &BrushOptions) -> Vec<IVec3> {
+    let n = o.size.clamp(1, 64) as i32;
+    if n == 1 {
+        return vec![centre];
+    }
+    let lo = -((n - 1) / 2);
+    let hi = lo + n - 1;
+    let (u, v) = plane_axes(axis);
+    let along: Vec<i32> = match (o.flat, outward.signum()) {
+        (true, _) => vec![0],
+        (false, 0) => (lo..=hi).collect(),
+        (false, s) => (0..n).map(|k| k * s).collect(),
+    };
+    // The tip's centre in offsets, for the round test.
+    let mid = (lo + hi) as f32 * 0.5;
+    let mid_along = if along.len() == 1 { 0.0 } else { (along[0] + along[along.len() - 1]) as f32 * 0.5 };
+    let r2 = (n as f32 * 0.5).powi(2);
+    let mut out = Vec::new();
+    for &a in &along {
+        for j in lo..=hi {
+            for i in lo..=hi {
+                if o.sphere {
+                    let (di, dj, da) = (i as f32 - mid, j as f32 - mid, a as f32 - mid_along);
+                    if di * di + dj * dj + da * da > r2 {
+                        continue;
+                    }
+                }
+                let mut p = centre;
+                p[u] += i;
+                p[v] += j;
+                p[axis] += a;
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// A square or circle in the plane across `axis` through `centre`, out to
+/// `end`: its radius is how far the drag went (the larger of the two plane
+/// distances for a square, the straight distance for a circle). Even
+/// shapes are centred on `centre`'s far corner; without `fill_centre` only
+/// the outline is kept.
+pub fn centre_cells(centre: IVec3, end: IVec3, axis: usize, round: bool, o: &BrushOptions) -> Vec<IVec3> {
+    let (u, v) = plane_axes(axis);
+    let (du, dv) = ((end[u] - centre[u]) as f32, (end[v] - centre[v]) as f32);
+    let r = if round { (du * du + dv * dv).sqrt().round() } else { du.abs().max(dv.abs()) };
+    let shift = if o.even { 0.5 } else { 0.0 };
+    let reach = r as i32 + 1;
+    // Inside: by the larger distance for a square, the straight one for a
+    // circle; the half added to a circle's radius rounds its outline.
+    let inside = |i: f32, j: f32, limit: f32| {
+        if round { i * i + j * j <= (limit + 0.5) * (limit + 0.5) } else { i.abs().max(j.abs()) <= limit }
+    };
+    let mut out = Vec::new();
+    for j in -reach..=reach {
+        for i in -reach..=reach {
+            let (fi, fj) = (i as f32 - shift, j as f32 - shift);
+            // Even: one wider than odd, so the centre falls on a corner.
+            let limit = if o.even { r + 0.5 } else { r };
+            if !inside(fi, fj, limit) {
+                continue;
+            }
+            if !o.fill_centre && inside(fi, fj, limit - 1.0) {
+                continue;
+            }
+            let mut p = centre;
+            p[u] += i;
+            p[v] += j;
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// A line's cells laid onto the surface, along `axis` toward the inside of
+/// the face it was drawn on (`outward` is the face's sign): each lands on
+/// the first voxel it meets coming in from outside the box -- in front of
+/// it when attaching, on it otherwise. Cells that meet nothing land on the
+/// box's far side.
+pub fn project_onto_surface(volume: &Volume, cells: &[IVec3], axis: usize, outward: i32, mode: BrushMode) -> Vec<IVec3> {
+    let size = volume.size()[axis] as i32;
+    let step = -outward.signum();
+    let start = if step < 0 { size - 1 } else { 0 };
+    cells
+        .iter()
+        .map(|&c| {
+            let mut p = c;
+            let mut k = start;
+            while (0..size).contains(&k) {
+                p[axis] = k;
+                if volume.get_i(p.x, p.y, p.z) != 0 {
+                    if mode == BrushMode::Attach {
+                        p[axis] = k - step;
+                    }
+                    return p;
+                }
+                k += step;
+            }
+            // Nothing below: the far side of the box.
+            p[axis] = start + step * (size - 1);
+            if mode == BrushMode::Attach { p } else { c }
+        })
+        .collect()
 }
 
 /// The cell a stroke is anchored on: the empty cell in front of the hit face
@@ -160,6 +325,41 @@ fn flood(start: IVec3, neighbours: impl Fn(IVec3) -> Vec<IVec3>, accept: impl Fn
         }
     }
     out
+}
+
+/// The flat region a face belongs to, by the face options: voxels of the
+/// clicked colour (or any), connected within the face's plane through
+/// sides (or edges too), whose same face is exposed to the air.
+pub fn face_region_with(volume: &Volume, voxel: IVec3, face: Face, by_colour: bool, wide: bool) -> Vec<IVec3> {
+    let colour = volume.get_i(voxel.x, voxel.y, voxel.z);
+    if colour == 0 {
+        return Vec::new();
+    }
+    let o = face.offset();
+    let out = IVec3::new(o[0], o[1], o[2]);
+    let axis = face_axis(face);
+    let (u, v) = plane_axes(axis);
+    flood(
+        voxel,
+        |p| {
+            let mut n = Vec::with_capacity(8);
+            for (du, dv) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                if !wide && du != 0 && dv != 0 {
+                    continue;
+                }
+                let mut q = p;
+                q[u] += du;
+                q[v] += dv;
+                n.push(q);
+            }
+            n
+        },
+        |p| {
+            let c = volume.get_i(p.x, p.y, p.z);
+            let front = p + out;
+            c != 0 && (!by_colour || c == colour) && volume.get_i(front.x, front.y, front.z) == 0
+        },
+    )
 }
 
 /// The flat region a face belongs to: voxels of the same colour, connected
@@ -281,14 +481,19 @@ pub fn empty_region_in_plane(volume: &Volume, start: IVec3, axis: usize) -> Vec<
 ///
 /// `end` is only used by the dragged shapes; the app projects the cursor
 /// onto the anchor's plane to get it.
-pub fn stroke_cells(volume: &Volume, mode: BrushMode, shape: BrushShape, hit: &Hit, end: IVec3) -> Vec<IVec3> {
+pub fn stroke_cells(volume: &Volume, mode: BrushMode, shape: BrushShape, hit: &Hit, end: IVec3, o: &BrushOptions) -> Vec<IVec3> {
     let start = anchor(mode, hit);
+    let axis = face_axis(hit.face);
+    let outward = hit.face.offset()[axis];
     match shape {
-        BrushShape::Voxel => vec![start],
+        BrushShape::Voxel => tip_cells(start, axis, if mode == BrushMode::Attach { outward } else { 0 }, o),
         BrushShape::Box => box_cells(start, end),
+        BrushShape::Line if o.project_line => project_onto_surface(volume, &line_cells(start, end), axis, outward, mode),
         BrushShape::Line => line_cells(start, end),
+        BrushShape::Square => centre_cells(start, end, axis, false, o),
+        BrushShape::Circle => centre_cells(start, end, axis, true, o),
         BrushShape::Face => {
-            let region = face_region(volume, hit.voxel, hit.face);
+            let region = face_region_with(volume, hit.voxel, hit.face, o.face_by_colour, o.face_wide);
             if mode == BrushMode::Attach {
                 let o = hit.face.offset();
                 let out = IVec3::new(o[0], o[1], o[2]);
@@ -516,7 +721,7 @@ mod tests {
     #[test]
     fn attach_box_adds_a_layer_on_top_without_touching_the_floor() {
         let v = floor();
-        let cells = stroke_cells(&v, BrushMode::Attach, BrushShape::Box, &top_hit(1, 1), IVec3::new(3, 2, 1));
+        let cells = stroke_cells(&v, BrushMode::Attach, BrushShape::Box, &top_hit(1, 1), IVec3::new(3, 2, 1), &BrushOptions::default());
         let w = writes(&v, BrushMode::Attach, 9, &cells);
         assert_eq!(w.len(), 3 * 2);
         assert!(w.iter().all(|(p, c)| p.z == 1 && *c == 9));
@@ -525,14 +730,14 @@ mod tests {
     #[test]
     fn face_paint_recolours_only_the_flat_patch_of_one_colour() {
         let v = floor();
-        let cells = stroke_cells(&v, BrushMode::Paint, BrushShape::Face, &top_hit(3, 3), IVec3::ZERO);
+        let cells = stroke_cells(&v, BrushMode::Paint, BrushShape::Face, &top_hit(3, 3), IVec3::ZERO, &BrushOptions::default());
         assert_eq!(cells.len(), 4, "the 2x2 patch, not the whole floor");
     }
 
     #[test]
     fn face_attach_extrudes_the_region() {
         let v = floor();
-        let cells = stroke_cells(&v, BrushMode::Attach, BrushShape::Face, &top_hit(0, 0), IVec3::ZERO);
+        let cells = stroke_cells(&v, BrushMode::Attach, BrushShape::Face, &top_hit(0, 0), IVec3::ZERO, &BrushOptions::default());
         // The floor of colour 1 minus the patch: 64 - 4.
         assert_eq!(cells.len(), 60);
         assert!(cells.iter().all(|p| p.z == 1));
@@ -550,7 +755,7 @@ mod tests {
     #[test]
     fn fill_erase_removes_the_connected_colour_only() {
         let v = floor();
-        let cells = stroke_cells(&v, BrushMode::Erase, BrushShape::Fill, &top_hit(4, 4), IVec3::ZERO);
+        let cells = stroke_cells(&v, BrushMode::Erase, BrushShape::Fill, &top_hit(4, 4), IVec3::ZERO, &BrushOptions::default());
         let w = writes(&v, BrushMode::Erase, 0, &cells);
         assert_eq!(w.len(), 4);
     }
@@ -564,7 +769,7 @@ mod tests {
                 v.set(x, y, 1, 3);
             }
         }
-        let cells = stroke_cells(&v, BrushMode::Attach, BrushShape::Fill, &top_hit(3, 3), IVec3::ZERO);
+        let cells = stroke_cells(&v, BrushMode::Attach, BrushShape::Fill, &top_hit(3, 3), IVec3::ZERO, &BrushOptions::default());
         assert_eq!(cells.len(), 4, "the hole inside the ring, not the layer outside");
     }
 
@@ -650,5 +855,61 @@ mod tests {
         let writes = pattern_writes(&floor(), BrushMode::Attach, &on);
         assert_eq!(writes.len(), 18);
         assert_eq!(pattern_writes(&floor(), BrushMode::Paint, &into).len(), 9);
+    }
+
+    #[test]
+    fn tips_by_size_shape_and_depth() {
+        let o = |size, sphere, flat| BrushOptions { size, sphere, flat, ..Default::default() };
+        let c = IVec3::new(10, 10, 10);
+        assert_eq!(tip_cells(c, 2, 1, &o(1, false, false)), vec![c]);
+        assert_eq!(tip_cells(c, 2, 0, &o(3, false, false)).len(), 27);
+        assert_eq!(tip_cells(c, 2, 0, &o(3, false, true)).len(), 9);
+        // Attaching grows outward from the surface: z from 10 up.
+        let up = tip_cells(c, 2, 1, &o(3, false, false));
+        assert!(up.iter().all(|p| (10..=12).contains(&p.z)));
+        let down = tip_cells(c, 2, -1, &o(3, false, false));
+        assert!(down.iter().all(|p| (8..=10).contains(&p.z)));
+        // A round tip is smaller than its cube, and even sizes work.
+        let ball = tip_cells(c, 2, 0, &o(5, true, false)).len();
+        assert!(ball < 125 && ball > 50, "{ball}");
+        assert_eq!(tip_cells(c, 2, 0, &o(4, false, true)).len(), 16);
+    }
+
+    #[test]
+    fn squares_and_circles_from_the_centre() {
+        let filled = BrushOptions::default();
+        let c = IVec3::new(5, 5, 0);
+        let sq = centre_cells(c, IVec3::new(7, 6, 0), 2, false, &filled);
+        assert_eq!(sq.len(), 25);
+        let even = BrushOptions { even: true, ..filled };
+        assert_eq!(centre_cells(c, IVec3::new(7, 6, 0), 2, false, &even).len(), 36);
+        let ring = BrushOptions { fill_centre: false, ..filled };
+        assert_eq!(centre_cells(c, IVec3::new(7, 6, 0), 2, false, &ring).len(), 16);
+        let disc = centre_cells(c, IVec3::new(8, 5, 0), 2, true, &filled);
+        assert!(disc.len() > 25 && disc.len() < 49, "{}", disc.len());
+        assert!(disc.contains(&IVec3::new(8, 5, 0)) && !disc.contains(&IVec3::new(8, 8, 0)));
+        assert!(centre_cells(c, c, 2, true, &filled) == vec![c]);
+    }
+
+    #[test]
+    fn lines_land_on_the_surface() {
+        // A floor at z = 0 with a block at (4, 4, 1..=3).
+        let mut v = floor();
+        for z in 1..4 {
+            v.set(4, 4, z, 1);
+        }
+        let line = [IVec3::new(3, 4, 1), IVec3::new(4, 4, 1), IVec3::new(5, 4, 1)];
+        let on = project_onto_surface(&v, &line, 2, 1, BrushMode::Attach);
+        assert_eq!(on, vec![IVec3::new(3, 4, 1), IVec3::new(4, 4, 4), IVec3::new(5, 4, 1)]);
+        let paint = project_onto_surface(&v, &line, 2, 1, BrushMode::Paint);
+        assert_eq!(paint[1], IVec3::new(4, 4, 3));
+    }
+
+    #[test]
+    fn face_options_widen_the_region() {
+        let v = floor();
+        let hit = top_hit(0, 0);
+        assert_eq!(face_region_with(&v, hit.voxel, hit.face, true, false).len(), 60);
+        assert_eq!(face_region_with(&v, hit.voxel, hit.face, false, false).len(), 64);
     }
 }

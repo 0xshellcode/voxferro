@@ -13,6 +13,11 @@ pub struct Ray {
 ///
 /// `pixel` is in egui's screen space, where Y grows downwards, while NDC has Y
 /// up and — on wgpu — Z running 0 (near) to 1 (far).
+/// How far a click reaches. Far: an orthographic view's ray starts behind
+/// its eye (the projection's near plane is there, so nothing is clipped),
+/// and the pick marches only inside each model's box anyway.
+pub const PICK_RANGE: f32 = 1.0e6;
+
 pub fn ray_through_pixel(view_proj: Mat4, viewport: Vec2, pixel: Vec2) -> Ray {
     let ndc = Vec2::new(
         (pixel.x / viewport.x) * 2.0 - 1.0,
