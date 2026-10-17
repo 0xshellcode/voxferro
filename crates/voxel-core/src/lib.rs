@@ -30,7 +30,7 @@ pub mod voxelize;
 pub use brush::{BrushMode, BrushShape};
 pub use atmosphere::{Atmosphere, AtmosphereSettings, PLANET_RADIUS, SKY_SCALE};
 pub use command::{Command, History};
-pub use document::Document;
+pub use document::{Document, identity_order};
 pub use env_map::{EnvMap, EnvSampling, HdrError};
 pub use mesh::{Face, Mesh, Vertex};
 pub use raycast::{raycast, Hit};

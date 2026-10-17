@@ -34,6 +34,7 @@ mod model_edit;
 mod macos_open;
 mod recent;
 mod palette_files;
+mod palette_ops;
 mod palette_ui;
 mod project;
 mod move_tool;
@@ -267,6 +268,10 @@ struct App {
     selected_group: Option<i32>,
     /// Several objects selected in the Move tool, by transform node.
     objects: Vec<i32>,
+    /// Palette colours selected together (Shift+click), and the region
+    /// `palette copy` keeps: display slot and colour.
+    palette_selection: Vec<u8>,
+    palette_region: Vec<(usize, vox_format::Color)>,
     /// A marquee over objects, being dragged in the Move tool.
     object_marquee: Option<objects::ObjectMarquee>,
     /// Objects copied (`object copy`), and the operand set aside for
@@ -436,6 +441,8 @@ impl App {
             selected: 0,
             selected_group: None,
             objects: Vec::new(),
+            palette_selection: Vec::new(),
+            palette_region: Vec::new(),
             object_marquee: None,
             object_clip: Vec::new(),
             operand: Default::default(),
@@ -950,9 +957,14 @@ impl App {
                 rect.min + egui::vec2(cx as f32 * cell_w, cy as f32 * cell_h),
                 egui::vec2(cell_w - 1.0, cell_h - 1.0),
             );
-            let c = loaded.doc.palette.color(i as u8);
+            // The display order (`IMAP`): slot i shows this colour.
+            let index = loaded.doc.palette_order[i];
+            let c = loaded.doc.palette.color(index);
             painter.rect_filled(cell, 1.0, egui::Color32::from_rgb(c.r, c.g, c.b));
-            if i as u8 == self.brush_color {
+            if self.palette_selection.contains(&index) && index != self.brush_color {
+                painter.rect_stroke(cell.shrink(1.0), 1.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 180, 255)), egui::StrokeKind::Inside);
+            }
+            if index == self.brush_color {
                 painter.rect_stroke(
                     cell,
                     1.0,
@@ -966,9 +978,16 @@ impl App {
             let local = pos - rect.min;
             let (cx, cy) = ((local.x / cell_w) as usize, (local.y / cell_h) as usize);
             if cx < COLS {
-                let index = cy * COLS + cx;
-                if index < 256 {
-                    self.brush_color = index as u8;
+                let slot = cy * COLS + cx;
+                if slot < 256 {
+                    let index = loaded.doc.palette_order[slot];
+                    if ui.input(|i| i.modifiers.shift) {
+                        // Shift+click: in or out of the palette selection.
+                        self.toggle_palette_colour(index);
+                    } else {
+                        self.palette_selection.clear();
+                        self.brush_color = index;
+                    }
                 }
             }
         }

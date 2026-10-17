@@ -193,7 +193,7 @@ impl App {
         })
     }
 
-    fn palette_batch(&mut self, commands: Vec<Command>, what: &str, state: &egui_wgpu::RenderState) -> String {
+    pub(crate) fn palette_batch(&mut self, commands: Vec<Command>, what: &str, state: &egui_wgpu::RenderState) -> String {
         let Some(loaded) = self.scene.as_mut() else { return "no document".to_owned() };
         self.history.end_gesture();
         if self.history.exec_alone(&mut loaded.doc, Command::Batch(commands)) {

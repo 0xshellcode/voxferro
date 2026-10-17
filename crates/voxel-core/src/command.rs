@@ -44,6 +44,9 @@ pub enum Command {
     SetRender { before: Vec<Dict>, after: Vec<Dict> },
     /// Replaces the `META` objects: the animation range.
     SetMeta { before: Vec<Dict>, after: Vec<Dict> },
+    /// Reorders the palette as shown: display slot to colour index (the
+    /// file's `IMAP`). Colours and voxels stay as they are.
+    SetPaletteOrder { before: Box<[u8; 256]>, after: Box<[u8; 256]> },
     /// Replaces the saved cameras: a view stored in a slot.
     SetCameras { before: Vec<vox_format::Camera>, after: Vec<vox_format::Camera> },
     /// Replaces the layer table: names, colours, visibility, new layers.
@@ -144,6 +147,7 @@ impl Command {
             Self::SetRender { before, after } => before == after,
             Self::SetLayers { before, after } => before == after,
             Self::SetMeta { before, after } => before == after,
+            Self::SetPaletteOrder { before, after } => before == after,
             Self::SetCameras { before, after } => before == after,
             Self::PushModel { .. } => false,
             Self::Batch(commands) => commands.iter().all(Command::is_empty),
@@ -171,6 +175,7 @@ impl Command {
             Self::SetRender { after, .. } => document.render = after.clone(),
             Self::SetLayers { after, .. } => document.layers = after.clone(),
             Self::SetMeta { after, .. } => document.meta = after.clone(),
+            Self::SetPaletteOrder { after, .. } => document.palette_order = after.clone(),
             Self::SetCameras { after, .. } => document.cameras = after.clone(),
             Self::PushModel { volume } => {
                 document.scene.models.push(volume.clone());
@@ -208,6 +213,7 @@ impl Command {
             Self::SetRender { before, .. } => document.render = before.clone(),
             Self::SetLayers { before, .. } => document.layers = before.clone(),
             Self::SetMeta { before, .. } => document.meta = before.clone(),
+            Self::SetPaletteOrder { before, .. } => document.palette_order = before.clone(),
             Self::SetCameras { before, .. } => document.cameras = before.clone(),
             Self::PushModel { .. } => {
                 document.scene.models.pop();

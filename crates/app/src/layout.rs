@@ -319,6 +319,8 @@ impl App {
         }
         egui::CollapsingHeader::new(egui::RichText::new("COLOR").size(10.5)).id_salt("color editor").show(ui, |ui| {
             self.palette_editor_ui(ui, state);
+            ui.add_space(4.0);
+            self.palette_tools_ui(ui, state);
         });
     }
 

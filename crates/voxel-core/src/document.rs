@@ -9,7 +9,7 @@ use vox_format::{Dict, Layer, Material, Palette};
 /// Commands act on this rather than on a single volume, which is what lets
 /// one undo stack hold voxel strokes on any model, palette changes and
 /// material changes side by side, in the order they happened.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Document {
     pub scene: Scene,
     pub palette: Palette,
@@ -24,6 +24,29 @@ pub struct Document {
     pub meta: Vec<Dict>,
     /// `rCAM` saved cameras (see `saved_camera`).
     pub cameras: Vec<vox_format::Camera>,
+    /// The palette as shown: display slot to colour index (`IMAP`).
+    /// Sorting reorders this, never the colours, so voxels keep theirs.
+    pub palette_order: Box<[u8; 256]>,
+}
+
+impl Default for Document {
+    fn default() -> Self {
+        Self {
+            scene: Scene::default(),
+            palette: Palette::default(),
+            materials: Vec::new(),
+            render: Vec::new(),
+            layers: Vec::new(),
+            meta: Vec::new(),
+            cameras: Vec::new(),
+            palette_order: identity_order(),
+        }
+    }
+}
+
+/// Slot k shows colour k.
+pub fn identity_order() -> Box<[u8; 256]> {
+    Box::new(std::array::from_fn(|k| k as u8))
 }
 
 impl Document {

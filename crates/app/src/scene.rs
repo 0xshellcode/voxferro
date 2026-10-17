@@ -57,6 +57,7 @@ impl LoadedScene {
                 layers: layers_for(&file),
                 meta: file.meta.clone(),
                 cameras: file.cameras.clone(),
+                palette_order: file.index_map.clone().unwrap_or_else(voxel_core::identity_order),
             },
             source: file,
             path,
@@ -95,6 +96,8 @@ impl LoadedScene {
         // The graph as edited: moved, added and removed instances.
         file.nodes = self.doc.scene.nodes.clone();
         file.palette = self.doc.palette.clone();
+        // The display order, only when it is not the plain one.
+        file.index_map = (self.doc.palette_order != voxel_core::identity_order()).then(|| self.doc.palette_order.clone());
         file.materials = self.doc.materials.clone();
         file.render_objects = self.doc.render.clone();
         file.layers = self.doc.layers.clone();

@@ -137,6 +137,12 @@ impl App {
     /// where keys are metal, rough, trans, ior, density, emit, flux, media
     /// (0 absorb, 1 scatter, 2 emit, 3 sss) and g.
     pub fn palette_command(&mut self, line: &str, state: &egui_wgpu::RenderState) -> String {
+        let words: Vec<&str> = line.split_whitespace().skip(1).collect();
+        if line.starts_with("palette ")
+            && let Some(message) = self.palette_tool_command(&words, state)
+        {
+            return message;
+        }
         if let Some(message) = self.palette_file_command(line, state) {
             return message;
         }
