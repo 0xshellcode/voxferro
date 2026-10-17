@@ -60,8 +60,20 @@ pub fn renamed(path: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(path.parent().unwrap_or(Path::new(".")).join(name))
 }
 
+/// The Project panel's tabs, as the reference editor's (`file.ui`): project files,
+/// patterns, voxel scripts ("shader"), and the scene outline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tab {
+    #[default]
+    Project,
+    Pattern,
+    Shader,
+    Outline,
+}
+
 #[derive(Default)]
 pub struct ProjectState {
+    pub tab: Tab,
     dir: Option<PathBuf>,
     /// The folder's files, read on first use and after each change.
     files: Option<Vec<PathBuf>>,
@@ -224,6 +236,53 @@ impl App {
             Some(false) => self.project.confirm_delete = None,
             None => {}
         }
+    }
+
+    /// The right-hand Project panel: tabs above, Export folded below.
+    pub fn project_panel(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
+        ui.heading("Project");
+        ui.horizontal(|ui| {
+            for (tab, label, hint) in [
+                (Tab::Project, "Project", "The project folder's models"),
+                (Tab::Pattern, "Pattern", "The pattern brush's model and library"),
+                (Tab::Shader, "Shader", "Voxel scripts"),
+                (Tab::Outline, "Outline", "The scene: models, groups, layers, animation"),
+            ] {
+                if ui.selectable_label(self.project.tab == tab, label).on_hover_text(hint).clicked() {
+                    self.project.tab = tab;
+                }
+            }
+        });
+        ui.separator();
+        // Export at the bottom, as there; the tab's content fills the rest.
+        egui::Panel::bottom("project export").show(ui, |ui| {
+            egui::CollapsingHeader::new("EXPORT").id_salt("project export").show(ui, |ui| {
+                ui.add_enabled_ui(self.scene.is_some(), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for (name, _, hint) in crate::exchange::FORMATS {
+                            if ui.button(name).on_hover_text(hint).clicked() {
+                                let m = self.export_command(&format!("export {name}"));
+                                self.console_log.push(m);
+                            }
+                        }
+                    });
+                });
+            });
+        });
+        egui::ScrollArea::vertical().id_salt("project tab").show(ui, |ui| match self.project.tab {
+            Tab::Project => self.project_ui(ui, state),
+            Tab::Pattern => self.pattern_ui(ui),
+            Tab::Shader => self.scripts_ui(ui, state),
+            Tab::Outline => {
+                self.scene_ui(ui);
+                ui.separator();
+                ui.label("Layers");
+                self.layers_ui(ui);
+                ui.separator();
+                ui.label("Animation");
+                self.animation_ui(ui);
+            }
+        });
     }
 
     pub fn project_ui(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {

@@ -149,93 +149,87 @@ impl App {
         format!("{what}: {count} voxels changed")
     }
 
-    pub fn edit_ui(&mut self, ui: &mut egui::Ui) {
+    /// the reference editor's Edit panel (`m_edit.ui`), in its order: Tool and
+    /// Select open, the rest folded.
+    pub fn edit_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Edit");
         let mut lines: Vec<String> = Vec::new();
+        /// A row of buttons, each running a command.
         fn row(ui: &mut egui::Ui, buttons: &[(&str, &str, &str)], lines: &mut Vec<String>) {
             ui.horizontal_wrapped(|ui| {
                 for (label, line, hint) in buttons {
-                    if ui.small_button(*label).on_hover_text(*hint).clicked() {
+                    if ui.button(*label).on_hover_text(*hint).clicked() {
                         lines.push((*line).to_owned());
                     }
                 }
             });
         }
-        row(
-            ui,
-            &[
-                ("Full", "full", "Fill the whole box with the colour"),
-                ("Fill", "fill", "Repaint every voxel with the colour"),
-                ("Clear", "zero", "Remove every voxel"),
-                ("Reverse", "rev", "Swap solid and empty: empty space takes the colour"),
-                ("2X", "x2", "Double the size"),
-                ("1/2", "xh", "Halve the size"),
-            ],
-            &mut lines,
-        );
-        ui.horizontal(|ui| {
-            ui.label("Loop");
-            for a in ["x", "y", "z"] {
-                for (sign, step) in [("+", 1), ("-", -1)] {
-                    if ui.small_button(format!("{sign}{}", a.to_uppercase())).on_hover_text("Move, wrapping at the edges").clicked() {
-                        lines.push(format!("loop {a} {step}"));
-                    }
-                }
-            }
-        });
-        let fields = &mut self.edit_fields;
-        for (label, verb, text, hint) in [
-            ("Loop", "loop", &mut fields.loop_, "axis offset"),
-            ("Scale", "scale", &mut fields.scale, "axes factor"),
-            ("Shear", "shear", &mut fields.shear, "axis a b: layers across the axis slide by depth × a, b"),
-            ("Rotate", "rot", &mut fields.rot, "axis degrees"),
-            ("Repeat", "repeat", &mut fields.repeat, "axes count"),
-        ] {
+        /// A text field and Apply, as the reference editor's numeric sections.
+        fn field(ui: &mut egui::Ui, verb: &str, text: &mut String, hint: &str, lines: &mut Vec<String>) {
             ui.horizontal(|ui| {
-                ui.add_sized([46.0, 18.0], egui::Label::new(label));
-                let field = ui.add(egui::TextEdit::singleline(text).desired_width(90.0)).on_hover_text(hint);
-                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let response = ui.add(egui::TextEdit::singleline(text).desired_width(100.0)).on_hover_text(hint);
+                let entered = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if ui.small_button("Apply").clicked() || entered {
                     lines.push(format!("{verb} {text}"));
                 }
             });
         }
-        for (label, verb, hint) in [
-            ("Mirror", "mir", "Copy the lower half onto the upper half, reflected"),
-            ("Diagonal", "dia", "Copy one side of the diagonal across the axis onto the other"),
-        ] {
+        fn axes(ui: &mut egui::Ui, verb: &str, hint: &str, lines: &mut Vec<String>) {
             ui.horizontal(|ui| {
-                ui.add_sized([46.0, 18.0], egui::Label::new(label));
                 for a in ["x", "y", "z"] {
-                    if ui.small_button(a).on_hover_text(hint).clicked() {
+                    if ui.button(a.to_uppercase()).on_hover_text(hint).clicked() {
                         lines.push(format!("{verb} {a}"));
                     }
                 }
             });
         }
-        row(
-            ui,
-            &[
-                ("Ellipsoid", "prim elli", "Fill the box with an ellipsoid"),
-                ("Cylinder", "prim cyli", "Fill the box with a cylinder up z"),
-                ("Pyramid", "prim pyra", "Fill the box with a pyramid"),
-                ("Cone", "prim cone", "Fill the box with a cone"),
-            ],
-            &mut lines,
-        );
-        row(
-            ui,
-            &[
-                ("Hull", "flood 0", "Remove every voxel that can't be seen"),
-                ("Flood", "flood", "Fill enclosed empty space with the colour"),
-                ("Dilation", "dil", "Grow by a voxel, in the colour"),
-                ("Erosion", "ero", "Wear away a voxel"),
-                ("Mask", "mask", "Keep only the voxels under the pattern, tiled over the box"),
-                ("Texture", "tex", "Repaint the voxels under the tiled pattern with its colours"),
-            ],
-            &mut lines,
-        );
+        let section = |name: &str, open: bool| egui::CollapsingHeader::new(name).id_salt(("edit", name)).default_open(open);
+
+        section("TOOL", true).show(ui, |ui| {
+            row(ui, &[("Full", "full", "Fill the whole box with the colour"), ("Fill", "fill", "Repaint every voxel with the colour")], &mut lines);
+            row(ui, &[("Clear", "zero", "Remove every voxel"), ("Rev", "rev", "Swap solid and empty: empty space takes the colour")], &mut lines);
+            row(ui, &[("2X", "x2", "Double the size"), ("1/2", "xh", "Halve the size")], &mut lines);
+        });
+        section("SELECT", true).show(ui, |ui| self.selection_ui(ui));
+        section("ROT", false).show(ui, |ui| axes(ui, "rotate", "A quarter turn about the axis", &mut lines));
+        section("FLIP", false).show(ui, |ui| axes(ui, "flip", "Flip along the axis", &mut lines));
+        section("LOOP", false).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for a in ["x", "y", "z"] {
+                    for (sign, step) in [("+", 1), ("-", -1)] {
+                        if ui.small_button(format!("{sign}{}", a.to_uppercase())).on_hover_text("Move, wrapping at the edges").clicked() {
+                            lines.push(format!("loop {a} {step}"));
+                        }
+                    }
+                }
+            });
+            field(ui, "loop", &mut self.edit_fields.loop_, "axis offset", &mut lines);
+        });
+        section("SCALE", false).show(ui, |ui| field(ui, "scale", &mut self.edit_fields.scale, "axes factor", &mut lines));
+        section("SHEAR", false).show(ui, |ui| {
+            field(ui, "shear", &mut self.edit_fields.shear, "axis a b: layers across the axis slide by depth × a, b", &mut lines)
+        });
+        section("ROTATE", false).show(ui, |ui| field(ui, "rot", &mut self.edit_fields.rot, "axis degrees", &mut lines));
+        section("REPEAT", false).show(ui, |ui| field(ui, "repeat", &mut self.edit_fields.repeat, "axes count", &mut lines));
+        ui.separator();
+        section("MIRROR", false).show(ui, |ui| axes(ui, "mir", "Copy the lower half onto the upper half, reflected", &mut lines));
+        section("DIAGONAL", false).show(ui, |ui| axes(ui, "dia", "Copy one side of the diagonal across the axis onto the other", &mut lines));
+        section("SHAPE", false).show(ui, |ui| {
+            row(ui, &[("Ellipsoid", "prim elli", "Fill the box with an ellipsoid"), ("Cylinder", "prim cyli", "Fill the box with a cylinder up z")], &mut lines);
+            row(ui, &[("Pyramid", "prim pyra", "Fill the box with a pyramid"), ("Cone", "prim cone", "Fill the box with a cone")], &mut lines);
+        });
+        section("MODIFY", false).show(ui, |ui| {
+            row(ui, &[("Hull", "flood 0", "Remove every voxel that can't be seen"), ("Flood", "flood", "Fill enclosed empty space with the colour")], &mut lines);
+            row(ui, &[("Mask", "mask", "Keep only the voxels under the pattern, tiled over the box"), ("Texture", "tex", "Repaint the voxels under the tiled pattern with its colours")], &mut lines);
+            row(ui, &[("Dilation", "dil", "Grow by a voxel, in the colour"), ("Erosion", "ero", "Wear away a voxel")], &mut lines);
+        });
         for line in lines {
-            let message = self.edit_command(&line);
+            // ROT and FLIP are the editor's own `rotate` and `mirror`.
+            let message = match line.split_whitespace().next() {
+                Some("rotate") => self.select_command(&line, ui.ctx()),
+                Some("flip") => self.select_command(&line.replacen("flip", "mirror", 1), ui.ctx()),
+                _ => self.edit_command(&line),
+            };
             self.console_log.push(message);
         }
     }

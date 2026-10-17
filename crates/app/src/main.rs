@@ -836,17 +836,6 @@ impl App {
                 }
             }
         });
-        ui.add_enabled_ui(self.scene.is_some(), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Export");
-                for (name, _, hint) in exchange::FORMATS {
-                    if ui.small_button(name).on_hover_text(hint).clicked() {
-                        let m = self.export_command(&format!("export {name}"));
-                        self.console_log.push(m);
-                    }
-                }
-            });
-        });
         self.recent_ui(ui, state);
         ui.label(&self.status);
 
@@ -1030,29 +1019,6 @@ impl App {
                 .rect_filled(rect, 2.0, egui::Color32::from_rgb(c.r, c.g, c.b));
         }
 
-        ui.separator();
-        ui.heading("Project");
-        self.project_ui(ui, state);
-
-        ui.separator();
-        ui.heading("Scripts");
-        self.scripts_ui(ui, state);
-
-        ui.separator();
-        ui.heading("Scene");
-        self.scene_ui(ui);
-        ui.separator();
-        ui.heading("Animation");
-        self.animation_ui(ui);
-        ui.separator();
-        ui.heading("Layers");
-        self.layers_ui(ui);
-        ui.separator();
-        self.selection_ui(ui);
-        ui.separator();
-        ui.heading("Edit");
-        self.edit_ui(ui);
-        ui.separator();
 
         ui.horizontal(|ui| {
             if ui
@@ -1073,7 +1039,6 @@ impl App {
 
 
         ui.separator();
-        self.console_ui(ui, state);
         self.mcp_panel(ui);
 
         ui.separator();
@@ -2057,6 +2022,9 @@ impl eframe::App for App {
             self.window_title = title;
         }
 
+        // the reference editor's layout: palette, brush and view on the left; the
+        // Edit panel and the Project panel on the right; the console along
+        // the bottom.
         egui::Panel::left("controls")
             .default_size(250.0)
             .show(ui, |ui| {
@@ -2064,6 +2032,19 @@ impl eframe::App for App {
                     .id_salt("controls scroll")
                     .show(ui, |ui| self.controls(ui, &state));
             });
+        egui::Panel::right("project")
+            .default_size(210.0)
+            .show(ui, |ui| self.project_panel(ui, &state));
+        egui::Panel::right("edit")
+            .default_size(190.0)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("edit scroll")
+                    .show(ui, |ui| self.edit_panel(ui));
+            });
+        egui::Panel::bottom("console")
+            .default_size(140.0)
+            .show(ui, |ui| self.console_ui(ui, &state));
 
         egui::CentralPanel::default().show(ui, |ui| self.viewport(ui, &state));
         self.export_step(&ctx, &state);

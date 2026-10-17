@@ -447,7 +447,7 @@ impl App {
             app.console_log.push(message);
         };
 
-        ui.heading("Selection");
+
         let count = self.active_selection().map_or(0, Selection::len);
         ui.label(format!("{count} voxels selected"));
         ui.horizontal_wrapped(|ui| {
@@ -471,7 +471,7 @@ impl App {
         }
         ui.add_enabled_ui(count > 0, |ui| self.transform_ui(ui));
 
-        ui.heading("Model");
+        ui.label("Model");
         // Fill the Resize fields from the model whenever it, or its size,
         // changes; leave them alone while the user types.
         let current = self.selected_model().and_then(|m| {
@@ -483,20 +483,6 @@ impl App {
                 self.resize_to = size;
             }
         }
-        ui.horizontal(|ui| {
-            ui.label("Rotate");
-            for a in ["x", "y", "z"] {
-                if ui.small_button(a).clicked() {
-                    run(self, &format!("rotate {a}"));
-                }
-            }
-            ui.label("Flip");
-            for a in ["x", "y", "z"] {
-                if ui.small_button(a).clicked() {
-                    run(self, &format!("mirror {a}"));
-                }
-            }
-        });
         ui.horizontal(|ui| {
             if ui.small_button("Crop").clicked() {
                 run(self, "crop");
