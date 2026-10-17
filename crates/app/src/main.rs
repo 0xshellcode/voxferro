@@ -13,6 +13,7 @@
 mod anim_ui;
 mod autosave;
 mod hotkeys;
+mod objects;
 mod photo;
 mod camera;
 mod camera_tools;
@@ -265,6 +266,8 @@ struct App {
     picked: std::collections::BTreeSet<usize>,
     /// A group selected in the outline, by its transform node.
     selected_group: Option<i32>,
+    /// Several objects selected in the Move tool, by transform node.
+    objects: Vec<i32>,
     /// World cell of the traced grid's corner. The tracer walks one grid
     /// holding every visible instance; this maps the camera into it.
     trace_origin: glam::IVec3,
@@ -428,6 +431,7 @@ impl App {
             selected: 0,
             picked: Default::default(),
             selected_group: None,
+            objects: Vec::new(),
             trace_origin: glam::IVec3::ZERO,
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
             screenshot: None,
@@ -640,6 +644,8 @@ impl App {
 
     /// Makes `loaded` the open document.
     fn install(&mut self, state: &egui_wgpu::RenderState, loaded: scene::LoadedScene) {
+        // Selected objects name nodes of the old document.
+        self.objects.clear();
         self.status = format!(
             "{} models, {} placed, v{}",
             loaded.doc.scene.models.len(),
@@ -974,6 +980,12 @@ impl App {
         let shown: String = line.chars().take(120).collect();
         let more = if shown.len() < line.len() { " …" } else { "" };
         self.console_log.push(format!("> {shown}{more}"));
+
+        if line.split_whitespace().next() == Some("object") {
+            let message = self.object_command(line);
+            self.console_log.push(message);
+            return;
+        }
 
         if line.split_whitespace().next() == Some("autosave") {
             let message = self.autosave_command(line, state);
@@ -1723,7 +1735,12 @@ impl App {
             let ndc = c.truncate() / c.w.max(1e-6);
             rect.min + egui::vec2((ndc.x + 1.0) * 0.5 * view_size.x, (1.0 - ndc.y) * 0.5 * view_size.y)
         };
-        if let Some((lo, hi)) = group_box {
+        // Several objects selected: a box round each.
+        let boxes: Vec<(Vec3, Vec3)> = match self.object_boxes() {
+            b if b.is_empty() => group_box.into_iter().collect(),
+            b => b,
+        };
+        for (lo, hi) in boxes {
             let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 180, 255));
             let corner = |i: usize| {
                 Vec3::new(
@@ -1887,6 +1904,7 @@ impl eframe::App for App {
         self.view_input(&ctx);
         self.brush_input(&ctx);
         self.hotkeys(&ctx, &state);
+        self.object_input(&ctx);
         if !self.view.background && self.meshed_for != Some(self.selected) {
             self.mesh_dirty = true;
         }

@@ -7,6 +7,11 @@
 //! group, the group moves instead. X, Y and Z give the target a quarter turn
 //! about that axis. A whole drag is one undo step: each frame's move merges
 //! into the open gesture.
+//!
+//! With several objects selected (`objects.rs`), a drag on any of them
+//! moves them all, and turns turn them all about their common centre;
+//! Shift+click without dragging adds an object to the selection or takes
+//! it out.
 
 use crate::{App, edit::Ray};
 use eframe::egui;
@@ -24,8 +29,9 @@ enum Motion {
 
 /// A move in progress.
 pub struct MoveDrag {
-    /// The transform node being moved: an instance's or a group's.
-    node: i32,
+    /// The instance pressed on, to add to or take out of the selection
+    /// if a Shift+click ends without moving.
+    toggle: Option<usize>,
     motion: Motion,
     /// Where the drag plane was grabbed.
     grab: Vec3,
@@ -53,7 +59,7 @@ fn on_plane(ray: Ray, point: Vec3, normal: Vec3) -> Option<Vec3> {
 impl App {
     /// The transform node a move acts on for instance `index`: the selected
     /// group when it holds the instance, otherwise the instance's own node.
-    fn move_target(&self, index: usize) -> Option<i32> {
+    pub fn move_target(&self, index: usize) -> Option<i32> {
         let scene = &self.scene.as_ref()?.doc.scene;
         if let Some(group) = self.selected_group
             && scene.instances_under(group).contains(&index)
@@ -71,17 +77,23 @@ impl App {
         let Some(pick) = scene.pick(ray.origin, ray.direction, crate::edit::PICK_RANGE, |i| visible.shows(i)) else {
             return false;
         };
-        self.selected = pick.instance;
         let Some(node) = self.move_target(pick.instance) else {
+            self.selected = pick.instance;
             self.console_log.push("this model has no transform node of its own".to_owned());
             return true;
         };
+        // A press on an object outside the selection makes it the only
+        // one; on one inside, the drag takes them all along.
+        if !self.object_nodes().contains(&node) && !modifiers.shift {
+            self.objects.clear();
+        }
+        if !modifiers.shift || self.objects.is_empty() {
+            self.selected = pick.instance;
+        }
         if Some(node) != self.selected_group {
             self.selected_group = None;
         }
-        let held = scene.instances_under(node);
-        let sum = held.iter().fold(Vec3::ZERO, |a, &i| a + scene.instances[i].transform.translation.as_vec3());
-        let centre = (sum / held.len().max(1) as f32).round().as_ivec3();
+        let centre = self.object_worlds().map_or(IVec3::ZERO, |(_, c)| c);
 
         let mut facing = (ray.direction * Vec3::new(1.0, 1.0, 0.0)).normalize_or(Vec3::Y);
         if facing.length_squared() < 0.5 {
@@ -96,7 +108,7 @@ impl App {
         };
         self.history.end_gesture();
         self.move_drag = Some(MoveDrag {
-            node,
+            toggle: modifiers.shift.then_some(pick.instance),
             motion,
             grab: ray.origin + ray.direction * pick.distance,
             facing,
@@ -111,8 +123,7 @@ impl App {
     /// Follows the cursor while the button is held.
     pub fn update_move(&mut self, ray: Ray, pointer_x: f32) {
         let Some(drag) = &self.move_drag else { return };
-        let (node, motion) = (drag.node, drag.motion);
-        let Some(scene) = self.scene.as_ref().map(|s| &s.doc.scene) else { return };
+        let motion = drag.motion;
 
         let nodes = match motion {
             Motion::Turn => {
@@ -123,9 +134,10 @@ impl App {
                 // One quarter per frame; the next frames catch up the rest.
                 // Clockwise is three counter-clockwise quarters.
                 let (times, step) = if wanted > drag.turns { (1, 1) } else { (3, -1) };
-                let result = scene.with_node_turned_times(node, drag.centre, 2, times);
+                let result = self.objects_turned(2, times, drag.centre);
                 if let Some(drag) = &mut self.move_drag {
                     drag.turns += step;
+                    drag.toggle = None;
                 }
                 result
             }
@@ -145,8 +157,9 @@ impl App {
                 }
                 if let Some(drag) = &mut self.move_drag {
                     drag.applied = total;
+                    drag.toggle = None;
                 }
-                scene.with_node_moved(node, delta)
+                self.objects_moved(delta)
             }
         };
         // Merged into the gesture begun on press: one drag, one undo step.
@@ -156,8 +169,14 @@ impl App {
     }
 
     pub fn finish_move(&mut self) {
-        if self.move_drag.take().is_some() {
+        if let Some(drag) = self.move_drag.take() {
             self.history.end_gesture();
+            // A Shift+click that did not move: in or out of the selection.
+            if let Some(index) = drag.toggle {
+                self.toggle_object(index);
+                let message = self.object_select_command(&["list"]);
+                self.console_log.push(message);
+            }
         }
     }
 
@@ -177,7 +196,9 @@ impl App {
                 .map(|(_, a)| a)
         });
         if let Some(axis) = axis {
-            let message = if self.selected_group.is_some() {
+            let message = if !self.objects.is_empty() {
+                self.object_command(&format!("object turn {axis}"))
+            } else if self.selected_group.is_some() {
                 self.group_command(&format!("node turn {axis}"))
             } else {
                 self.instance_command(&format!("instance turn {axis}"))

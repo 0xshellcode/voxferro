@@ -109,7 +109,8 @@ impl App {
             // selection dropped without noticing, then Delete, would empty
             // the model when a piece was meant. Clear in the Edit panel
             // (`zero`) does it on purpose.
-            if !cmd && (pressed(Key::Delete) || pressed(Key::Backspace)) && self.active_selection().is_none() {
+            // (In the Move tool, Delete removes the selected objects.)
+            if !cmd && !self.moving && (pressed(Key::Delete) || pressed(Key::Backspace)) && self.active_selection().is_none() {
                 hint = true;
             }
         });

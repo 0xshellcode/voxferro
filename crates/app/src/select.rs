@@ -392,7 +392,8 @@ impl App {
     /// Selection shortcuts. Skipped while a text field has focus, so typing
     /// in the console never deletes voxels.
     pub fn selection_input(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
+        // In the Move tool these keys act on objects (`objects.rs`).
+        if ctx.egui_wants_keyboard_input() || self.moving {
             return;
         }
         let mut commands: Vec<&str> = Vec::new();

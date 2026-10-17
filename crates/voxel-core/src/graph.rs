@@ -328,6 +328,36 @@ impl Scene {
         Ok(nodes)
     }
 
+    /// The nodes with several transform nodes given new world placements
+    /// at once -- moving, turning or aligning a multiple selection. Each
+    /// is rewritten under its own parent, which none of the others may be
+    /// inside (see [`Scene::outermost`]).
+    pub fn with_worlds(&self, changes: &[(i32, Transform)]) -> Result<Vec<SceneNode>, GraphError> {
+        let parents = parent_transforms(&self.nodes, self.frame);
+        let mut nodes = self.nodes.clone();
+        for &(node, world) in changes {
+            let parent = parents.get(&node).copied().ok_or(GraphError::NotPlaceable)?;
+            let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == node) else {
+                return Err(GraphError::NotPlaceable);
+            };
+            crate::anim::set_local_at(t, self.frame, world.then(&parent.inverse()));
+        }
+        Ok(nodes)
+    }
+
+    /// `nodes` without any that sit inside another of them, so a group and
+    /// a model in it, both selected, move once.
+    pub fn outermost(&self, nodes: &[i32]) -> Vec<i32> {
+        let mut out: Vec<i32> = Vec::new();
+        for &n in nodes {
+            let inside_other = nodes.iter().any(|&o| o != n && self.subtree(o).contains(&n));
+            if !inside_other && !out.contains(&n) {
+                out.push(n);
+            }
+        }
+        out
+    }
+
     /// The nodes with transform node `node` moved by a world offset. For a
     /// group this moves everything in it.
     pub fn with_node_moved(&self, node: i32, delta: IVec3) -> Result<Vec<SceneNode>, GraphError> {
@@ -737,6 +767,26 @@ mod tests {
         assert_eq!(s.instances[0].node, Some(2), "listed in file order");
         assert_eq!(s.instances[0].parent.translation, IVec3::new(100, 0, 0));
         assert_eq!(s.instances[0].transform.translation, IVec3::new(100, 0, 2));
+    }
+
+    #[test]
+    fn several_nodes_are_placed_at_once_and_nested_ones_dropped() {
+        let mut s = scene();
+        let (a, b) = (s.instances[0].node.unwrap(), s.instances[1].node.unwrap());
+        // The root transform (0) holds both: alone it is the outermost.
+        assert_eq!(s.outermost(&[a, 0, b]), vec![0]);
+        assert_eq!(s.outermost(&[a, b, a]), vec![a, b]);
+        let moved: Vec<_> = [a, b]
+            .iter()
+            .map(|&n| {
+                let w = s.node_world(n).unwrap();
+                (n, Transform { translation: w.translation + IVec3::new(0, 7, 0), ..w })
+            })
+            .collect();
+        let nodes = s.with_worlds(&moved).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(s.instances[0].transform.translation, IVec3::new(100, 7, 2));
+        assert_eq!(s.instances[1].transform.translation.y, 7, "both, under the root's offset");
     }
 
     #[test]
