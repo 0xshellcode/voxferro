@@ -325,7 +325,8 @@ struct App {
     drawer_open: bool,
     /// A `snap window` waiting for the window's screenshot.
     window_snap: Option<String>,
-    window_snap_sent: bool,
+    /// Frames since the snapshot was first asked for.
+    window_snap_frames: u32,
     /// The view cube in the viewport's corner.
     view_cube_shown: bool,
     /// The camera ruler beside it, and a drag on it under way.
@@ -467,7 +468,7 @@ impl App {
             transform_tool: None,
             wrap_spacing: [0; 3],
             transform_drag: None,
-            window_snap_sent: false,
+            window_snap_frames: 0,
             edit_fields: model_edit::Fields::default(),
             project: project::ProjectState::default(),
             resize_for: None,
@@ -1098,7 +1099,7 @@ impl App {
             // Asked for from the next drawn frame: a request sent before the
             // window has drawn (a startup line) would be lost.
             self.window_snap = Some(path.clone());
-            self.window_snap_sent = false;
+            self.window_snap_frames = 0;
             self.console_log.push(format!("{path} will be saved with the next frame"));
             return;
         }
@@ -1315,13 +1316,17 @@ impl App {
 
     /// Writes a window screenshot a `snap window` asked for, once egui
     /// delivers it.
-    fn take_window_snap(&mut self, ctx: &egui::Context) {
+    fn take_window_snap(&mut self, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
         if self.window_snap.is_none() {
             return;
         }
-        if !self.window_snap_sent {
+        // eframe drops a request made before the window is ready (a `snap
+        // window` run at startup): ask again every 30 frames until it comes.
+        if self.window_snap_frames.is_multiple_of(30) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
-            self.window_snap_sent = true;
+        }
+        self.window_snap_frames += 1;
+        if self.window_snap_frames == 1 {
             ctx.request_repaint();
             return;
         }
@@ -1332,6 +1337,10 @@ impl App {
             })
         });
         let Some(image) = image else {
+            // The capture comes back with a later frame, once the GPU has
+            // copied it out: egui maps the buffer, and nothing else here
+            // polls the device for it to finish.
+            let _ = state.device.poll(wgpu::PollType::Poll);
             // The capture comes back with a later frame: keep drawing.
             ctx.request_repaint();
             return;
@@ -1813,7 +1822,7 @@ impl eframe::App for App {
         self.selection_input(&ctx);
         self.camera_input(&ctx);
         self.transform_input(&ctx);
-        self.take_window_snap(&ctx);
+        self.take_window_snap(&ctx, &state);
         self.view_input(&ctx);
         self.brush_input(&ctx);
         if !self.view.background && self.meshed_for != Some(self.selected) {
@@ -1848,10 +1857,9 @@ impl App {
     /// The end of a headless run (`--render`, `--screenshot`, `--icon`):
     /// once the sample budget is reached, writes the image and exits.
     fn headless_capture(&mut self, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
-        // Reads back the 3D target. egui's own ViewportCommand::Screenshot
-        // would also capture the panels, but this eframe/wgpu backend never
-        // delivers the resulting event here, so the viewport is what we can
-        // verify automatically.
+        // Reads back the 3D target: it works with the window hidden, where
+        // egui's own ViewportCommand::Screenshot (`snap window`) would wait
+        // for a frame that is never painted.
         // In --render mode, wait for the sample budget before capturing.
         if self.pending_samples > 0 {
             if self.path_tracer.samples < self.pending_samples {
