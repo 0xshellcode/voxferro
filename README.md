@@ -2,8 +2,7 @@
 
 <img src="assets/icon/icon.png" alt="Voxferro icon" width="128">
 
-A voxel editor in Rust (formerly *Voxferro*), native on Apple
-Silicon, compatible with the reference editor's `.vox` format.
+A voxel editor in Rust, native on Apple Silicon, compatible with the reference editor's `.vox` format.
 
 A learning project: the goal is to understand modern graphics and Rust by
 building something real, not to clone the reference editor line by line. File
