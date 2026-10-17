@@ -242,10 +242,10 @@ impl App {
     pub fn project_panel(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
         crate::layout::title(ui, "Project");
         let tabs = [
-            (Tab::Project, "Files", "The project folder's models"),
-            (Tab::Pattern, "Pattern", "The pattern brush's model and library"),
-            (Tab::Shader, "Script", "Voxel scripts (the reference editor's shaders)"),
-            (Tab::Outline, "Scene", "The outline: models, groups, layers, animation"),
+            (Tab::Project, crate::layout::icon::FOLDER, "Project: the folder's models"),
+            (Tab::Pattern, crate::layout::icon::STAR, "Pattern: the pattern brush's model and library"),
+            (Tab::Shader, crate::layout::icon::CODE, "Shader: voxel scripts"),
+            (Tab::Outline, crate::layout::icon::TREE_STRUCTURE, "Outline: models, groups, layers, animation"),
         ];
         let items: Vec<(bool, &str, &str)> = tabs.iter().map(|(t, l, h)| (self.project.tab == *t, *l, *h)).collect();
         if let Some(i) = crate::layout::toggle_row(ui, &items) {
@@ -321,14 +321,6 @@ impl App {
             ui.add(egui::TextEdit::singleline(&mut self.project.rename_to).hint_text("new name").desired_width(90.0));
             if ui.add_enabled(has_file, egui::Button::new("Rename").small()).clicked() {
                 line = Some(format!("project rename {}", self.project.rename_to));
-            }
-        });
-        ui.horizontal(|ui| {
-            if ui.small_button("Duplicate").on_hover_text("Save a copy as name-1.vox and go on there").clicked() {
-                line = Some("project dup".to_owned());
-            }
-            if ui.add_enabled(has_file, egui::Button::new("Trash…").small()).on_hover_text("Move the file to the trash").clicked() {
-                line = Some("project delete".to_owned());
             }
         });
         if let Some(line) = line {

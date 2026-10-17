@@ -28,8 +28,14 @@ pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(110, 170, 240);
 const TEXT: egui::Color32 = egui::Color32::from_rgb(214, 214, 218);
 const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(150, 150, 156);
 
+/// Icons: Phosphor's regular set, mixed into ordinary text.
+pub use egui_phosphor::regular as icon;
+
 /// The theme, set once at start.
 pub fn apply_theme(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    ctx.set_fonts(fonts);
     let mut style = (*ctx.global_style()).clone();
     let v = &mut style.visuals;
     *v = egui::Visuals::dark();
@@ -88,7 +94,7 @@ pub fn caption(ui: &mut egui::Ui, text: &str) {
 pub fn toggle(ui: &mut egui::Ui, on: bool, text: &str, width: f32) -> egui::Response {
     let fill = if on { egui::Color32::from_rgb(58, 96, 140) } else { BUTTON };
     let narrow = width < 52.0;
-    let text = egui::RichText::new(text).size(if narrow { 11.0 } else { 12.5 }).color(if on { egui::Color32::WHITE } else { TEXT });
+    let text = egui::RichText::new(text).size(label_size(text, narrow)).color(if on { egui::Color32::WHITE } else { TEXT });
     // Narrow buttons give their padding to the label.
     ui.scope(|ui| {
         if narrow {
@@ -99,6 +105,26 @@ pub fn toggle(ui: &mut egui::Ui, on: bool, text: &str, width: f32) -> egui::Resp
     .inner
 }
 
+/// A label's size: an icon (a single glyph from the icon font) larger.
+fn label_size(text: &str, narrow: bool) -> f32 {
+    let mut chars = text.chars();
+    let glyph = matches!((chars.next(), chars.next()), (Some(c), None) if !c.is_ascii());
+    if glyph {
+        16.0
+    } else if narrow {
+        11.0
+    } else {
+        12.5
+    }
+}
+
+/// An icon button with its name as the hover text.
+pub fn icon_button(ui: &mut egui::Ui, glyph: &str, hint: &str, enabled: bool) -> egui::Response {
+    ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(glyph).size(17.0)).min_size(egui::vec2(28.0, 24.0)))
+        .on_hover_text(hint)
+        .on_disabled_hover_text(hint)
+}
+
 /// A row of `n` equal buttons filling the width; returns which was clicked.
 pub fn button_row(ui: &mut egui::Ui, labels: &[(&str, &str)]) -> Option<usize> {
     let n = labels.len().max(1) as f32;
@@ -107,7 +133,7 @@ pub fn button_row(ui: &mut egui::Ui, labels: &[(&str, &str)]) -> Option<usize> {
     ui.horizontal(|ui| {
         for (i, (label, hint)) in labels.iter().enumerate() {
             let narrow = width < 52.0;
-            let text = egui::RichText::new(*label).size(if narrow { 11.0 } else { 12.5 });
+            let text = egui::RichText::new(*label).size(label_size(label, narrow));
             let mut b = ui
                 .scope(|ui| {
                     if narrow {
@@ -194,28 +220,28 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let has_doc = self.scene.is_some();
                 let mut line = None;
-                if ui.button("⚙").on_hover_text("Settings, agents (MCP) and help").clicked() {
+                if icon_button(ui, icon::GEAR, "Settings, agents (MCP) and help", true).clicked() {
                     self.settings_open = !self.settings_open;
                 }
                 ui.separator();
-                for (label, command, hint, enabled) in [
-                    ("Trash", "project delete", "Move the file to the trash", has_doc),
-                    ("Duplicate", "project dup", "Save a copy as name-1.vox and go on there", has_doc),
-                    ("New", "new", "New model (Cmd+N)", true),
-                    ("Import", "import", "Add the models of a .vox, XRAW, QB, SLAB6 or OBJ file", has_doc),
-                    ("Save as", "save as", "Cmd+Shift+S", has_doc),
-                    ("Save", "save", "Cmd+S", has_doc),
-                    ("Open", "open", "Cmd+O", true),
+                for (glyph, command, hint, enabled) in [
+                    (icon::TRASH, "project delete", "Move the file to the trash", has_doc),
+                    (icon::COPY, "project dup", "Duplicate: save a copy as name-1.vox and go on there", has_doc),
+                    (icon::FILE_PLUS, "new", "New model (Cmd+N)", true),
+                    (icon::FILE_ARROW_DOWN, "import", "Import the models of a .vox, XRAW, QB, SLAB6 or OBJ file", has_doc),
+                    (icon::DOWNLOAD_SIMPLE, "save as", "Save as (Cmd+Shift+S)", has_doc),
+                    (icon::FLOPPY_DISK, "save", "Save (Cmd+S)", has_doc),
+                    (icon::FOLDER_OPEN, "open", "Open (Cmd+O)", true),
                 ] {
-                    if ui.add_enabled(enabled, egui::Button::new(label)).on_hover_text(hint).clicked() {
+                    if icon_button(ui, glyph, hint, enabled).clicked() {
                         line = Some(command);
                     }
                 }
                 ui.separator();
-                if ui.add_enabled(self.history.can_redo(), egui::Button::new("⟳")).on_hover_text("Redo (Cmd+Shift+Z)").clicked() {
+                if icon_button(ui, icon::ARROW_CLOCKWISE, "Redo (Cmd+Shift+Z)", self.history.can_redo()).clicked() {
                     self.redo(state);
                 }
-                if ui.add_enabled(self.history.can_undo(), egui::Button::new("⟲")).on_hover_text("Undo (Cmd+Z)").clicked() {
+                if icon_button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Undo (Cmd+Z)", self.history.can_undo()).clicked() {
                     self.undo(state);
                 }
                 // The project's name in what is left, centred.
@@ -269,7 +295,10 @@ impl App {
             }
         }
         self.palette_grid(ui);
-        if let Some(i) = button_row(ui, &[("Open", "A palette image (PNG)"), ("Save", "As a 256 × 1 PNG"), ("Reset", "The format's default palette")]) {
+        if let Some(i) = button_row(
+            ui,
+            &[(icon::FOLDER_OPEN, "Open a palette image (PNG)"), (icon::FLOPPY_DISK, "Save the palette as a 256 × 1 PNG"), (icon::FILE, "New: the format's default palette")],
+        ) {
             match i {
                 0 => {
                     if let Some(path) = rfd::FileDialog::new().add_filter("Palette", &["png"]).pick_file() {
@@ -317,14 +346,20 @@ impl App {
         });
         egui::ScrollArea::vertical().id_salt("brush scroll").show(ui, |ui| {
             // Shapes, three a row.
-            let shapes = BrushShape::ALL;
+            let shapes: [(BrushShape, &str, &str); 9] = [
+                (BrushShape::Voxel, icon::CUBE, "Voxel: one voxel, or the tip's size"),
+                (BrushShape::Box, icon::BOUNDING_BOX, "Box: drag a rectangle on the face"),
+                (BrushShape::Line, icon::LINE_SEGMENT, "Line"),
+                (BrushShape::Square, icon::SQUARE, "Square, from its centre"),
+                (BrushShape::Circle, icon::CIRCLE, "Circle, from its centre"),
+                (BrushShape::Face, icon::ARROW_LINE_UP, "Face: the flat region, extruded"),
+                (BrushShape::Fill, icon::PAINT_BUCKET, "Fill: a region"),
+                (BrushShape::Shader, icon::CODE, "Shader: the chosen voxel script"),
+                (BrushShape::Pattern, icon::STAR, "Pattern: stamp the pattern"),
+            ];
             for chunk in shapes.chunks(3) {
-                let items: Vec<(bool, String, &str)> = chunk
-                    .iter()
-                    .map(|(s, n)| (self.brush_shape == *s, crate::capitalised(n), ""))
-                    .collect();
-                let refs: Vec<(bool, &str, &str)> = items.iter().map(|(a, b, c)| (*a, b.as_str(), *c)).collect();
-                if let Some(i) = toggle_row(ui, &refs) {
+                let items: Vec<(bool, &str, &str)> = chunk.iter().map(|(s, g, h)| (self.brush_shape == *s, *g, *h)).collect();
+                if let Some(i) = toggle_row(ui, &items) {
                     self.brush_shape = chunk[i].0;
                 }
             }
@@ -340,9 +375,9 @@ impl App {
             }
             ui.add_space(4.0);
             let tools = [
-                (self.moving, "Move", "Drag a model or group. Shift: up and down. Cmd: turn."),
-                (self.selecting, "Select", "Shift adds, Option subtracts; the shape decides how"),
-                (self.picking, "Pick", "Take the colour of the next voxel clicked (I)"),
+                (self.moving, icon::ARROWS_OUT_CARDINAL, "Move: drag a model or group. Shift: up and down. Cmd: turn."),
+                (self.selecting, icon::SELECTION, "Select: Shift adds, Option subtracts; the shape decides how"),
+                (self.picking, icon::EYEDROPPER, "Pick the colour of the next voxel clicked (I)"),
             ];
             if let Some(i) = toggle_row(ui, &tools) {
                 match i {
@@ -358,12 +393,12 @@ impl App {
                 }
             }
             ui.add_space(4.0);
-            caption(ui, "MIRROR");
+            caption(ui, &format!("{} MIRROR", icon::FLIP_HORIZONTAL));
             let m = self.mirror;
             if let Some(i) = toggle_row(ui, &[(m[0], "X", "Repeat strokes reflected"), (m[1], "Y", ""), (m[2], "Z", "")]) {
                 self.mirror[i] = !self.mirror[i];
             }
-            caption(ui, "AXIS");
+            caption(ui, &format!("{} AXIS", icon::ARROWS_LEFT_RIGHT));
             let a = self.axis_lock;
             if let Some(i) = toggle_row(ui, &[(a[0], "X", "Strokes run through the whole model"), (a[1], "Y", ""), (a[2], "Z", "")]) {
                 self.axis_lock[i] = !self.axis_lock[i];
@@ -385,13 +420,13 @@ impl App {
         }
         let mut line = None;
         ui.horizontal(|ui| {
-            if ui.button("Crop").on_hover_text("Fit the box to the voxels (shrink)").clicked() {
+            if icon_button(ui, icon::CROP, "Crop: fit the box to the voxels", true).clicked() {
                 line = Some("crop".to_owned());
             }
             for v in &mut self.resize_to {
                 ui.add(egui::DragValue::new(v).range(1..=256).speed(0.2));
             }
-            if ui.button("Resize").on_hover_text("Change the model's box").clicked() {
+            if icon_button(ui, icon::CHECK, "Resize the model's box to these sizes", true).clicked() {
                 let [x, y, z] = self.resize_to;
                 line = Some(format!("resize {x} {y} {z}"));
             }
@@ -428,16 +463,17 @@ impl App {
             ui.separator();
         }
         ui.horizontal(|ui| {
-            if toggle(ui, self.drawer_open, "Log", 36.0).on_hover_text("The log and the camera views").clicked() {
+            let caret = if self.drawer_open { icon::CARET_DOWN } else { icon::CARET_UP };
+            if icon_button(ui, caret, "The log and the camera views", true).clicked() {
                 self.drawer_open = !self.drawer_open;
             }
-            if ui.button("📷").on_hover_text("Snapshot of the viewport (snap)").clicked() {
+            if icon_button(ui, icon::CAMERA, "Snapshot of the viewport (snap)", true).clicked() {
                 let message = self.snap(None, state);
                 self.console_log.push(message);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut line = None;
-                if ui.button("Frame").on_hover_text("F: the selection or the model; Shift+F: all").clicked() {
+                if icon_button(ui, icon::CORNERS_OUT, "Frame: the selection or the model (F; Shift+F all)", true).clicked() {
                     line = Some("camera frame");
                 }
                 for (p, label, command) in [
