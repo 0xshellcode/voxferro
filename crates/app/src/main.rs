@@ -25,7 +25,9 @@ mod model_edit;
 #[cfg(target_os = "macos")]
 mod macos_open;
 mod recent;
+mod palette_files;
 mod palette_ui;
+mod project;
 mod move_tool;
 mod outline;
 mod pattern;
@@ -263,6 +265,9 @@ struct App {
     /// The pattern brush's model, and whether it keeps its own colours.
     pattern: Option<voxel_core::Volume>,
     pattern_own_colours: bool,
+    /// Whether a pattern opened from another file takes this palette's
+    /// nearest colours.
+    pattern_match: bool,
     /// The GPU, for the shader brush, which runs from mouse handling.
     gpu: egui_wgpu::RenderState,
     /// The next click takes its colour from a voxel instead of editing.
@@ -291,6 +296,8 @@ struct App {
     resize_to: [u32; 3],
     /// The Edit panel's text fields.
     edit_fields: model_edit::Fields,
+    /// The Project panel's folder and its pending confirmation.
+    project: project::ProjectState,
     resize_for: Option<(usize, [u32; 3])>,
     /// Set when the scene changed and the GPU mesh is stale.
     mesh_dirty: bool,
@@ -390,6 +397,7 @@ impl App {
             region: voxel_core::brush::Region::default(),
             pattern: None,
             pattern_own_colours: true,
+            pattern_match: true,
             gpu: state.clone(),
             picking: false,
             camera_slot: 0,
@@ -406,6 +414,7 @@ impl App {
             clipboard: voxel_core::Clipboard::default(),
             resize_to: [32; 3],
             edit_fields: model_edit::Fields::default(),
+            project: project::ProjectState::default(),
             resize_for: None,
             mesh_dirty: false,
             console_input: String::new(),
@@ -837,6 +846,7 @@ impl App {
         }
 
         self.palette_grid(ui);
+        self.palette_files_ui(ui, state);
         self.palette_editor_ui(ui, state);
 
         ui.separator();
@@ -955,6 +965,10 @@ impl App {
             ui.painter()
                 .rect_filled(rect, 2.0, egui::Color32::from_rgb(c.r, c.g, c.b));
         }
+
+        ui.separator();
+        ui.heading("Project");
+        self.project_ui(ui, state);
 
         ui.separator();
         ui.heading("Scripts");
@@ -1228,6 +1242,12 @@ impl App {
 
         if matches!(line.split_whitespace().next(), Some("palette" | "material")) {
             let message = self.palette_command(line, state);
+            self.console_log.push(message);
+            return;
+        }
+
+        if line.split_whitespace().next() == Some("project") {
+            let message = self.project_command(line, ctx, state);
             self.console_log.push(message);
             return;
         }
@@ -1815,6 +1835,7 @@ impl eframe::App for App {
         self.move_input(&ctx);
         self.animate(&ctx);
         self.confirm_ui(&ctx, &state);
+        self.project_confirm_ui(&ctx, &state);
         self.mcp_confirm_ui(&ctx, &state);
         let title = self.title();
         if title != self.window_title {

@@ -41,7 +41,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–45 of the [ROADMAP](ROADMAP.md) are complete, with **225 tests
+Phases 0–40 and 43–46 of the [ROADMAP](ROADMAP.md) are complete, with **230 tests
 passing**. Working today:
 
 - Reading **and writing** `.vox` (versions 150 and 200), validated against the
@@ -50,7 +50,9 @@ passing**. Working today:
   editing a 256³ model rebuilds only what was touched (~8 ms in release)
 - Scene graph with transforms and animation frames; editing and rendering
   of scenes with multiple models, rotated ones included
-- Open, new, save as, and a warning about unsaved changes
+- Open, new, save as, and a warning about unsaved changes; a Project
+  panel (a folder of models opened with a click; rename, duplicate, move
+  to the trash) and palette files (the reference editor's 256 × 1 PNGs)
 - Attach / erase / paint brushes with voxel, box, line, face and
   fill shapes, with preview and one-step undo/redo per stroke; a shader
   brush (a voxel script's result, attached, erased or painted), a pattern
@@ -162,12 +164,13 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 | Group | Commands |
 |---|---|
 | Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `export <path.obj>` |
+| Project | `project [list \| dir <path> \| open <name> \| rename <name> \| dup \| delete]` |
 | Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|face\|fill\|shader\|pattern]`, `brush mirror\|axis <axes>`, `brush region same\|color\|geo [4\|8]`, `color <n>` |
-| Pattern | `pattern selection\|open <file.vox>\|turn x\|y\|z\|colours own\|brush\|clear` |
+| Pattern | `pattern selection\|open <file.vox>\|match on\|off\|turn x\|y\|z\|colours own\|brush\|clear` |
 | Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz` |
 | Model | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
 | Scene | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
-| Palette | `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [key=value]…` |
+| Palette | `palette open\|save <file.png>`, `palette reset`, `palette default 0-3`, `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [key=value]…` |
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]` |
 | Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|frame [all\|selection\|instance]` |

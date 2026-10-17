@@ -6,8 +6,10 @@
 //! <file.vox>` takes the first model of a file; `pattern turn x|y|z` gives it
 //! a quarter turn; `pattern colours own|brush` chooses between its own
 //! colours and the current one ("Use Voxel Color" / "Use Palette Color");
-//! `pattern clear` drops it. A pattern's colours are palette indices, so
-//! one from another file takes this file's colours at those indices.
+//! `pattern clear` drops it. A pattern's colours are palette indices; one
+//! opened from another file has each index moved to the nearest colour of
+//! this palette, unless `pattern match off` (the reference editor's "Match Palette
+//! Color", on by default there too) keeps the indices as they are.
 
 use crate::App;
 use eframe::egui;
@@ -28,12 +30,24 @@ impl App {
             ["open", path @ ..] if !path.is_empty() => {
                 let path = path.join(" ");
                 match load_pattern(&path) {
-                    Ok(p) => {
-                        self.pattern = Some(p);
+                    Ok((volume, palette)) => {
+                        let volume = match (&self.scene, self.pattern_match) {
+                            (Some(loaded), true) => match_colours(&volume, &palette, &loaded.doc.palette),
+                            _ => volume,
+                        };
+                        self.pattern = Some(volume);
                         self.pattern_info()
                     }
                     Err(e) => format!("pattern: {e}"),
                 }
+            }
+            ["match", on] => {
+                match *on {
+                    "on" => self.pattern_match = true,
+                    "off" => self.pattern_match = false,
+                    _ => return "pattern match on|off".to_owned(),
+                }
+                format!("patterns opened from now on {} their colours", if self.pattern_match { "match" } else { "keep" })
             }
             ["turn", axis] => {
                 let a = match *axis {
@@ -62,7 +76,7 @@ impl App {
                 self.pattern = None;
                 "pattern cleared".to_owned()
             }
-            _ => "pattern [selection | open <file.vox> | turn x|y|z | colours own|brush | clear]".to_owned(),
+            _ => "pattern [selection | open <file.vox> | match on|off | turn x|y|z | colours own|brush | clear]".to_owned(),
         }
     }
 
@@ -123,10 +137,31 @@ impl App {
                 }
             }
         });
-        let mut own = self.pattern_own_colours;
-        if ui.checkbox(&mut own, "Its own colours").on_hover_text("Otherwise the brush colour").changed() {
-            lines.push(format!("pattern colours {}", if own { "own" } else { "brush" }));
-        }
+        ui.horizontal(|ui| {
+            let mut own = self.pattern_own_colours;
+            if ui.checkbox(&mut own, "Its own colours").on_hover_text("Otherwise the brush colour").changed() {
+                lines.push(format!("pattern colours {}", if own { "own" } else { "brush" }));
+            }
+            let mut matching = self.pattern_match;
+            if ui
+                .checkbox(&mut matching, "Match")
+                .on_hover_text("A pattern opened from another file takes the nearest colours of this palette")
+                .changed()
+            {
+                lines.push(format!("pattern match {}", if matching { "on" } else { "off" }));
+            }
+        });
+        // The library: the project folder's files, a click away.
+        egui::CollapsingHeader::new("Library").id_salt("pattern library").show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("pattern files").max_height(140.0).show(ui, |ui| {
+                for path in self.project_vox_files() {
+                    let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                    if ui.selectable_label(false, name).on_hover_text("Use as the pattern").clicked() {
+                        lines.push(format!("pattern open {}", path.display()));
+                    }
+                }
+            });
+        });
         for line in lines {
             let message = self.pattern_command(&line);
             self.console_log.push(message);
@@ -134,9 +169,56 @@ impl App {
     }
 }
 
-fn load_pattern(path: &str) -> Result<Volume, String> {
+fn load_pattern(path: &str) -> Result<(Volume, vox_format::Palette), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let file = vox_format::VoxFile::parse(&bytes).map_err(|e| format!("{path}: {e}"))?;
     let model = file.models.first().ok_or_else(|| format!("{path}: no models"))?;
-    Ok(Volume::from_model(model))
+    Ok((Volume::from_model(model), file.palette))
+}
+
+/// `volume`'s colours, from palette `from`, moved to the nearest colours of
+/// `to` (by distance in RGB; index 0 is never a target).
+pub fn match_colours(volume: &Volume, from: &vox_format::Palette, to: &vox_format::Palette) -> Volume {
+    let mut map = [0u8; 256];
+    for (i, slot) in map.iter_mut().enumerate().skip(1) {
+        let c = from.color(i as u8);
+        let distance = |j: u8| {
+            let d = to.color(j);
+            let (r, g, b) = (c.r as i32 - d.r as i32, c.g as i32 - d.g as i32, c.b as i32 - d.b as i32);
+            r * r + g * g + b * b
+        };
+        *slot = (1..=255u8).min_by_key(|&j| distance(j)).unwrap_or(1);
+    }
+    let [sx, sy, sz] = volume.size();
+    let mut out = Volume::new([sx, sy, sz]);
+    for z in 0..sz {
+        for y in 0..sy {
+            for x in 0..sx {
+                let v = volume.get(x, y, z);
+                if v != 0 {
+                    out.set(x, y, z, map[v as usize]);
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vox_format::{Color, Palette};
+
+    #[test]
+    fn matching_moves_each_colour_to_the_nearest() {
+        let mut from = Palette::default();
+        from.set_color(3, Color { r: 250, g: 0, b: 0, a: 255 });
+        let mut to = Palette::default();
+        to.set_color(77, Color { r: 255, g: 0, b: 0, a: 255 });
+        let mut v = Volume::new([2, 1, 1]);
+        v.set(0, 0, 0, 3);
+        let m = match_colours(&v, &from, &to);
+        assert_eq!(m.get(0, 0, 0), 77);
+        assert_eq!(m.get(1, 0, 0), 0);
+    }
 }

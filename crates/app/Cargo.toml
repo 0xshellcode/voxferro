@@ -32,6 +32,13 @@ naga = { version = "30", features = ["glsl-in", "wgsl-in", "wgsl-out"] }
 # Linux portal support, which does not build anything on macOS.
 rfd = "0.17"
 
+# Palette files (src/palette_files.rs): the reference editor's are 256x1 PNGs. The
+# version eframe's image support already builds.
+png = "0.18"
+# "Remove project to trash" (src/project.rs): the system's own trash, on
+# each platform. Without chrono, which only dates trash listings.
+trash = { version = "5.2", default-features = false, features = ["coinit_apartmentthreaded"] }
+
 # Control by MCP (src/mcp.rs): the official Rust SDK, served over
 # streamable HTTP with axum on a tokio runtime of its own thread.
 rmcp = { version = "3.5.1", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }

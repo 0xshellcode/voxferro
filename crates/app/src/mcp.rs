@@ -312,6 +312,13 @@ pub fn write_target(line: &str, current: Option<&str>) -> Option<Result<std::pat
         ["export", p, ..] => Some(Ok(path(p).with_extension("obj"))),
         ["anim", "export", dir, ..] => Some(Ok(path(dir))),
         ["render", "save", p, ..] => Some(Ok(path(p))),
+        ["palette", "save", p, ..] => Some(Ok(path(p))),
+        ["project", "rename", name @ ..] => Some(match current {
+            Some(c) => crate::project::renamed(std::path::Path::new(c), &name.join(" ")),
+            None => Err("this model has never been saved".to_owned()),
+        }),
+        ["project", "dup"] => Some(current.map(|c| crate::project::next_free(std::path::Path::new(c))).ok_or_else(|| "this model has never been saved".to_owned())),
+        ["project", "delete"] => Some(current.map(path).ok_or_else(|| "this model has no file".to_owned())),
         _ => None,
     }
 }
@@ -343,6 +350,9 @@ mod tests {
         assert_eq!(write_target("export m", None), Some(Ok("m.obj".into())));
         assert_eq!(write_target("anim export out 8", None), Some(Ok("out".into())));
         assert_eq!(write_target("render save r.png", None), Some(Ok("r.png".into())));
+        assert_eq!(write_target("palette save p.png", None), Some(Ok("p.png".into())));
+        assert_eq!(write_target("project rename fort", Some("/a/castle.vox")), Some(Ok("/a/fort.vox".into())));
+        assert!(matches!(write_target("project dup", None), Some(Err(_))));
         assert_eq!(write_target("box 0 0 0 1 1 1 2", None), None);
         assert!(needs_path("open"));
         assert!(!needs_path("open a.vox"));
