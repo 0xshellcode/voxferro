@@ -14,6 +14,11 @@ impl App {
     pub(crate) fn exec_graph(&mut self, nodes: Result<Vec<SceneNode>, GraphError>, merge: bool) -> Result<(), String> {
         let nodes = nodes.map_err(|e| e.to_string())?;
         let Some(loaded) = self.scene.as_mut() else { return Err("nothing open".to_owned()) };
+        // Adding or removing nodes renumbers them all (`compact`): the
+        // selected objects' ids would name others. Moves keep them.
+        if nodes.len() != loaded.doc.scene.nodes.len() {
+            self.objects.clear();
+        }
         let command = Command::SetGraph { before: loaded.doc.scene.nodes.clone(), after: nodes };
         if merge {
             self.history.exec(&mut loaded.doc, command);

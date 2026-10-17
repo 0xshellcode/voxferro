@@ -173,6 +173,31 @@ impl App {
             egui::CollapsingHeader::new(egui::RichText::new(name).size(10.5)).id_salt(("edit", name)).default_open(open)
         };
 
+        // In the Move tool, the reference editor's World-mode object panel first.
+        if self.moving {
+            section("OBJECT", true).show(ui, |ui| {
+                let n = self.object_indices().len();
+                ui.label(egui::RichText::new(format!("{n} selected  ·  Shift+click adds")).size(10.5).weak());
+                row(ui, &[("All", "object all", "Select every object (Cmd+A)"), ("Inv", "object invert", "Select the others (Cmd+I)"), ("None", "object none", "Clear the selection (Cmd+D)")], &mut lines);
+                row(ui, &[("Copy", "object copy", "Copy, each with a model of its own"), ("Ref", "object copy ref", "Copy as references to the same models"), ("Cut", "object cut", "Copy as references and delete"), ("Paste", "object paste", "Paste where they were copied from")], &mut lines);
+                row(ui, &[("Union", "object union", "Fuse into one model; the last selected wins where they overlap"), ("Inter", "object intersect", "Keep only where every object is filled"), ("Oper", "object operand", "Set the selection aside to subtract or paint with")], &mut lines);
+                row(ui, &[("Subtract", "object subtract", "Remove the operand's voxels from the selected objects"), ("Replace", "object replace", "Paint the selected objects in the operand's colours where it is")], &mut lines);
+                for (side, label) in [(1, "+"), (0, "c"), (-1, "-")] {
+                    let names = ["X", "Y", "Z"].map(|a| format!("{label}{a}"));
+                    let hint = match side {
+                        1 => "Align each object's high side to the selection's",
+                        0 => "Centre each object on the selection's centre",
+                        _ => "Align each object's low side to the selection's",
+                    };
+                    if let Some(i) = crate::layout::button_row(ui, &[(&names[0], hint), (&names[1], hint), (&names[2], hint)]) {
+                        lines.push(format!("object align {} {side}", ["x", "y", "z"][i]));
+                    }
+                }
+                row(ui, &[("Flip X", "object flip x", "Mirror the selection across x"), ("Flip Y", "object flip y", "Mirror the selection across y"), ("Flip Z", "object flip z", "Mirror the selection across z")], &mut lines);
+                row(ui, &[("Ground", "object ground", "Move the selection down onto z = 0"), ("Own", "object own", "Give each selected reference a model of its own"), ("Delete", "object delete", "Delete the selected objects")], &mut lines);
+            });
+        }
+
         section("TOOL", true).show(ui, |ui| {
             row(ui, &[("Full", "full", "Fill the whole box with the colour"), ("Fill", "fill", "Repaint every voxel with the colour")], &mut lines);
             row(ui, &[("Clear", "zero", "Remove every voxel"), ("Rev", "rev", "Swap solid and empty: empty space takes the colour")], &mut lines);
@@ -216,6 +241,7 @@ impl App {
             let message = match line.split_whitespace().next() {
                 Some("rotate") => self.select_command(&line, ui.ctx()),
                 Some("flip") => self.select_command(&line.replacen("flip", "mirror", 1), ui.ctx()),
+                Some("object") => self.object_command(&line),
                 _ => self.edit_command(&line),
             };
             self.console_log.push(message);

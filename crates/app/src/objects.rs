@@ -4,15 +4,19 @@
 //! In the Move tool, a click picks a model (or the selected group holding
 //! it); Shift+click without dragging adds it to the selection or takes it
 //! out; Cmd+A, Cmd+I and Cmd+D select all, invert and clear, as the reference editor
-//! has them in World mode. A drag on any selected object moves them all,
+//! has them in World mode. A drag on empty space draws a marquee: the
+//! objects whose box falls wholly inside it are selected -- Shift adds
+//! them, Shift+Alt takes them out, as the reference editor's. A drag on any selected
+//! object moves them all,
 //! Cmd+drag and X, Y, Z turn them all about their common centre, and
 //! Delete removes them. `object all|none|invert|add <i>|remove <i>|list`
 //! from the console.
 //!
-//! The selection holds transform node ids, not instance indices: those
-//! shift whenever an instance is added or removed, while a node keeps its
-//! id. With nothing in it, the selection is the current model (or group),
-//! as before.
+//! The selection holds transform node ids, which moving and turning keep.
+//! Adding or removing a node renumbers them all (`graph::compact`), so such
+//! an edit, or an undo, clears the selection; the operations that make new
+//! objects select those afterwards. With nothing in it, the selection is
+//! the current model (or group), as before.
 
 use crate::App;
 use eframe::egui;
@@ -84,6 +88,13 @@ impl App {
             ["add", i] | ["remove", i] => {
                 let Some(i) = index(i) else { return format!("object add|remove <0-{}>", count.saturating_sub(1)) };
                 let node = self.move_target(i);
+                // Typed, the first one starts the selection on its own
+                // (Shift+click keeps the current model in it).
+                if words[0] == "add" && self.objects.is_empty() {
+                    self.objects.extend(node);
+                    self.selected = i;
+                    return format!("1 objects selected: [{i}]");
+                }
                 let present = node.is_some_and(|n| self.object_nodes().contains(&n));
                 if (words[0] == "add") != present {
                     self.toggle_object(i);
@@ -96,6 +107,9 @@ impl App {
             && !self.object_indices().contains(&self.selected)
         {
             self.selected = first;
+        }
+        if self.objects.is_empty() {
+            return format!("no objects selected: object commands act on the current model ({})", self.selected);
         }
         format!("{} objects selected: {:?}", self.object_indices().len(), self.object_indices())
     }
@@ -169,7 +183,7 @@ impl App {
 
     /// World bounds of every selected object, for the highlight.
     pub fn object_boxes(&self) -> Vec<(Vec3, Vec3)> {
-        if !self.moving || self.objects.is_empty() {
+        if self.objects.is_empty() {
             return Vec::new();
         }
         let Some(loaded) = &self.scene else { return Vec::new() };
@@ -196,6 +210,36 @@ impl App {
                 self.objects_turned(axis, 1, centre)
             }
             ["delete"] => return self.delete_objects(),
+            ["align", axis, side] => {
+                let a = match *axis {
+                    "x" => 0,
+                    "y" => 1,
+                    "z" => 2,
+                    _ => return "object align x|y|z -1|0|+1".to_owned(),
+                };
+                return match side.trim_start_matches('+').parse::<i32>() {
+                    Ok(s @ -1..=1) => self.align_objects(a, s),
+                    _ => "object align x|y|z -1|0|+1".to_owned(),
+                };
+            }
+            ["ground"] => return self.ground_objects(),
+            ["flip", axes] if !axes.is_empty() && axes.chars().all(|c| "xyz".contains(c)) => {
+                return self.flip_objects([axes.contains('x'), axes.contains('y'), axes.contains('z')]);
+            }
+            ["union"] => return self.union_objects(),
+            ["intersect"] => return self.intersect_objects(),
+            ["operand"] => return self.take_operand(),
+            ["subtract"] => return self.apply_operand(false),
+            ["replace"] => return self.apply_operand(true),
+            ["copy"] => return self.copy_objects(false),
+            ["copy", "ref"] => return self.copy_objects(true),
+            ["cut"] => {
+                let copied = self.copy_objects(true);
+                let deleted = self.delete_objects();
+                return format!("{copied}; {deleted}");
+            }
+            ["paste"] => return self.paste_objects(),
+            ["own"] => return self.own_models(),
             _ => return OBJECT_USAGE.to_owned(),
         };
         let n = self.object_indices().len();
@@ -228,4 +272,77 @@ impl App {
     }
 }
 
-const OBJECT_USAGE: &str = "object all|none|invert|add <i>|remove <i>|list | move dx dy dz | turn x|y|z | delete";
+const OBJECT_USAGE: &str = "object all|none|invert|add <i>|remove <i>|list | move dx dy dz | turn x|y|z | delete | \
+    align x|y|z -1|0|+1 | ground | flip <axes> | union | intersect | operand | subtract | replace | copy [ref] | cut | paste | own";
+
+/// A marquee over objects being dragged: its corners, and whether it
+/// replaces the selection (0), adds to it (1) or takes from it (-1).
+pub struct ObjectMarquee {
+    pub from: egui::Pos2,
+    pub to: egui::Pos2,
+    mode: i8,
+}
+
+impl App {
+    /// Starts a marquee on empty space in the Move tool.
+    pub fn begin_object_marquee(&mut self, at: egui::Pos2, modifiers: egui::Modifiers) -> bool {
+        let mode = match (modifiers.shift, modifiers.alt) {
+            (true, true) => -1,
+            (true, false) => 1,
+            _ => 0,
+        };
+        self.object_marquee = Some(ObjectMarquee { from: at, to: at, mode });
+        true
+    }
+
+    /// Ends the marquee: the objects wholly inside it, by their model's box
+    /// on screen.
+    pub fn finish_object_marquee(&mut self, view_proj: glam::Mat4, rect: egui::Rect) {
+        let Some(m) = self.object_marquee.take() else { return };
+        let area = egui::Rect::from_two_pos(m.from, m.to);
+        let visible = self.visibility();
+        let Some(scene) = self.scene.as_ref().map(|s| &s.doc.scene) else { return };
+        let project = |p: Vec3| {
+            let c = view_proj * p.extend(1.0);
+            let ndc = c.truncate() / c.w.max(1e-6);
+            rect.min + egui::vec2((ndc.x + 1.0) * 0.5 * rect.width(), (1.0 - ndc.y) * 0.5 * rect.height())
+        };
+        let hits: Vec<usize> = (0..scene.instances.len())
+            .filter(|&i| visible.shows(&scene.instances[i]))
+            .filter(|&i| {
+                let Some((lo, hi)) = crate::object_ops::instance_box(scene, i) else { return false };
+                let (lo, hi) = (lo.as_vec3(), hi.as_vec3());
+                (0..8).all(|k| {
+                    let p = Vec3::new(
+                        if k & 1 == 0 { lo.x } else { hi.x },
+                        if k & 2 == 0 { lo.y } else { hi.y },
+                        if k & 4 == 0 { lo.z } else { hi.z },
+                    );
+                    area.contains(project(p))
+                })
+            })
+            .collect();
+        let nodes: Vec<i32> = hits.iter().filter_map(|&i| self.move_target(i)).collect();
+        match m.mode {
+            0 => self.objects = nodes,
+            1 => {
+                if self.objects.is_empty() {
+                    self.objects.extend(self.move_target(self.selected));
+                }
+                for n in nodes {
+                    if !self.objects.contains(&n) {
+                        self.objects.push(n);
+                    }
+                }
+            }
+            _ => self.objects.retain(|n| !nodes.contains(n)),
+        }
+        if let Some(&first) = hits.first()
+            && m.mode >= 0
+        {
+            self.selected = first;
+        }
+        let message = self.object_select_command(&["list"]);
+        self.console_log.push(message);
+    }
+}

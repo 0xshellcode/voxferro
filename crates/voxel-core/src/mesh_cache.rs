@@ -141,6 +141,10 @@ impl MeshCache {
 
 fn append_quads(mesh: &mut Mesh, quads: &[Quad], volume: &Volume, transform: &Transform) {
     let half = volume.pivot();
+    // A mirrored placement (the reference editor's Flip, or a file's sign bits)
+    // turns every quad's winding round: wind them back, or the renderer's
+    // back-face culling shows the model inside out.
+    let mirrored = transform.rotation.determinant() < 0.0;
     for quad in quads {
         let base = mesh.vertices.len() as u32;
         let normal = transform.rotation * Vec3::from_array(quad.face.normal());
@@ -151,7 +155,11 @@ fn append_quads(mesh: &mut Mesh, quads: &[Quad], volume: &Volume, transform: &Tr
                 palette_index: quad.value as f32,
             });
         }
-        mesh.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        if mirrored {
+            mesh.indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+        } else {
+            mesh.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
     }
 }
 
@@ -212,6 +220,26 @@ mod tests {
             nodes: Vec::new(),
             frame: 0,
         }
+    }
+
+    #[test]
+    fn a_mirrored_placement_keeps_its_faces_facing_out() {
+        let mut v = Volume::new([1, 1, 1]);
+        v.set(0, 0, 0, 1);
+        // Each triangle's winding (counter-clockwise seen from outside)
+        // must agree with its normal, mirrored or not.
+        let outward = |scene: &Scene| {
+            let mesh = MeshCache::default().build(scene, |_| true, |_| None);
+            mesh.indices.chunks(3).all(|t| {
+                let p = |k: usize| Vec3::from_array(mesh.vertices[t[k] as usize].position);
+                let n = Vec3::from_array(mesh.vertices[t[0] as usize].normal);
+                (p(1) - p(0)).cross(p(2) - p(0)).dot(n) > 0.0
+            })
+        };
+        let mut scene = scene_with(v);
+        assert!(outward(&scene));
+        scene.instances[0].transform.rotation = glam::Mat3::from_diagonal(Vec3::new(-1.0, 1.0, 1.0));
+        assert!(outward(&scene), "a flip must not turn the model inside out");
     }
 
     #[test]

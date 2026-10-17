@@ -1,6 +1,7 @@
 //! The scene outline: groups and instances as a tree, and the layer table.
 //!
-//! Instances can be picked several at a time (Cmd+click) to be grouped; a
+//! Instances can be picked several at a time (Cmd+click; the same object
+//! selection as the Move tool's Shift+click) to be grouped; a
 //! group row selects the group itself, which then moves, hides, is renamed
 //! or dissolved as a whole. Layers are part of the document: hiding one or
 //! renaming it is an undoable edit and is saved with the file.
@@ -25,7 +26,7 @@ impl App {
     /// After a structural edit node ids are renumbered and instance indices
     /// shift: what was picked by them no longer means the same thing.
     pub(crate) fn forget_picks(&mut self) {
-        self.picked.clear();
+        self.objects.clear();
         self.selected_group = None;
     }
 
@@ -50,7 +51,7 @@ impl App {
             ["group", rest @ ..] => {
                 let mut indices: Vec<usize> = rest.iter().filter_map(|w| w.parse().ok()).collect();
                 if indices.is_empty() {
-                    indices = if self.picked.is_empty() { vec![self.selected] } else { self.picked.iter().copied().collect() };
+                    indices = if self.objects.is_empty() { vec![self.selected] } else { self.object_indices() };
                 }
                 (scene.with_grouped(&indices), true)
             }
@@ -217,7 +218,7 @@ impl App {
             None => path.first().copied(),
         };
         self.selected = pick.instance;
-        self.picked.clear();
+        self.objects.clear();
         self.selected_group = next;
         let message = match next {
             Some(group) => format!("group selected ({} models)", scene.instances_under(group).len()),
@@ -231,6 +232,7 @@ impl App {
     pub fn scene_ui(&mut self, ui: &mut egui::Ui) {
         let Some(loaded) = &self.scene else { return };
         let rows: Vec<TreeRow> = loaded.doc.scene.tree();
+        let chosen = self.object_indices();
         let models: Vec<usize> = loaded.doc.scene.instances.iter().map(|i| i.model_index).collect();
 
         let mut clicked: Option<(TreeRow, bool)> = None;
@@ -254,7 +256,7 @@ impl App {
                     TreeKind::Instance(i) => {
                         let model = models.get(i).copied().unwrap_or(0);
                         let name = row.name.clone().unwrap_or_else(|| format!("model {model}"));
-                        let on = self.selected_group.is_none() && (i == self.selected || self.picked.contains(&i));
+                        let on = self.selected_group.is_none() && (i == self.selected || chosen.contains(&i));
                         (format!("{i}: {name}"), on)
                     }
                 };
@@ -302,19 +304,16 @@ impl App {
             match row.kind {
                 TreeKind::Group => {
                     self.selected_group = Some(row.node);
-                    self.picked.clear();
+                    self.objects.clear();
                 }
                 TreeKind::Instance(i) => {
                     self.selected_group = None;
                     if additive {
-                        if !self.picked.remove(&i) {
-                            self.picked.insert(i);
-                        }
-                        self.picked.insert(self.selected);
+                        self.toggle_object(i);
                     } else {
-                        self.picked.clear();
+                        self.objects.clear();
+                        self.selected = i;
                     }
-                    self.selected = i;
                 }
             }
         }
@@ -380,7 +379,7 @@ impl App {
             });
         } else {
             self.instance_ui(ui);
-            let count = if self.picked.is_empty() { 1 } else { self.picked.len() };
+            let count = if self.objects.is_empty() { 1 } else { self.object_indices().len() };
             if ui
                 .small_button(format!("Group ({count})"))
                 .on_hover_text("Cmd+click instances to pick several")

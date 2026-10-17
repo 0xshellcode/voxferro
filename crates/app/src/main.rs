@@ -13,6 +13,7 @@
 mod anim_ui;
 mod autosave;
 mod hotkeys;
+mod object_ops;
 mod objects;
 mod photo;
 mod camera;
@@ -262,12 +263,16 @@ struct App {
     /// The placed instance edits, kernels and console commands act on: the
     /// one last clicked.
     selected: usize,
-    /// Instances picked together in the outline (Cmd+click), for grouping.
-    picked: std::collections::BTreeSet<usize>,
     /// A group selected in the outline, by its transform node.
     selected_group: Option<i32>,
     /// Several objects selected in the Move tool, by transform node.
     objects: Vec<i32>,
+    /// A marquee over objects, being dragged in the Move tool.
+    object_marquee: Option<objects::ObjectMarquee>,
+    /// Objects copied (`object copy`), and the operand set aside for
+    /// subtracting and replacing, in world cells.
+    object_clip: Vec<(object_ops::Clip, voxel_core::Transform)>,
+    operand: std::collections::HashMap<glam::IVec3, u8>,
     /// World cell of the traced grid's corner. The tracer walks one grid
     /// holding every visible instance; this maps the camera into it.
     trace_origin: glam::IVec3,
@@ -429,9 +434,11 @@ impl App {
             pending_samples: 0,
             status: String::new(),
             selected: 0,
-            picked: Default::default(),
             selected_group: None,
             objects: Vec::new(),
+            object_marquee: None,
+            object_clip: Vec::new(),
+            operand: Default::default(),
             trace_origin: glam::IVec3::ZERO,
             light_dir: Vec3::new(0.3, 0.5, 0.8).normalize(),
             screenshot: None,
@@ -644,8 +651,11 @@ impl App {
 
     /// Makes `loaded` the open document.
     fn install(&mut self, state: &egui_wgpu::RenderState, loaded: scene::LoadedScene) {
-        // Selected objects name nodes of the old document.
+        // Selected objects, references and the operand name nodes, models
+        // and places of the old document.
         self.objects.clear();
+        self.object_clip.clear();
+        self.operand.clear();
         self.status = format!(
             "{} models, {} placed, v{}",
             loaded.doc.scene.models.len(),
@@ -1546,6 +1556,13 @@ impl App {
                     if self.begin_move(ray_at(&self.camera, at(from)), at(from).x, egui::Modifiers::default()) {
                         self.update_move(ray_at(&self.camera, at(to)), at(to).x);
                         self.finish_move();
+                    } else if self.begin_object_marquee(at(from), egui::Modifiers::default()) {
+                        // On empty space: a marquee over objects.
+                        if let Some(m) = &mut self.object_marquee {
+                            m.to = at(to);
+                        }
+                        self.finish_object_marquee(self.camera.view_proj(aspect), rect);
+                        eprintln!("[voxferro] {}", self.console_log.last().cloned().unwrap_or_default());
                     }
                 } else if self.selecting {
                     let mods = egui::Modifiers::default();
@@ -1603,15 +1620,22 @@ impl App {
                         } else if modifiers.alt {
                             // Option+Shift+click picks groups instead of
                             // painting (Option subtracts only in the Select
-                            // tool).
-                            self.select_group_at(ray)
+                            // tool); on empty space in the Move tool, a
+                            // marquee that takes objects out.
+                            self.select_group_at(ray) || (self.moving && self.begin_object_marquee(pos, modifiers))
                         } else if self.moving {
-                            self.begin_move(ray, pos.x, modifiers)
+                            self.begin_move(ray, pos.x, modifiers) || self.begin_object_marquee(pos, modifiers)
                         } else {
                             self.begin_stroke(ray)
                         }
                     });
                 self.orbiting = !hit;
+            }
+            if down
+                && let Some(m) = &mut self.object_marquee
+                && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+            {
+                m.to = pos;
             }
             if down
                 && self.transform_drag.as_ref().is_some_and(|d| d.dragging)
@@ -1652,6 +1676,7 @@ impl App {
                 self.finish_move();
                 self.finish_stroke();
                 self.finish_select(self.camera.view_proj(aspect), rect);
+                self.finish_object_marquee(self.camera.view_proj(aspect), rect);
                 self.orbiting = false;
             }
         }
@@ -1714,10 +1739,10 @@ impl App {
             egui::Color32::WHITE,
         );
 
-        if let Some(drag) = &self.select_drag
-            && self.brush_shape == voxel_core::BrushShape::Box
-        {
-            let marquee = egui::Rect::from_two_pos(drag.from, drag.to);
+        let object_marquee = self.object_marquee.as_ref().map(|m| (m.from, m.to));
+        let voxel_marquee = self.select_drag.as_ref().filter(|_| self.brush_shape == voxel_core::BrushShape::Box).map(|d| (d.from, d.to));
+        if let Some((from, to)) = object_marquee.or(voxel_marquee) {
+            let marquee = egui::Rect::from_two_pos(from, to);
             ui.painter().rect_stroke(
                 marquee,
                 0.0,

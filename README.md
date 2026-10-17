@@ -46,7 +46,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **274 tests
+Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **278 tests
 passing**; 41 and 42 (Windows and Linux) are prepared and built in CI, not
 yet tried on real machines. Working today:
 
@@ -74,6 +74,9 @@ yet tried on real machines. Working today:
   shear, any-angle rotation, repeat, mirror and diagonal symmetry, shapes,
   maze, Perlin noise, fractal, hull, flood, dilation and erosion, with the
   formulas of its own kernels
+- Several objects at once, as the reference editor's World mode: Shift+click and
+  marquee selection; union, intersection, subtraction and replacement;
+  align, drop to the ground, flip; copy, copy as reference, cut and paste
 - Editable scene: move, turn, duplicate, add and remove models; groups
   (create, move, turn, hide, dissolve, drag in the tree) and named layers with visibility, all
   saved in the file
@@ -240,6 +243,7 @@ Enter keeps and Esc drops a pending mouse transform.
 | Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz`, `transform scale <axes> <f>`, `transform rotate <axis> <deg>`, `transform wrap <x\|-x\|y\|-y\|z\|-z> <cells> [two]`, `transform spacing <x> <y> <z>`, `transform drag move\|scale\|turn\|wrap\|off`, `transform keep\|drop` |
 | Model | `rotate x\|y\|z` (or `rot90`), `mirror x\|y\|z` (or `flip`), `crop` (or `shrink`), `resize x y z`, `fill`, `clear`, `box`, `sphere`, `voxels x y z c …`, `gpu …` |
 | Scene | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
+| Objects | `object all\|none\|invert\|add i\|remove i\|list`, `object move dx dy dz\|turn x\|y\|z\|delete`, `object align x\|y\|z -1\|0\|+1`, `object ground`, `object flip <axes>`, `object union\|intersect\|operand\|subtract\|replace`, `object copy [ref]\|cut\|paste\|own` |
 | Palette | `palette open\|save <file.png>`, `palette reset`, `palette default 0-3`, `palette swap\|gradient\|copy <a> <b>`, `palette paste <i>`, `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [key=value]…` |
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]` |
