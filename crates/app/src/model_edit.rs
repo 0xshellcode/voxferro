@@ -29,9 +29,9 @@ use voxel_core::kernels::{self, Prim};
 use voxel_core::Volume;
 
 /// The command words this module answers.
-pub const WORDS: [&str; 19] = [
+pub const WORDS: [&str; 22] = [
     "full", "zero", "rev", "x2", "xh", "loop", "scale", "shear", "rot", "repeat", "mir", "dia", "prim", "flood",
-    "hull", "dil", "ero", "mask", "tex",
+    "hull", "dil", "ero", "mask", "tex", "maze", "noise", "fractal",
 ];
 
 /// The panel's text fields, which start with the reference editor's examples.
@@ -101,7 +101,8 @@ impl App {
         let colour = self.brush_color;
         let args = &words[1..];
         let edit = match verb {
-            "mask" | "tex" => match &self.pattern {
+            "mask" | "tex" | "fractal" => match &self.pattern {
+                Some(p) if verb == "fractal" => Ok(Edit::Replace(kernels::fractal(&volume, p))),
                 Some(p) => Ok(Edit::InPlace(if verb == "mask" { kernels::mask(&volume, p) } else { kernels::texture(&volume, p) })),
                 None => Err("no pattern: make one from a selection, or open one (pattern …)".to_owned()),
             },
@@ -202,6 +203,8 @@ impl App {
         section("SHAPE", false).show(ui, |ui| {
             row(ui, &[("Ellipsoid", "prim elli", "Fill the box with an ellipsoid"), ("Cylinder", "prim cyli", "Fill the box with a cylinder up z")], &mut lines);
             row(ui, &[("Pyramid", "prim pyra", "Fill the box with a pyramid"), ("Cone", "prim cone", "Fill the box with a cone")], &mut lines);
+            row(ui, &[("Maze", "maze", "A new 3D maze of corridors in the colour"), ("Perlin", "noise -1", "Perlin noise in the colour, a new seed each time")], &mut lines);
+            row(ui, &[("Fractal", "fractal", "Each voxel becomes the pattern, in its colour")], &mut lines);
         });
         section("MODIFY", false).show(ui, |ui| {
             row(ui, &[("Hull", "flood 0", "Remove every voxel that can't be seen"), ("Flood", "flood", "Fill enclosed empty space with the colour")], &mut lines);
@@ -276,6 +279,21 @@ fn edit_for(verb: &str, args: &[&str], volume: &Volume, colour: u8) -> Result<Ed
             },
             None => InPlace(kernels::flood(volume, colour)),
         },
+        // the reference editor's Maze and Perlin: a new model in the box's size.
+        "maze" => {
+            let p = match args.first() {
+                Some(n) => n.parse::<u32>().map_err(|_| "maze [corridor gap, 1 or more]".to_owned())?,
+                None => 1,
+            };
+            InPlace(kernels::maze(volume.size(), colour, p, &mut kernels::Rand::from_clock()))
+        }
+        "noise" => {
+            // `noise [seed] [scale] [lo] [hi]`; a seed below 0 is a new one.
+            let n = |i: usize, default: f32| args.get(i).map_or(Ok(default), |a| a.parse::<f32>().map_err(|_| "noise [seed] [scale] [lo] [hi]".to_owned()));
+            let seed = n(0, 0.0)?;
+            let seed = if seed < 0.0 { kernels::Rand::from_clock().next_u32() % 65535 } else { seed.min(65535.0) as u32 };
+            InPlace(kernels::noise(volume.size(), colour, seed, n(1, 0.04)?, n(2, 0.2)?, n(3, 0.5)?))
+        }
         "dil" | "ero" => {
             let n = match args.first() {
                 Some(w) => w.parse::<u32>().ok().and_then(kernels::neighbours),
@@ -313,7 +331,7 @@ mod tests {
     fn every_word_is_handled() {
         let v = Volume::new([4, 4, 4]);
         for w in WORDS {
-            if matches!(w, "hull" | "mask" | "tex") {
+            if matches!(w, "hull" | "mask" | "tex" | "fractal") {
                 continue;
             }
             let args: &[&str] = match w {

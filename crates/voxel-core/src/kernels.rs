@@ -59,6 +59,148 @@ pub fn wrap(source: &Volume, offset: IVec3, size: [u32; 3], spacing: [u32; 3], m
     })
 }
 
+/// A small, fast random source for the kernels that need one (Maze), so a
+/// seed gives the same model every time.
+pub struct Rand(u64);
+
+impl Rand {
+    pub fn new(seed: u64) -> Self {
+        Self(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+    }
+
+    /// A seed from the clock, for a new model on each press.
+    pub fn from_clock() -> Self {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64);
+        Self::new(t)
+    }
+
+    pub fn next_u32(&mut self) -> u32 {
+        // xorshift64*
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        (self.0.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 32) as u32
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next_u32() as usize) % n.max(1)
+    }
+}
+
+/// the reference editor's *Maze* (`grid_edit::maze`): a three-dimensional maze of
+/// one-voxel corridors in `colour`, filling a box the size of `size`; what
+/// was there is replaced. Cells sit every `step = max(p, 1) + 2` voxels
+/// (3 by default) and corridors join them, grown as the reference editor grows them:
+/// a list of open cells, half the time the newest taken and half the time
+/// one at random; from it a step into an unvisited neighbour, toward -x,
+/// -y or -z first and toward + only when those are used up or one time in
+/// five; a cell with nowhere to go leaves the list.
+pub fn maze(size: [u32; 3], colour: u8, p: u32, rand: &mut Rand) -> Volume {
+    let step = p.max(1) as i32 + 2;
+    let mut out = Volume::new(size);
+    let n = size.map(|s| (s as i32 - 1).max(0) / step + 1);
+    let index = |c: IVec3| (c.x + n[0] * (c.y + n[1] * c.z)) as usize;
+    let inside = |c: IVec3| (0..3).all(|a| c[a] >= 0 && c[a] < n[a]);
+    let mut visited = vec![false; (n[0] * n[1] * n[2]) as usize];
+    let put = |out: &mut Volume, p: IVec3| {
+        if p.cmpge(IVec3::ZERO).all() {
+            out.set(p.x as u32, p.y as u32, p.z as u32, colour);
+        }
+    };
+    let start = IVec3::new(rand.below(n[0] as usize) as i32, rand.below(n[1] as usize) as i32, rand.below(n[2] as usize) as i32);
+    visited[index(start)] = true;
+    put(&mut out, start * step);
+    let mut open = vec![start];
+    let back = [IVec3::NEG_X, IVec3::NEG_Y, IVec3::NEG_Z];
+    let ahead = [IVec3::X, IVec3::Y, IVec3::Z];
+    while !open.is_empty() {
+        let newest = rand.next_u32() & 1 == 1;
+        let i = if newest { open.len() - 1 } else { rand.below(open.len()) };
+        let c = open[i];
+        let free = |d: &IVec3| inside(c + *d) && !visited[index(c + *d)];
+        let mut ways: Vec<IVec3> = back.iter().copied().filter(free).collect();
+        if ways.is_empty() || rand.below(5) == 0 {
+            ways.extend(ahead.iter().copied().filter(free));
+        }
+        if ways.is_empty() {
+            open.swap_remove(i);
+            continue;
+        }
+        let d = ways[rand.below(ways.len())];
+        visited[index(c + d)] = true;
+        open.push(c + d);
+        for t in 1..=step {
+            put(&mut out, c * step + d * t);
+        }
+    }
+    out
+}
+
+/// Ken Perlin's improved noise, as the reference editor's `the reference writer`: the
+/// reference permutation, the quintic fade and the twelve edge gradients.
+pub fn perlin(p: Vec3) -> f32 {
+    const PERM: [u8; 256] = [
+        151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30, 69, 142, 8, 99, 37, 240, 21, 10, 23, 190,
+        6, 148, 247, 120, 234, 75, 0, 26, 197, 62, 94, 252, 219, 203, 117, 35, 11, 32, 57, 177, 33, 88, 237, 149, 56, 87, 174, 20, 125,
+        136, 171, 168, 68, 175, 74, 165, 71, 134, 139, 48, 27, 166, 77, 146, 158, 231, 83, 111, 229, 122, 60, 211, 133, 230, 220, 105, 92,
+        41, 55, 46, 245, 40, 244, 102, 143, 54, 65, 25, 63, 161, 1, 216, 80, 73, 209, 76, 132, 187, 208, 89, 18, 169, 200, 196, 135, 130,
+        116, 188, 159, 86, 164, 100, 109, 198, 173, 186, 3, 64, 52, 217, 226, 250, 124, 123, 5, 202, 38, 147, 118, 126, 255, 82, 85, 212,
+        207, 206, 59, 227, 47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170, 213, 119, 248, 152, 2, 44, 154, 163, 70, 221, 153, 101, 155,
+        167, 43, 172, 9, 129, 22, 39, 253, 19, 98, 108, 110, 79, 113, 224, 232, 178, 185, 112, 104, 218, 246, 97, 228, 251, 34, 242, 193,
+        238, 210, 144, 12, 191, 179, 162, 241, 81, 51, 145, 235, 249, 14, 239, 107, 49, 192, 214, 31, 181, 199, 106, 157, 184, 84, 204,
+        176, 115, 121, 50, 45, 127, 4, 150, 254, 138, 236, 205, 93, 222, 114, 67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61, 156, 180,
+    ];
+    const GRAD: [[f32; 3]; 16] = [
+        [0.0, 1.0, 1.0], [0.0, 1.0, -1.0], [0.0, -1.0, -1.0], [0.0, -1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 0.0, -1.0], [-1.0, 0.0, -1.0],
+        [-1.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, -1.0, 0.0], [-1.0, 1.0, 0.0], [0.0, 1.0, 1.0], [0.0, 1.0, -1.0],
+        [0.0, -1.0, -1.0], [0.0, -1.0, 1.0],
+    ];
+    let perm = |i: i32| PERM[(i & 255) as usize] as i32;
+    let fade = |t: f32| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    let lerp = |t: f32, a: f32, b: f32| a + t * (b - a);
+    let cell = p.floor();
+    let [x, y, z] = cell.as_ivec3().to_array();
+    let f = p - cell;
+    let grad = |h: i32, d: Vec3| Vec3::from_array(GRAD[(h & 15) as usize]).dot(d);
+    let (a, b) = (perm(x) + y, perm(x + 1) + y);
+    let (aa, ab, ba, bb) = (perm(a) + z, perm(a + 1) + z, perm(b) + z, perm(b + 1) + z);
+    let (u, v, w) = (fade(f.x), fade(f.y), fade(f.z));
+    let c = |h: i32, dx: f32, dy: f32, dz: f32| grad(perm(h), f - Vec3::new(dx, dy, dz));
+    lerp(
+        w,
+        lerp(v, lerp(u, c(aa, 0.0, 0.0, 0.0), c(ba, 1.0, 0.0, 0.0)), lerp(u, c(ab, 0.0, 1.0, 0.0), c(bb, 1.0, 1.0, 0.0))),
+        lerp(v, lerp(u, c(aa + 1, 0.0, 0.0, 1.0), c(ba + 1, 1.0, 0.0, 1.0)), lerp(u, c(ab + 1, 0.0, 1.0, 1.0), c(bb + 1, 1.0, 1.0, 1.0))),
+    )
+}
+
+/// the reference editor's *Perlin* (`grid_edit::noise`): the box filled in `colour`
+/// where `sin(noise · π)` falls strictly between `lo` and `hi`, the noise
+/// sampled at `(cell + seed) · scale` -- a band of the noise, which reads as
+/// winding caves and sheets. What was there is replaced. the reference editor's
+/// defaults: seed 0, scale 0.04, band 0.2 to 0.5.
+pub fn noise(size: [u32; 3], colour: u8, seed: u32, scale: f32, lo: f32, hi: f32) -> Volume {
+    let seed = seed as f32;
+    map_volume(size, |c| {
+        let v = (perlin((c.floor() + seed) * scale) * std::f32::consts::PI).sin();
+        if lo < v && v < hi { colour } else { 0 }
+    })
+}
+
+/// the reference editor's *Fractal* (`grid_edit::fractal`): each voxel becomes the
+/// pattern's shape in the voxel's colour, so the model grows by the
+/// pattern's size on each axis (up to 256). The pattern's own colours are
+/// not used.
+pub fn fractal(volume: &Volume, pattern: &Volume) -> Volume {
+    let p = pattern.size();
+    let src = volume.size();
+    let size = [0, 1, 2].map(|a| (src[a] * p[a]).clamp(1, 256));
+    map_volume(size, |c| {
+        let q = c.floor().as_uvec3();
+        let s = volume.get(q.x / p[0], q.y / p[1], q.z / p[2]);
+        if s != 0 && pattern.get(q.x % p[0], q.y % p[1], q.z % p[2]) != 0 { s } else { 0 }
+    })
+}
+
 /// The kernels' `voxel()`: the cell `p` falls in, 0 outside the box.
 fn voxel(volume: &Volume, p: Vec3) -> u8 {
     let c = p.floor();
@@ -511,6 +653,55 @@ mod tests {
     fn diagonal_reflects_through_x_equals_y() {
         let v = filled(&[[3, 1, 0]], [4, 4, 1]);
         assert_eq!(cells(&diagonal(&v, 2)), vec![[3, 1, 0], [1, 3, 0]]);
+    }
+
+    #[test]
+    fn a_maze_joins_every_cell_by_corridors() {
+        let size = [13, 13, 7];
+        let m = maze(size, 9, 1, &mut Rand::new(7));
+        // Cells every 3 voxels: 5 x 5 x 3, all reached.
+        for z in (0..7).step_by(3) {
+            for y in (0..13).step_by(3) {
+                for x in (0..13).step_by(3) {
+                    assert_eq!(m.get(x, y, z), 9, "cell {x} {y} {z}");
+                }
+            }
+        }
+        // A spanning tree: 75 cells, 74 corridors of 2 voxels between them.
+        assert_eq!(m.filled_count(), 75 + 74 * 2);
+        // Off the lattice lines nothing is filled.
+        assert_eq!(m.get(1, 1, 0), 0);
+        // The same seed, the same maze.
+        assert_eq!(maze(size, 9, 1, &mut Rand::new(7)), m);
+    }
+
+    #[test]
+    fn perlin_is_zero_on_the_lattice_and_smooth_between() {
+        assert_eq!(perlin(Vec3::new(3.0, 5.0, 7.0)), 0.0);
+        let a = perlin(Vec3::new(0.3, 0.4, 0.5));
+        let b = perlin(Vec3::new(0.301, 0.4, 0.5));
+        assert!((a - b).abs() < 0.01 && a.abs() <= 1.0);
+        let n = noise([32, 32, 32], 4, 0, 0.04, 0.2, 0.5);
+        let filled = n.filled_count();
+        assert!(filled > 0 && filled < 32 * 32 * 32, "{filled}");
+        assert_ne!(noise([32, 32, 32], 4, 99, 0.04, 0.2, 0.5), n, "another seed, another model");
+    }
+
+    #[test]
+    fn fractal_puts_the_pattern_in_each_voxel() {
+        let mut v = Volume::new([2, 1, 1]);
+        v.set(0, 0, 0, 5);
+        let mut cross = Volume::new([3, 3, 1]);
+        for (x, y) in [(1, 0), (0, 1), (1, 1), (2, 1), (1, 2)] {
+            cross.set(x, y, 0, 77);
+        }
+        let f = fractal(&v, &cross);
+        assert_eq!(f.size(), [6, 3, 1]);
+        assert_eq!(f.filled_count(), 5);
+        assert_eq!(f.get(1, 1, 0), 5, "the voxel's colour, not the pattern's");
+        assert_eq!(f.get(4, 1, 0), 0, "an empty voxel stays empty");
+        // Capped at 256 a side.
+        assert_eq!(fractal(&Volume::new([100, 1, 1]), &cross).size()[0], 256);
     }
 
     #[test]
