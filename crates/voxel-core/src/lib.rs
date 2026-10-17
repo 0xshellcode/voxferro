@@ -25,6 +25,7 @@ mod scene;
 mod selection;
 mod transform;
 pub mod volume;
+pub mod voxelize;
 
 pub use brush::{BrushMode, BrushShape};
 pub use atmosphere::{Atmosphere, AtmosphereSettings, PLANET_RADIUS, SKY_SCALE};

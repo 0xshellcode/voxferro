@@ -41,7 +41,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–49 of the [ROADMAP](ROADMAP.md) are complete, with **254 tests
+Phases 0–40 and 43–49 of the [ROADMAP](ROADMAP.md) are complete, with **257 tests
 passing**. Working today:
 
 - Reading **and writing** `.vox` (versions 150 and 200), validated against the

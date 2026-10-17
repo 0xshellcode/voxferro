@@ -13,6 +13,9 @@
 //! where that file puts it, unturned), XRAW, Qubicle QB or SLAB6 -- told apart by their content,
 //! not their extension, since SLAB6's is `.vox` too. Their colours move to
 //! the nearest colours of this palette (the reference editor's "Match Color").
+//! `import <file.obj> [size] [fill]` voxelises a mesh (see
+//! `voxel_core::voxelize`): its longest side `size` voxels (64 by default),
+//! hollow unless `fill`.
 
 use crate::App;
 use voxel_core::formats::{self, Imported};
@@ -185,10 +188,24 @@ impl App {
             }
             return self.import_component(what, &path);
         }
-        let path = line.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+        // `import <file.obj> [size] [fill]`: a mesh, voxelised.
+        let mut rest: Vec<&str> = line.split_whitespace().skip(1).collect();
+        let mut obj_fill = false;
+        let mut obj_size = 64;
+        while let Some(last) = rest.last() {
+            if *last == "fill" {
+                obj_fill = true;
+            } else if let Ok(n) = last.parse::<u32>() {
+                obj_size = n.clamp(1, 256);
+            } else {
+                break;
+            }
+            rest.pop();
+        }
+        let path = rest.join(" ");
         let path = if path.is_empty() {
             match rfd::FileDialog::new()
-                .add_filter("Models", &["vox", "xraw", "qb"])
+                .add_filter("Models", &["vox", "xraw", "qb", "obj"])
                 .pick_file()
             {
                 Some(p) => p.to_string_lossy().into_owned(),
@@ -204,6 +221,32 @@ impl App {
         let Some(palette) = self.scene.as_ref().map(|s| s.doc.palette.clone()) else {
             return "nothing open to import into".to_owned();
         };
+        if path.to_ascii_lowercase().ends_with(".obj") {
+            let text = String::from_utf8_lossy(&bytes);
+            // The material library sits beside the OBJ.
+            let beside = |name: &str| std::path::Path::new(&path).with_file_name(name);
+            let mut materials = voxel_core::voxelize::mtllib(&text)
+                .and_then(|m| std::fs::read_to_string(beside(&m)).ok())
+                .map(|m| voxel_core::voxelize::parse_mtl(&m))
+                .unwrap_or_default();
+            // Textures, decoded here: the core has no image reader.
+            for m in materials.values_mut() {
+                m.texture = m.texture_name.as_ref().and_then(|t| std::fs::read(beside(t)).ok()).and_then(|b| crate::palette_files::read_rgba(&b));
+            }
+            let volume = match voxel_core::voxelize::parse_obj(&text, &materials) {
+                Ok(mesh) => voxel_core::voxelize::voxelize(&mesh, &palette, obj_size, obj_fill),
+                Err(e) => return format!("error: {path}: {e}"),
+            };
+            let [x, y, z] = volume.size();
+            let voxels = volume.filled_count();
+            return match self.add_model(volume, None) {
+                Ok(_) => {
+                    self.mesh_dirty = true;
+                    format!("imported {path} as {x}x{y}x{z}, {voxels} voxels")
+                }
+                Err(e) => e,
+            };
+        }
         // Each model and where its corner goes (None: beside the scene).
         let models: Vec<(voxel_core::Volume, Option<glam::IVec3>)> = match read_any(&bytes, &path) {
             Ok(Read::Vox(scene)) => {

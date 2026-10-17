@@ -51,6 +51,28 @@ pub fn read_png(bytes: &[u8]) -> Result<[Color; 256], String> {
     Ok(colours)
 }
 
+/// Any PNG as RGBA, for textures.
+pub fn read_rgba(bytes: &[u8]) -> Option<voxel_core::voxelize::Texture> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let channels = match info.color_type {
+        png::ColorType::Rgba => 4,
+        png::ColorType::Rgb => 3,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Grayscale => 1,
+        png::ColorType::Indexed => return None,
+    };
+    let mut rgba = Vec::with_capacity((info.width * info.height * 4) as usize);
+    for p in buf[..(info.width * info.height) as usize * channels].chunks(channels) {
+        let (r, g, b) = if channels >= 3 { (p[0], p[1], p[2]) } else { (p[0], p[0], p[0]) };
+        rgba.extend_from_slice(&[r, g, b, 255]);
+    }
+    (info.width > 0 && info.height > 0).then_some(voxel_core::voxelize::Texture { width: info.width, height: info.height, rgba })
+}
+
 /// Encodes a palette as the reference editor does.
 pub fn write_png(colours: &[Color; 256]) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(256 * 4);
