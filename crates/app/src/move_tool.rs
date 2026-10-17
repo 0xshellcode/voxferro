@@ -61,6 +61,13 @@ impl App {
     /// group when it holds the instance, otherwise the instance's own node.
     pub fn move_target(&self, index: usize) -> Option<i32> {
         let scene = &self.scene.as_ref()?.doc.scene;
+        // Inside an open group (Tab), its children are the objects: the one
+        // holding this model, or none if the model is outside the group.
+        if let Some(&open) = self.open_groups.last() {
+            let path = scene.groups_above(index);
+            let k = path.iter().position(|&g| g == open)?;
+            return path.get(k + 1).copied().or(scene.instances.get(index)?.node);
+        }
         if let Some(group) = self.selected_group
             && scene.instances_under(group).contains(&index)
         {

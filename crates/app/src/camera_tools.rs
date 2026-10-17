@@ -76,6 +76,10 @@ impl App {
                 self.camera.set_view(View::parse(name).unwrap_or(View::Front));
                 format!("view {name}")
             }
+            ["set", what, value] => match value.parse::<f32>() {
+                Ok(v) => return self.camera_set(what, v),
+                Err(_) => return "camera set x|y|z|pitch|yaw|roll|zoom|fov|mouse|keys <value>".to_owned(),
+            },
             ["zoom", f] => match f.parse::<f32>() {
                 Ok(f) if f > 0.0 => {
                     // Above 1 steps back, below 1 moves in.
@@ -107,6 +111,7 @@ impl App {
                             self.camera.set_projection(view.projection);
                             self.camera.yaw = view.yaw;
                             self.camera.pitch = view.pitch;
+                            self.camera.roll = view.roll;
                             self.camera_slot = slot;
                             format!("camera {slot} loaded")
                         }
@@ -124,6 +129,7 @@ impl App {
                         pitch: self.camera.pitch,
                         distance: self.camera.distance,
                         fov_y: self.camera.fov_y,
+                        roll: self.camera.roll,
                     };
                     let Some(loaded) = self.scene.as_mut() else { return "no document".to_owned() };
                     let after = saved_camera::with_slot(&loaded.doc.cameras, slot as i32, &view);
@@ -212,7 +218,7 @@ impl App {
                 )
             });
             if (forward, right, up) != (0.0, 0.0, 0.0) {
-                let speed = self.camera.distance.max(8.0) * if fast { 2.0 } else { 0.6 } * dt;
+                let speed = self.camera.distance.max(8.0) * if fast { 2.0 } else { 0.6 } * dt * self.key_speed;
                 self.camera.fly(forward * speed, right * speed, up * speed);
                 self.path_tracer.reset();
                 ctx.request_repaint();
@@ -242,15 +248,16 @@ impl App {
 
     pub fn camera_ui(&mut self, ui: &mut egui::Ui) {
         let mut lines: Vec<String> = Vec::new();
+        self.camera_fields_ui(ui);
         ui.horizontal_wrapped(|ui| {
             for (n, (_, name)) in View::ALL.iter().enumerate() {
-                if ui.small_button(*name).on_hover_text(format!("key {}", n + 1)).clicked() {
+                if ui.small_button(*name).on_hover_text(format!("Alt+{}", n + 1)).clicked() {
                     lines.push(format!("camera {name}"));
                 }
             }
         });
         ui.horizontal(|ui| {
-            if ui.small_button("Frame").on_hover_text("F: the selection, or the model").clicked() {
+            if ui.small_button("Frame").on_hover_text("5: the selection, or the model").clicked() {
                 lines.push("camera frame".to_owned());
             }
             if ui.small_button("Frame all").on_hover_text("Shift+F").clicked() {
@@ -315,4 +322,78 @@ fn grow(bounds: Option<(Vec3, Vec3)>, (lo, hi): (Vec3, Vec3)) -> Option<(Vec3, V
         None => (lo, hi),
         Some((a, b)) => (a.min(lo), b.max(hi)),
     })
+}
+
+impl App {
+    /// the reference editor's camera panel (`cam.ui`): the point it turns about, its
+    /// angles in that editor's convention (pitch, yaw from the front, roll),
+    /// zoom, field of view, and how fast the mouse and keys move it.
+    fn camera_fields_ui(&mut self, ui: &mut egui::Ui) {
+        let mut moved = false;
+        let c = &mut self.camera;
+        egui::Grid::new("camera fields").num_columns(4).spacing([6.0, 2.0]).show(ui, |ui| {
+            let mut field = |ui: &mut egui::Ui, label: &str, v: &mut f32, speed: f64, range: std::ops::RangeInclusive<f32>, hint: &str| {
+                ui.label(label).on_hover_text(hint);
+                moved |= ui.add(egui::DragValue::new(v).speed(speed).range(range).max_decimals(1)).changed();
+            };
+            field(ui, "X", &mut c.target.x, 0.5, -10000.0..=10000.0, "The point the camera turns about");
+            field(ui, "Pitch", &mut self.camera_angles[0], 0.5, -89.4..=89.4, "Degrees above the horizon");
+            ui.end_row();
+            field(ui, "Y", &mut c.target.y, 0.5, -10000.0..=10000.0, "The point the camera turns about");
+            field(ui, "Yaw", &mut self.camera_angles[1], 0.5, -180.0..=180.0, "Degrees round from the front view");
+            ui.end_row();
+            field(ui, "Z", &mut c.target.z, 0.5, -10000.0..=10000.0, "The point the camera turns about");
+            field(ui, "Roll", &mut self.camera_angles[2], 0.5, -180.0..=180.0, "Degrees about the line of sight");
+            ui.end_row();
+            field(ui, "Zoom", &mut c.distance, 1.0, 1.0..=100000.0, "Distance from the point, in voxels");
+            field(ui, "FOV", &mut self.camera_angles[3], 0.2, 10.0..=120.0, "Field of view, degrees");
+            ui.end_row();
+            ui.label("Mouse").on_hover_text("How fast a drag turns the view");
+            ui.add(egui::DragValue::new(&mut self.mouse_speed).speed(0.01).range(0.1..=3.0).max_decimals(2));
+            ui.label("Keys").on_hover_text("How fast W A S D Q E fly, in the free camera");
+            ui.add(egui::DragValue::new(&mut self.key_speed).speed(0.01).range(0.01..=100.0).max_decimals(2));
+            ui.end_row();
+        });
+        if moved {
+            let [pitch, yaw, roll, fov] = self.camera_angles;
+            self.camera.pitch = pitch.to_radians();
+            self.camera.yaw = (yaw - 90.0).to_radians();
+            self.camera.roll = roll.to_radians();
+            self.camera.fov_y = fov.to_radians();
+            self.path_tracer.reset();
+        } else {
+            self.camera_angles = self.panel_angles();
+        }
+    }
+
+    /// The camera's angles as the panel shows them: pitch, yaw from the
+    /// front (-180 to 180), roll, field of view, all in degrees.
+    pub fn panel_angles(&self) -> [f32; 4] {
+        let yaw = (self.camera.yaw.to_degrees() + 90.0 + 180.0).rem_euclid(360.0) - 180.0;
+        [self.camera.pitch.to_degrees(), yaw, self.camera.roll.to_degrees(), self.camera.fov_y.to_degrees()]
+    }
+
+    /// `camera set x|y|z|pitch|yaw|roll|zoom|fov|mouse|keys <value>`.
+    pub fn camera_set(&mut self, what: &str, value: f32) -> String {
+        let mut a = self.panel_angles();
+        match what {
+            "x" => self.camera.target.x = value,
+            "y" => self.camera.target.y = value,
+            "z" => self.camera.target.z = value,
+            "pitch" => a[0] = value.clamp(-89.4, 89.4),
+            "yaw" => a[1] = value,
+            "roll" => a[2] = value,
+            "fov" => a[3] = value.clamp(10.0, 120.0),
+            "zoom" => self.camera.distance = value.max(1.0),
+            "mouse" => self.mouse_speed = value.clamp(0.1, 3.0),
+            "keys" => self.key_speed = value.clamp(0.01, 100.0),
+            _ => return "camera set x|y|z|pitch|yaw|roll|zoom|fov|mouse|keys <value>".to_owned(),
+        }
+        self.camera.pitch = a[0].to_radians();
+        self.camera.yaw = (a[1] - 90.0).to_radians();
+        self.camera.roll = a[2].to_radians();
+        self.camera.fov_y = a[3].to_radians();
+        self.path_tracer.reset();
+        format!("camera {what} {value}")
+    }
 }

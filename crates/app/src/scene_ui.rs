@@ -18,6 +18,7 @@ impl App {
         // selected objects' ids would name others. Moves keep them.
         if nodes.len() != loaded.doc.scene.nodes.len() {
             self.objects.clear();
+            self.open_groups.clear();
         }
         let command = Command::SetGraph { before: loaded.doc.scene.nodes.clone(), after: nodes };
         if merge {

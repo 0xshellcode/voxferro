@@ -82,6 +82,8 @@ pub struct SavedView {
     pub distance: f32,
     /// Vertical field of view, radians.
     pub fov_y: f32,
+    /// Turn about the line of sight, radians (`_angle`'s third value).
+    pub roll: f32,
 }
 
 impl SavedView {
@@ -121,6 +123,7 @@ impl SavedView {
             pitch: -pitch.clamp(-90.0, 90.0).to_radians(),
             distance,
             fov_y,
+            roll: angle.get(2).copied().unwrap_or(0.0).to_radians(),
         })
     }
 
@@ -133,7 +136,7 @@ impl SavedView {
         let ortho = self.projection.is_parallel();
         attributes.set("_mode", self.projection.name());
         attributes.set("_focus", format!("{} {} {}", g(self.target.x), g(self.target.y), g(self.target.z)));
-        attributes.set("_angle", format!("{} {} 0", g(pitch), g(yaw)));
+        attributes.set("_angle", format!("{} {} {}", g(pitch), g(yaw), g(self.roll.to_degrees())));
         attributes.set("_radius", g(self.distance));
         attributes.set("_frustum", g(if ortho { self.distance * tan } else { tan }));
         attributes.set("_fov", g(self.fov_y.to_degrees()));
@@ -219,9 +222,15 @@ mod tests {
             pitch: 30f32.to_radians(),
             distance: 60.0,
             fov_y: 45f32.to_radians(),
+            roll: 0.0,
         };
         let written = view.to_camera(3);
         assert_eq!(written.attributes.get("_angle"), Some("-30 315 0"));
+        // The roll is the third angle, and reads back.
+        let rolled = SavedView { roll: 12f32.to_radians(), ..view };
+        let w = rolled.to_camera(3);
+        assert_eq!(w.attributes.get("_angle"), Some("-30 315 12"));
+        assert!((SavedView::from_camera(&w).unwrap().roll - rolled.roll).abs() < 1e-5);
         assert_eq!(written.attributes.get("_frustum"), Some("0.4142"));
         let back = SavedView::from_camera(&written).unwrap();
         assert!((back.yaw.sin() - view.yaw.sin()).abs() < 1e-4 && (back.yaw.cos() - view.yaw.cos()).abs() < 1e-4);

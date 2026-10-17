@@ -27,6 +27,7 @@ impl App {
     /// shift: what was picked by them no longer means the same thing.
     pub(crate) fn forget_picks(&mut self) {
         self.objects.clear();
+        self.open_groups.clear();
         self.selected_group = None;
     }
 

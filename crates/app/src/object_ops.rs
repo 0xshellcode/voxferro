@@ -26,6 +26,13 @@
 //! - **Reference to copy** (`oref2obj`): a selected object sharing its
 //!   model gets a model of its own.
 //!
+//! - **Transform copy and paste** (`m_copy`, `m_paste`): copy takes the
+//!   first selected object's rotation and the centre of its box; paste
+//!   gives every selected object that rotation, turning it about its own
+//!   centre, and moves that centre onto the copied one. `paste rot` turns
+//!   only, `paste pos` moves only, and `reset` turns an object back
+//!   upright, in place.
+//!
 //! Each is one undo step. Groups take part through the models in them.
 
 use crate::App;
@@ -438,6 +445,47 @@ impl App {
         }
         self.history.end_group();
         format!("{done} references made copies")
+    }
+}
+
+impl App {
+    /// `object transform copy`.
+    pub fn copy_transform(&mut self) -> String {
+        let Some((objects, _)) = self.object_boxes_world() else { return "no objects".to_owned() };
+        let Some(&(_, world, (lo, hi))) = objects.first() else { return "no objects".to_owned() };
+        let centre = (lo + hi).as_vec3() * 0.5;
+        self.transform_clip = Some((world.rotation, centre));
+        format!("copied the transform: centre {} {} {}", centre.x, centre.y, centre.z)
+    }
+
+    /// `object transform paste [rot|pos]`, `object transform reset`.
+    pub fn paste_transform(&mut self, mode: &str) -> String {
+        let clip = self.transform_clip;
+        if clip.is_none() && mode != "reset" {
+            return "no transform copied: object transform copy first".to_owned();
+        }
+        let Some((objects, _)) = self.object_boxes_world() else { return "no objects".to_owned() };
+        let changes: Vec<(i32, Transform)> = objects
+            .into_iter()
+            .filter_map(|(node, world, (lo, hi))| {
+                let c = (lo + hi).as_vec3() * 0.5;
+                let rotation = match (mode, clip) {
+                    ("reset", _) => Mat3::IDENTITY,
+                    ("pos", _) => world.rotation,
+                    (_, Some((r, _))) => r,
+                    _ => return None,
+                };
+                // Turned about its own centre: q (t - c) + c.
+                let q = rotation * world.rotation.transpose();
+                let mut t = q * (world.translation.as_vec3() - c) + c;
+                if let (true, Some((_, to))) = (mode == "pos" || mode.is_empty(), clip) {
+                    t += to - c;
+                }
+                let next = Transform { rotation, translation: t.round().as_ivec3() };
+                (next != world).then_some((node, next))
+            })
+            .collect();
+        self.place_objects(changes, if mode.is_empty() { "paste transform" } else { mode })
     }
 }
 

@@ -177,7 +177,7 @@ impl App {
         if self.moving {
             section("OBJECT", true).show(ui, |ui| {
                 let n = self.object_indices().len();
-                ui.label(egui::RichText::new(format!("{n} selected  ·  Shift+click adds")).size(10.5).weak());
+                ui.label(egui::RichText::new(format!("{n} selected, {}  ·  Shift+click adds", self.level_name())).size(10.5).weak());
                 row(ui, &[("All", "object all", "Select every object (Cmd+A)"), ("Inv", "object invert", "Select the others (Cmd+I)"), ("None", "object none", "Clear the selection (Cmd+D)")], &mut lines);
                 row(ui, &[("Copy", "object copy", "Copy, each with a model of its own"), ("Ref", "object copy ref", "Copy as references to the same models"), ("Cut", "object cut", "Copy as references and delete"), ("Paste", "object paste", "Paste where they were copied from")], &mut lines);
                 row(ui, &[("Union", "object union", "Fuse into one model; the last selected wins where they overlap"), ("Inter", "object intersect", "Keep only where every object is filled"), ("Oper", "object operand", "Set the selection aside to subtract or paint with")], &mut lines);
@@ -195,6 +195,8 @@ impl App {
                 }
                 row(ui, &[("Flip X", "object flip x", "Mirror the selection across x"), ("Flip Y", "object flip y", "Mirror the selection across y"), ("Flip Z", "object flip z", "Mirror the selection across z")], &mut lines);
                 row(ui, &[("Ground", "object ground", "Move the selection down onto z = 0"), ("Own", "object own", "Give each selected reference a model of its own"), ("Delete", "object delete", "Delete the selected objects")], &mut lines);
+                row(ui, &[("T copy", "object transform copy", "Copy the first object's rotation and centre"), ("T paste", "object transform paste", "Give the selection that rotation and centre"), ("Rot", "object transform paste rot", "Paste only the rotation"), ("Pos", "object transform paste pos", "Paste only the position")], &mut lines);
+                row(ui, &[("Upright", "object transform reset", "Turn each object back upright, in place"), ("Open (Tab)", "object level in", "Open the selected group: work on its children"), ("Close", "object level out", "Close the open group (Shift+Tab)")], &mut lines);
             });
         }
 

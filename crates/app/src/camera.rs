@@ -65,6 +65,9 @@ pub struct OrbitCamera {
     pub projection: Projection,
     /// Drag gathered toward the next isometric quarter turn.
     iso_turn: f32,
+    /// Turn about the line of sight, radians: the reference editor's roll (the
+    /// camera panel's third angle). 0 keeps the horizon level.
+    pub roll: f32,
 }
 
 impl Default for OrbitCamera {
@@ -77,6 +80,7 @@ impl Default for OrbitCamera {
             fov_y: 45f32.to_radians(),
             projection: Projection::Perspective,
             iso_turn: 0.0,
+            roll: 0.0,
         }
     }
 }
@@ -155,6 +159,8 @@ impl OrbitCamera {
     /// Turns to a fixed view, keeping target and distance. Every view but
     /// `Iso` keeps the current projection.
     pub fn set_view(&mut self, view: View) {
+        // A fixed view is level.
+        self.roll = 0.0;
         use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
         // Yaw 0 looks from +x; -90° from -y, the editor's front.
         let (yaw, pitch) = match view {
@@ -179,7 +185,9 @@ impl OrbitCamera {
         let forward = (self.target - self.eye()).normalize_or(Vec3::Y);
         let right = forward.cross(Vec3::Z).normalize_or(Vec3::X);
         let up = right.cross(forward);
-        Mat3::from_cols(right, up, forward)
+        // The roll turns right and up about the line of sight.
+        let (s, c) = self.roll.sin_cos();
+        Mat3::from_cols(right * c + up * s, up * c - right * s, forward)
     }
 
     /// Half the visible height at the target, in world units: the
@@ -214,7 +222,7 @@ impl OrbitCamera {
         } else {
             perspective(self.fov_y, aspect, 0.1, 100_000.0)
         };
-        let view = look_at_mat4(self.eye(), self.target, Vec3::Z);
+        let view = look_at_mat4(self.eye(), self.target, self.basis().y_axis);
         proj * view
     }
 }

@@ -68,10 +68,29 @@ impl App {
         }
     }
 
-    /// Every instance's node, in file order.
+    /// Every object at the current level, in file order: each instance's
+    /// node, or inside an open group, its children.
     fn all_object_nodes(&self) -> Vec<i32> {
         let Some(loaded) = &self.scene else { return Vec::new() };
-        loaded.doc.scene.instances.iter().filter_map(|i| i.node).collect()
+        let mut out: Vec<i32> = Vec::new();
+        for i in 0..loaded.doc.scene.instances.len() {
+            if let Some(n) = self.move_target_level(i)
+                && !out.contains(&n)
+            {
+                out.push(n);
+            }
+        }
+        out
+    }
+
+    /// The object holding instance `index` at the current level, ignoring
+    /// a selected group.
+    fn move_target_level(&self, index: usize) -> Option<i32> {
+        let scene = &self.scene.as_ref()?.doc.scene;
+        match self.open_groups.last() {
+            Some(_) => self.move_target(index),
+            None => scene.instances.get(index)?.node,
+        }
     }
 
     /// `object all | none | invert | add <i> | remove <i> | list`.
@@ -210,6 +229,12 @@ impl App {
                 self.objects_turned(axis, 1, centre)
             }
             ["delete"] => return self.delete_objects(),
+            ["transform", "copy"] => return self.copy_transform(),
+            ["transform", "paste"] => return self.paste_transform(""),
+            ["transform", "paste", m @ ("rot" | "pos")] => return self.paste_transform(m),
+            ["transform", "reset"] => return self.paste_transform("reset"),
+            ["level", "in"] => return self.level_command(-2),
+            ["level", "out"] => return self.level_command(-1),
             ["align", axis, side] => {
                 let a = match *axis {
                     "x" => 0,
@@ -273,7 +298,8 @@ impl App {
 }
 
 const OBJECT_USAGE: &str = "object all|none|invert|add <i>|remove <i>|list | move dx dy dz | turn x|y|z | delete | \
-    align x|y|z -1|0|+1 | ground | flip <axes> | union | intersect | operand | subtract | replace | copy [ref] | cut | paste | own";
+    align x|y|z -1|0|+1 | ground | flip <axes> | union | intersect | operand | subtract | replace | copy [ref] | cut | paste | own | \
+    transform copy|paste [rot|pos]|reset | level in|out";
 
 /// A marquee over objects being dragged: its corners, and whether it
 /// replaces the selection (0), adds to it (1) or takes from it (-1).
@@ -344,5 +370,73 @@ impl App {
         }
         let message = self.object_select_command(&["list"]);
         self.console_log.push(message);
+    }
+}
+
+impl App {
+    /// the reference editor's `olevel` (Tab, Shift+Tab). Tab on a selected group
+    /// opens it: its children become the objects, and selecting, moving
+    /// and the object commands stay inside it. Tab on a selected model
+    /// leaves the Move tool to edit it; Tab while editing comes back.
+    /// Shift+Tab closes the open group, one level up.
+    pub fn level_command(&mut self, step: i32) -> String {
+        if step < 0 && step != -2 {
+            return match self.open_groups.pop() {
+                Some(_) => {
+                    self.objects.clear();
+                    format!("closed the group; {}", self.level_name())
+                }
+                None => "already at the top level".to_owned(),
+            };
+        }
+        if !self.moving {
+            self.moving = true;
+            self.selecting = false;
+            return format!("back to the objects; {}", self.level_name());
+        }
+        // A group picked in the scene tree (or with Alt+Shift+click) opens.
+        if let Some(group) = self.selected_group.take() {
+            self.open_groups.push(group);
+            self.objects.clear();
+            return format!("opened the group; {}", self.level_name());
+        }
+        let Some(scene) = self.scene.as_ref().map(|s| &s.doc.scene) else { return "nothing open".to_owned() };
+        let nodes = self.object_nodes();
+        let [node] = nodes.as_slice() else { return "select one group or model, then Tab".to_owned() };
+        let held = scene.instances_under(*node);
+        let is_group = held.len() > 1 || held.first().and_then(|&i| scene.instances.get(i)).is_some_and(|i| i.node != Some(*node));
+        if is_group {
+            self.open_groups.push(*node);
+            self.selected_group = None;
+            self.objects.clear();
+            format!("opened the group; {}", self.level_name())
+        } else {
+            // A model: edit it, as the reference editor's Tab into a shape.
+            if let Some(&i) = held.first() {
+                self.selected = i;
+            }
+            self.moving = false;
+            "editing the model; Tab to come back to the objects".to_owned()
+        }
+    }
+
+    /// Where the object commands act, for messages and the panel.
+    pub fn level_name(&self) -> String {
+        match self.open_groups.len() {
+            0 => "the top level".to_owned(),
+            n => format!("inside {n} group{}", if n == 1 { "" } else { "s" }),
+        }
+    }
+
+    /// Tab and Shift+Tab, outside text fields.
+    pub fn level_input(&mut self, ctx: &egui::Context) {
+        if ctx.egui_wants_keyboard_input() || ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        let (tab, shift) = ctx.input(|i| (i.key_pressed(egui::Key::Tab), i.modifiers.shift));
+        if tab {
+            let message = self.level_command(if shift { -1 } else { -2 });
+            self.console_log.push(message);
+        }
     }
 }

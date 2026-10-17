@@ -268,6 +268,11 @@ struct App {
     selected_group: Option<i32>,
     /// Several objects selected in the Move tool, by transform node.
     objects: Vec<i32>,
+    /// Groups opened with Tab, outermost first: the last one's children are
+    /// the objects.
+    open_groups: Vec<i32>,
+    /// `object transform copy`: a rotation and a box centre.
+    transform_clip: Option<(glam::Mat3, glam::Vec3)>,
     /// Palette colours selected together (Shift+click), and the region
     /// `palette copy` keeps: display slot and colour.
     palette_selection: Vec<u8>,
@@ -310,6 +315,11 @@ struct App {
     picking: bool,
     /// The saved-camera slot the camera panel acts on.
     camera_slot: usize,
+    /// The camera panel's angles while being edited (pitch, yaw, roll,
+    /// field of view, degrees), and the mouse and key speeds it sets.
+    camera_angles: [f32; 4],
+    mouse_speed: f32,
+    key_speed: f32,
     /// Recently opened and saved files, and whether to add to them: not
     /// in scripted runs (`--run`, `--screenshot`, ...), which would fill
     /// the list with test files.
@@ -441,6 +451,8 @@ impl App {
             selected: 0,
             selected_group: None,
             objects: Vec::new(),
+            open_groups: Vec::new(),
+            transform_clip: None,
             palette_selection: Vec::new(),
             palette_region: Vec::new(),
             object_marquee: None,
@@ -476,6 +488,9 @@ impl App {
             gpu: state.clone(),
             picking: false,
             camera_slot: 0,
+            camera_angles: [0.0; 4],
+            mouse_speed: 1.0,
+            key_speed: 1.0,
             recent: recent::load(),
             remember_files: true,
             brush_shape: voxel_core::BrushShape::Voxel,
@@ -661,6 +676,7 @@ impl App {
         // Selected objects, references and the operand name nodes, models
         // and places of the old document.
         self.objects.clear();
+        self.open_groups.clear();
         self.object_clip.clear();
         self.operand.clear();
         self.status = format!(
@@ -1684,7 +1700,7 @@ impl App {
                 if pan {
                     self.camera.pan(delta.x, delta.y, view_size.y);
                 } else {
-                    self.camera.orbit(delta.x * 0.01, delta.y * 0.01);
+                    self.camera.orbit(delta.x * 0.01 * self.mouse_speed, delta.y * 0.01 * self.mouse_speed);
                 }
                 self.path_tracer.reset();
             }
@@ -1949,6 +1965,7 @@ impl eframe::App for App {
         self.brush_input(&ctx);
         self.hotkeys(&ctx, &state);
         self.object_input(&ctx);
+        self.level_input(&ctx);
         if !self.view.background && self.meshed_for != Some(self.selected) {
             self.mesh_dirty = true;
         }
