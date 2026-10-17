@@ -36,7 +36,7 @@ pub fn execute(line: &str, doc: &mut Document, model: usize, history: &mut Histo
                       rotate|mirror x|y|z | crop | resize x y z; \
                       brush [attach|erase|paint|select|move] [voxel|box|line|face|fill] | brush mirror <xyz|off> | brush pick | color <n>; \
                       select all|none|invert|color [n] | delete | paint | copy | cut | paste | \
-                      move dx dy dz | transform scale axes f | transform rotate a deg; brush size n | brush tip cube|sphere|2d|3d | brush centre fill|ring|even|odd | brush project on|off | brush face color|geo|4|8|palette|voxel; palette <i> r g b | material <i> <kind> [k=v]; \
+                      move dx dy dz | transform scale axes f | transform rotate a deg | transform drag move|scale|turn|off | transform keep|drop; brush size n | brush tip cube|sphere|2d|3d | brush centre fill|ring|even|odd | brush project on|off | brush face color|geo|4|8|palette|voxel; palette <i> r g b | material <i> <kind> [k=v]; \
                       instance list|select i|move|place|turn|dup|delete|new; \
                       group [i ...] | ungroup | node name|hide|show|move|turn|into; layer list|new|hide|show|name|assign; \
                       anim play|stop|frame n|fps n|key|unkey|newframe|movekey a b|moveframe a b|range a b|export dir [n]; \

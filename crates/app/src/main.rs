@@ -309,6 +309,10 @@ struct App {
     /// The instance the mesh was built around, while the background is
     /// hidden: selecting another must remesh.
     meshed_for: Option<usize>,
+    /// The Transform tool's mouse handle, when armed, and a transform in
+    /// progress.
+    transform_tool: Option<transform::Handle>,
+    transform_drag: Option<transform::TransformDrag>,
     /// A `snap window` waiting for the window's screenshot.
     window_snap: Option<String>,
     window_snap_sent: bool,
@@ -442,6 +446,8 @@ impl App {
             pending_snap: None,
             view_cube_shown: true,
             window_snap: None,
+            transform_tool: None,
+            transform_drag: None,
             window_snap_sent: false,
             edit_fields: model_edit::Fields::default(),
             project: project::ProjectState::default(),
@@ -1701,6 +1707,11 @@ impl App {
                 let at = |f: egui::Vec2| rect.min + f * view_size;
                 if self.picking {
                     self.begin_stroke(ray_at(&self.camera, at(from)));
+                } else if self.transform_tool.is_some() && self.begin_transform(at(from)) {
+                    // A scripted drag keeps its transform, as Enter would.
+                    self.update_transform(at(to), false);
+                    let message = self.finish_transform(true);
+                    eprintln!("[voxferro] {message}");
                 } else if self.moving {
                     if self.begin_move(ray_at(&self.camera, at(from)), at(from).x, egui::Modifiers::default()) {
                         self.update_move(ray_at(&self.camera, at(to)), at(to).x);
@@ -1750,6 +1761,8 @@ impl App {
                         if self.picking {
                             // The eyedropper wins over any tool.
                             self.begin_stroke(ray)
+                        } else if self.transform_tool.is_some() && self.begin_transform(pos) {
+                            true
                         } else if self.selecting {
                             self.begin_select(ray, pos, modifiers)
                         } else if modifiers.alt {
@@ -1763,6 +1776,12 @@ impl App {
                         }
                     });
                 self.orbiting = !hit;
+            }
+            if down
+                && self.transform_drag.as_ref().is_some_and(|d| d.dragging)
+                && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+            {
+                self.update_transform(pos, modifiers.shift);
             }
             if down && (self.stroke.is_some() || self.select_drag.is_some() || self.move_drag.is_some())
                 && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
@@ -1791,6 +1810,9 @@ impl App {
                 self.path_tracer.reset();
             }
             if released {
+                if let Some(drag) = &mut self.transform_drag {
+                    drag.dragging = false;
+                }
                 self.finish_move();
                 self.finish_stroke();
                 self.finish_select(self.camera.view_proj(aspect), rect);
@@ -2017,6 +2039,7 @@ impl eframe::App for App {
         self.file_input(&ctx, &state);
         self.selection_input(&ctx);
         self.camera_input(&ctx);
+        self.transform_input(&ctx);
         self.take_window_snap(&ctx);
         self.view_input(&ctx);
         self.brush_input(&ctx);

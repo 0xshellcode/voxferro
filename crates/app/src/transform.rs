@@ -1,4 +1,4 @@
-//! The Transform tool's scale and rotate, on the selected voxels.
+//! The Transform tool: moving, scaling and turning the selected voxels.
 //!
 //! the reference editor's Transform options (`m_brush.ui`) are move/loop, scale, wrap
 //! and rotate, done with the mouse and committed with Enter. Moving is the
@@ -7,6 +7,11 @@
 //!
 //! - `transform scale <axes> <factor>`: `transform scale xyz 2`;
 //! - `transform rotate <axis> <degrees>`: any angle.
+//!
+//! And with the mouse, as the reference editor's tool works: choose Move, Scale or
+//! Turn, then drag in the viewport -- right and left (and for Move, up and
+//! down) -- watching a preview; Enter keeps it as one undo step, Esc drops
+//! it. Shift snaps a turn to 15°.
 //!
 //! The selected voxels are lifted out into their own box, transformed with
 //! the Edit panel's kernels (nearest cell, as there), and put back centred
@@ -37,12 +42,24 @@ fn lift(volume: &Volume, selection: &Selection) -> Option<(Volume, IVec3)> {
 /// The writes that replace the lifted voxels by `after`, centred where the
 /// lifted box was, and the cells `after` fills.
 pub fn place(volume: &Volume, selection: &Selection, before_size: [u32; 3], corner: IVec3, after: &Volume) -> (Vec<(IVec3, u8)>, Vec<IVec3>) {
+    place_moved(volume, selection, before_size, corner, after, IVec3::ZERO)
+}
+
+/// `place`, shifted by `offset` cells.
+pub fn place_moved(
+    volume: &Volume,
+    selection: &Selection,
+    before_size: [u32; 3],
+    corner: IVec3,
+    after: &Volume,
+    offset: IVec3,
+) -> (Vec<(IVec3, u8)>, Vec<IVec3>) {
     let mut writes: BTreeMap<[i32; 3], u8> = BTreeMap::new();
     for p in selection.iter().filter(|p| volume.get_i(p.x, p.y, p.z) != 0) {
         writes.insert(p.to_array(), 0);
     }
     let centre = corner.as_vec3() + Vec3::from_array(before_size.map(|s| s as f32)) * 0.5;
-    let new_corner = (centre - Vec3::from_array(after.size().map(|s| s as f32)) * 0.5).round().as_ivec3();
+    let new_corner = (centre - Vec3::from_array(after.size().map(|s| s as f32)) * 0.5).round().as_ivec3() + offset;
     let [sx, sy, sz] = volume.size();
     let inside = |p: IVec3| p.x >= 0 && p.y >= 0 && p.z >= 0 && (p.x as u32) < sx && (p.y as u32) < sy && (p.z as u32) < sz;
     let mut cells = Vec::new();
@@ -67,10 +84,142 @@ pub fn place(volume: &Volume, selection: &Selection, before_size: [u32; 3], corn
     (writes, cells)
 }
 
+/// What a mouse transform does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handle {
+    Move,
+    Scale,
+    Turn,
+}
+
+/// A mouse transform in progress: what was lifted, and the preview applied
+/// to the document outside the history.
+pub struct TransformDrag {
+    handle: Handle,
+    start: eframe::egui::Pos2,
+    model: usize,
+    selection: Selection,
+    lifted: Volume,
+    corner: IVec3,
+    preview: Option<voxel_core::Command>,
+    /// The drag so far, so a further drag goes on from it.
+    last: eframe::egui::Vec2,
+    /// The cells the preview fills, for the selection after Enter.
+    cells: Vec<IVec3>,
+    pub dragging: bool,
+}
+
+/// The world axis a screen direction runs along most, signed.
+fn dominant(v: Vec3) -> IVec3 {
+    let a = v.abs();
+    let axis = if a.x >= a.y && a.x >= a.z { 0 } else if a.y >= a.z { 1 } else { 2 };
+    let mut out = IVec3::ZERO;
+    out[axis] = if v[axis] >= 0.0 { 1 } else { -1 };
+    out
+}
+
 impl App {
+    /// Starts a mouse transform of the selection, if the tool is armed and
+    /// voxels are selected. True if it started.
+    pub fn begin_transform(&mut self, at: eframe::egui::Pos2) -> bool {
+        let Some(handle) = self.transform_tool else { return false };
+        if let Some(drag) = &mut self.transform_drag {
+            // A further drag goes on from the preview kept so far.
+            drag.dragging = true;
+            drag.start = at - drag.last;
+            return true;
+        }
+        let Some(selection) = self.active_selection().cloned() else { return false };
+        let Some(volume) = self.scene.as_ref().and_then(|s| s.doc.scene.models.get(selection.model)) else { return false };
+        let Some((lifted, corner)) = lift(volume, &selection) else { return false };
+        self.transform_drag = Some(TransformDrag {
+            handle,
+            start: at,
+            model: selection.model,
+            selection,
+            lifted,
+            corner,
+            preview: None,
+            last: eframe::egui::Vec2::ZERO,
+            cells: Vec::new(),
+            dragging: true,
+        });
+        true
+    }
+
+    /// Follows the cursor: the preview for the drag so far.
+    pub fn update_transform(&mut self, at: eframe::egui::Pos2, shift: bool) {
+        let basis = self.camera.basis();
+        let Some(drag) = &mut self.transform_drag else { return };
+        let Some(loaded) = self.scene.as_mut() else { return };
+        if let Some(old) = drag.preview.take() {
+            old.revert(&mut loaded.doc);
+        }
+        let d = at - drag.start;
+        drag.last = d;
+        let (after, offset) = match drag.handle {
+            Handle::Move => {
+                // A cell per 12 points, along the world axes nearest the
+                // screen's right and up.
+                let right = dominant(basis.x_axis) * (d.x / 12.0).round() as i32;
+                let up = dominant(basis.y_axis) * (-d.y / 12.0).round() as i32;
+                (drag.lifted.clone(), right + up)
+            }
+            Handle::Scale => {
+                let f = 2f32.powf(d.x / 150.0);
+                (kernels::scale(&drag.lifted, Vec3::splat(f)), IVec3::ZERO)
+            }
+            Handle::Turn => {
+                let mut deg = d.x * 0.5;
+                if shift {
+                    deg = (deg / 15.0).round() * 15.0;
+                }
+                (kernels::rotate_by(&drag.lifted, 2, deg), IVec3::ZERO)
+            }
+        };
+        let Some(volume) = loaded.doc.scene.models.get(drag.model) else { return };
+        let (writes, cells) = place_moved(volume, &drag.selection, drag.lifted.size(), drag.corner, &after, offset);
+        let command = voxel_core::Command::set_voxels(&loaded.doc, drag.model, writes);
+        command.apply(&mut loaded.doc);
+        drag.preview = Some(command);
+        drag.cells = cells;
+        self.mesh_dirty = true;
+    }
+
+    /// Enter keeps the preview, as one undo step; Esc drops it.
+    pub fn finish_transform(&mut self, keep: bool) -> String {
+        let Some(drag) = self.transform_drag.take() else { return String::new() };
+        let Some(loaded) = self.scene.as_mut() else { return String::new() };
+        let Some(preview) = drag.preview else { return "transform: nothing to keep".to_owned() };
+        preview.revert(&mut loaded.doc);
+        self.mesh_dirty = true;
+        if !keep {
+            return "transform cancelled".to_owned();
+        }
+        self.history.end_gesture();
+        self.history.exec_alone(&mut loaded.doc, preview);
+        let volume = &loaded.doc.scene.models[drag.model];
+        let mut next = Selection::new(drag.model);
+        next.combine(volume, drag.cells, voxel_core::Combine::Replace);
+        self.selection = Some(next);
+        "transform kept".to_owned()
+    }
+
+    /// Enter and Esc for a pending mouse transform.
+    pub fn transform_input(&mut self, ctx: &eframe::egui::Context) {
+        if self.transform_drag.is_none() || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let (enter, escape) = ctx.input(|i| (i.key_pressed(eframe::egui::Key::Enter), i.key_pressed(eframe::egui::Key::Escape)));
+        if enter || escape {
+            let message = self.finish_transform(enter);
+            self.console_log.push(message);
+        }
+    }
+
     pub fn transform_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().skip(1).collect();
-        let usage = "transform scale <axes> <factor> | transform rotate <x|y|z> <degrees>";
+        let usage = "transform scale <axes> <factor> | transform rotate <x|y|z> <degrees> | transform drag move|scale|turn|off | transform keep|drop";
         let op: Box<dyn Fn(&Volume) -> Volume> = match words.as_slice() {
             ["scale", axes, f] => {
                 let Ok(f) = f.parse::<f32>() else { return usage.to_owned() };
@@ -83,6 +232,20 @@ impl App {
                     if axes.contains('z') { f } else { 1.0 },
                 );
                 Box::new(move |v| kernels::scale(v, s))
+            }
+            ["keep"] | ["drop"] => return self.finish_transform(words[0] == "keep"),
+            ["drag", h] => {
+                self.transform_tool = match *h {
+                    "move" => Some(Handle::Move),
+                    "scale" => Some(Handle::Scale),
+                    "turn" | "rotate" => Some(Handle::Turn),
+                    "off" => None,
+                    _ => return "transform drag move|scale|turn|off".to_owned(),
+                };
+                return match self.transform_tool {
+                    Some(_) => "drag in the viewport; Enter keeps, Esc drops".to_owned(),
+                    None => "mouse transform off".to_owned(),
+                };
             }
             ["rotate", axis, deg] => {
                 let a = match *axis {
@@ -127,6 +290,29 @@ impl App {
             ] {
                 if ui.small_button(label).on_hover_text(hint).clicked() {
                     line = Some(l);
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Drag");
+            for (label, handle) in [("Move", Handle::Move), ("Scale", Handle::Scale), ("Turn", Handle::Turn)] {
+                let on = self.transform_tool == Some(handle);
+                if ui.selectable_label(on, label).on_hover_text("Drag in the viewport; Enter keeps, Esc drops").clicked() {
+                    self.transform_tool = if on { None } else { Some(handle) };
+                    if self.transform_tool.is_none() {
+                        let message = self.finish_transform(false);
+                        self.console_log.push(message);
+                    }
+                }
+            }
+            if self.transform_drag.is_some() {
+                if ui.small_button("Keep").on_hover_text("Enter").clicked() {
+                    let message = self.finish_transform(true);
+                    self.console_log.push(message);
+                }
+                if ui.small_button("Drop").on_hover_text("Esc").clicked() {
+                    let message = self.finish_transform(false);
+                    self.console_log.push(message);
                 }
             }
         });

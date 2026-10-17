@@ -28,6 +28,9 @@ pub struct SelectDrag {
     /// The instance the gesture selects in.
     instance: usize,
     combine: Combine,
+    /// Square and circle (the reference editor's Box Select): the voxel pressed and
+    /// the cell the drag reaches, in its layer.
+    layer: Option<(voxel_core::Hit, IVec3)>,
 }
 
 impl App {
@@ -53,12 +56,17 @@ impl App {
         let instance = self.selected;
         match self.brush_shape {
             BrushShape::Box => {
-                self.select_drag = Some(SelectDrag { from: at, to: at, instance, combine });
+                self.select_drag = Some(SelectDrag { from: at, to: at, instance, combine, layer: None });
+                true
+            }
+            BrushShape::Square | BrushShape::Circle => {
+                let Some((instance, hit)) = pick else { return false };
+                self.select_drag = Some(SelectDrag { from: at, to: at, instance, combine, layer: Some((hit, hit.voxel)) });
                 true
             }
             _ => {
                 let Some((instance, hit)) = pick else { return false };
-                self.select_drag = Some(SelectDrag { from: at, to: at, instance, combine });
+                self.select_drag = Some(SelectDrag { from: at, to: at, instance, combine, layer: None });
                 let cells = self.cells_for_select(hit);
                 self.combine_selection(instance, cells, combine);
                 true
@@ -67,6 +75,12 @@ impl App {
     }
 
     pub fn update_select(&mut self, ray: Ray, at: egui::Pos2) {
+        if let Some((instance, (hit, _))) = self.select_drag.as_ref().and_then(|d| Some((d.instance, d.layer?)))
+            && let Some(end) = self.project_to_layer(instance, hit, ray)
+            && let Some(drag) = &mut self.select_drag
+        {
+            drag.layer = Some((hit, end));
+        }
         let Some(drag) = &mut self.select_drag else { return };
         drag.to = at;
         // Dragging the voxel shape keeps adding what passes under it.
@@ -85,6 +99,13 @@ impl App {
     /// projects inside it, through the whole depth of the model.
     pub fn finish_select(&mut self, view_proj: Mat4, viewport: egui::Rect) {
         let Some(drag) = self.select_drag.take() else { return };
+        if let Some((hit, end)) = drag.layer {
+            let axis = brush::face_axis(hit.face);
+            let round = self.brush_shape == BrushShape::Circle;
+            let cells = brush::centre_cells(hit.voxel, end, axis, round, &self.brush_options);
+            self.combine_selection(drag.instance, cells, drag.combine);
+            return;
+        }
         if self.brush_shape != BrushShape::Box {
             return;
         }
@@ -137,6 +158,24 @@ impl App {
             BrushShape::Fill => brush::region(volume, hit.voxel, self.region),
             _ => vec![hit.voxel],
         }
+    }
+
+    /// Where a ray crosses the layer of `hit`'s voxel, across the face it
+    /// was hit on, as a cell of instance `instance`'s model.
+    fn project_to_layer(&self, instance: usize, hit: voxel_core::Hit, ray: Ray) -> Option<IVec3> {
+        let loaded = self.scene.as_ref()?;
+        let instance = loaded.doc.scene.instances.get(instance)?;
+        let volume = loaded.doc.scene.models.get(instance.model_index)?;
+        let origin = instance.transform.inverse_apply(ray.origin) + volume.pivot();
+        let direction = instance.transform.inverse_rotate(ray.direction);
+        let axis = brush::face_axis(hit.face);
+        if direction[axis].abs() < 1e-6 {
+            return None;
+        }
+        let t = (hit.voxel[axis] as f32 + 0.5 - origin[axis]) / direction[axis];
+        let mut cell = (origin + direction * t.max(0.0)).floor().as_ivec3();
+        cell[axis] = hit.voxel[axis];
+        Some(cell)
     }
 
     fn combine_selection(&mut self, instance: usize, cells: Vec<IVec3>, combine: Combine) {

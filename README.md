@@ -59,7 +59,7 @@ passing**. Working today:
   brush (a voxel script's result, attached, erased or painted), a pattern
   brush, region rules for fills (same colour, or connected by colour or
   geometry), mirror and axis modes
-- Selection (box, face, color), copy/cut/paste, move; rotate, mirror,
+- Selection (box marquee, square or circle on a layer, face, color), copy/cut/paste, move; rotate, mirror,
   crop and resize the model
 - the reference editor's Edit panel: full, reverse, double and halve, loop, scale,
   shear, any-angle rotation, repeat, mirror and diagonal symmetry, shapes,
@@ -180,7 +180,7 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 | Project | `project [list \| dir <path> \| open <name> \| rename <name> \| dup \| delete]` |
 | Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|square\|circle\|face\|fill\|shader\|pattern]`, `brush size <1-64>`, `brush tip cube\|sphere\|2d\|3d`, `brush centre fill\|ring\|even\|odd`, `brush project on\|off`, `brush face color\|geo\|4\|8\|palette\|voxel`, `brush mirror\|axis <axes>`, `brush region same\|color\|geo [4\|8]`, `color <n>` |
 | Pattern | `pattern selection\|open <file.vox>\|match on\|off\|turn x\|y\|z\|colours own\|brush\|clear` |
-| Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz`, `transform scale <axes> <f>`, `transform rotate <axis> <deg>` |
+| Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz`, `transform scale <axes> <f>`, `transform rotate <axis> <deg>`, `transform drag move\|scale\|turn\|off`, `transform keep\|drop` |
 | Model | `rotate x\|y\|z`, `mirror x\|y\|z`, `crop`, `resize x y z`, `fill`, `clear`, `box`, `sphere`, `gpu …` |
 | Scene | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
 | Palette | `palette open\|save <file.png>`, `palette reset`, `palette default 0-3`, `palette swap\|gradient\|copy <a> <b>`, `palette paste <i>`, `palette <i> <r> <g> <b>`, `material <i> <diffuse\|metal\|glass\|emit> [key=value]…` |
