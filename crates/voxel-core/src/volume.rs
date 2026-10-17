@@ -51,6 +51,14 @@ impl Volume {
         }
     }
 
+    /// A volume from its cells, x fastest, then y, then z.
+    pub fn from_cells(size: [u32; 3], voxels: Vec<u8>) -> Self {
+        let mut out = Self::new(size);
+        assert_eq!(voxels.len(), out.voxels.len(), "cells for a {size:?} volume");
+        out.voxels = voxels;
+        out
+    }
+
     fn chunk_dims_of(size: [u32; 3]) -> [u32; 3] {
         size.map(|s| s.div_ceil(CHUNK))
     }

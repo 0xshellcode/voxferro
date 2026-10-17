@@ -14,19 +14,24 @@ use crate::Volume;
 use glam::{Mat3, Vec3};
 
 /// Evaluates `map` at every cell centre of a `size` box.
-fn map_volume(size: [u32; 3], map: impl Fn(Vec3) -> u8) -> Volume {
-    let mut out = Volume::new(size);
-    for z in 0..size[2] {
-        for y in 0..size[1] {
-            for x in 0..size[0] {
-                let v = map(Vec3::new(x as f32, y as f32, z as f32) + 0.5);
-                if v != 0 {
-                    out.set(x, y, z, v);
+fn map_volume(size: [u32; 3], map: impl Fn(Vec3) -> u8 + Sync) -> Volume {
+    let [sx, sy, sz] = size.map(|s| s as usize);
+    let mut cells = vec![0u8; sx * sy * sz];
+    // Layers are independent: split them among the cores.
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(sz.max(1));
+    let layers_each = sz.div_ceil(threads.max(1)).max(1);
+    std::thread::scope(|scope| {
+        for (k, slab) in cells.chunks_mut((layers_each * sx * sy).max(1)).enumerate() {
+            let map = &map;
+            scope.spawn(move || {
+                for (i, cell) in slab.iter_mut().enumerate() {
+                    let (x, y, z) = (i % sx, (i / sx) % sy, k * layers_each + i / (sx * sy));
+                    *cell = map(Vec3::new(x as f32, y as f32, z as f32) + 0.5);
                 }
-            }
+            });
         }
-    }
-    out
+    });
+    Volume::from_cells(size, cells)
 }
 
 /// The kernels' `voxel()`: the cell `p` falls in, 0 outside the box.

@@ -123,6 +123,14 @@ fn lit(c: vox_format::Color, k: [f32; 3]) -> [u8; 4] {
 
 /// One isometric view of `volume`.
 fn iso_view(volume: &Volume, palette: &Palette, o: &IsoOptions) -> Image {
+    iso_view_with(volume, palette, o, true)
+}
+
+/// With `cull`, voxels whose +x, +y and +z neighbours are all filled are
+/// skipped: the view is a parallel projection from the +x +y +z side, so
+/// those three, drawn later, cover every pixel of it. On a solid model
+/// that leaves only the shell to draw.
+fn iso_view_with(volume: &Volume, palette: &Palette, o: &IsoOptions, cull: bool) -> Image {
     let a = (2 * o.size.clamp(1, 8)) as i32;
     let b = a / 2;
     let h = o.height.clamp(1, 24) as i32;
@@ -144,6 +152,10 @@ fn iso_view(volume: &Volume, palette: &Palette, o: &IsoOptions) -> Image {
                 }
                 let v = volume.get(x as u32, y as u32, z as u32);
                 if v == 0 {
+                    continue;
+                }
+                let filled = |x: i32, y: i32, z: i32| x < sx && y < sy && z < sz && volume.get(x as u32, y as u32, z as u32) != 0;
+                if cull && filled(x + 1, y, z) && filled(x, y + 1, z) && filled(x, y, z + 1) {
                     continue;
                 }
                 let c = palette.color(v);
@@ -255,6 +267,29 @@ mod tests {
         assert!(top != left && left != right && top != right, "{top:?} {left:?} {right:?}");
         // The corners outside the cube stay clear.
         assert_eq!(pixel(&img, 0, 0)[3], 0);
+    }
+
+    #[test]
+    fn hidden_voxels_are_skipped_without_changing_a_pixel() {
+        let mut v = Volume::new([9, 7, 6]);
+        let mut seed = 7u32;
+        for z in 0..6 {
+            for y in 0..7 {
+                for x in 0..9 {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    if (seed >> 16) % 5 != 0 {
+                        v.set(x, y, z, 1 + (seed >> 8) as u8 % 200);
+                    }
+                }
+            }
+        }
+        let p = Palette::specification_default();
+        for (size, height) in [(1, 1), (2, 4), (3, 2), (8, 3), (1, 24)] {
+            let o = IsoOptions { size, height, views: 1, outline: false, ..Default::default() };
+            let culled = iso_view_with(&v, &p, &o, true);
+            let all = iso_view_with(&v, &p, &o, false);
+            assert!(culled.rgba == all.rgba, "size {size} height {height}");
+        }
     }
 
     #[test]

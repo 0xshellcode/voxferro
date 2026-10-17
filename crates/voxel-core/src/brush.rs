@@ -7,7 +7,6 @@
 
 use crate::{Face, Hit, Volume};
 use glam::IVec3;
-use std::collections::VecDeque;
 
 /// What a stroke does to the cells it covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,19 +307,37 @@ fn plane_neighbours(p: IVec3, axis: usize) -> [IVec3; 4] {
     [p + u, p - u, p + v, p - v]
 }
 
-/// Breadth-first flood from `start` over cells `accept` admits.
-fn flood(start: IVec3, neighbours: impl Fn(IVec3) -> Vec<IVec3>, accept: impl Fn(IVec3) -> bool) -> Vec<IVec3> {
-    if !accept(start) {
+/// The six face neighbours' offsets.
+const FACE_STEPS: [IVec3; 6] = [IVec3::X, IVec3::NEG_X, IVec3::Y, IVec3::NEG_Y, IVec3::Z, IVec3::NEG_Z];
+
+/// Breadth-first flood from `start` over the cells of a `size` box that
+/// `accept` admits, stepping by `steps`. Visited cells are marked in a bit
+/// per cell of the box, and the output doubles as the queue: a whole 256³
+/// model floods in a fraction of a second.
+fn flood(size: [u32; 3], start: IVec3, steps: &[IVec3], accept: impl Fn(IVec3) -> bool) -> Vec<IVec3> {
+    let [sx, sy, sz] = size.map(|s| s as i32);
+    let inside = |p: IVec3| p.x >= 0 && p.y >= 0 && p.z >= 0 && p.x < sx && p.y < sy && p.z < sz;
+    if !inside(start) || !accept(start) {
         return Vec::new();
     }
-    let mut seen = std::collections::HashSet::from([start]);
-    let mut queue = VecDeque::from([start]);
-    let mut out = Vec::new();
-    while let Some(p) = queue.pop_front() {
-        out.push(p);
-        for n in neighbours(p) {
-            if accept(n) && seen.insert(n) {
-                queue.push_back(n);
+    let index = |p: IVec3| (p.x + sx * (p.y + sy * p.z)) as usize;
+    let mut seen = vec![0u64; (size.iter().map(|&s| s as usize).product::<usize>()).div_ceil(64)];
+    let mut mark = |p: IVec3| {
+        let i = index(p);
+        let fresh = seen[i / 64] & (1 << (i % 64)) == 0;
+        seen[i / 64] |= 1 << (i % 64);
+        fresh
+    };
+    mark(start);
+    let mut out = vec![start];
+    let mut head = 0;
+    while head < out.len() {
+        let p = out[head];
+        head += 1;
+        for d in steps {
+            let q = p + *d;
+            if inside(q) && accept(q) && mark(q) {
+                out.push(q);
             }
         }
     }
@@ -339,21 +356,20 @@ pub fn face_region_with(volume: &Volume, voxel: IVec3, face: Face, by_colour: bo
     let out = IVec3::new(o[0], o[1], o[2]);
     let axis = face_axis(face);
     let (u, v) = plane_axes(axis);
+    let steps: Vec<IVec3> = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+        .into_iter()
+        .filter(|(du, dv)| wide || *du == 0 || *dv == 0)
+        .map(|(du, dv)| {
+            let mut q = IVec3::ZERO;
+            q[u] = du;
+            q[v] = dv;
+            q
+        })
+        .collect();
     flood(
+        volume.size(),
         voxel,
-        |p| {
-            let mut n = Vec::with_capacity(8);
-            for (du, dv) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
-                if !wide && du != 0 && dv != 0 {
-                    continue;
-                }
-                let mut q = p;
-                q[u] += du;
-                q[v] += dv;
-                n.push(q);
-            }
-            n
-        },
+        &steps,
         |p| {
             let c = volume.get_i(p.x, p.y, p.z);
             let front = p + out;
@@ -373,8 +389,9 @@ pub fn face_region(volume: &Volume, voxel: IVec3, face: Face) -> Vec<IVec3> {
     let out = IVec3::new(o[0], o[1], o[2]);
     let axis = face_axis(face);
     flood(
+        volume.size(),
         voxel,
-        |p| plane_neighbours(p, axis).to_vec(),
+        &plane_neighbours(IVec3::ZERO, axis),
         |p| {
             let front = p + out;
             volume.get_i(p.x, p.y, p.z) == colour && volume.get_i(front.x, front.y, front.z) == 0
@@ -433,14 +450,10 @@ pub fn region(volume: &Volume, voxel: IVec3, rule: Region) -> Vec<IVec3> {
                     }
                 }
             }
-            flood(
-                voxel,
-                |p| steps.iter().map(|d| p + *d).collect(),
-                |p| {
-                    let c = volume.get_i(p.x, p.y, p.z);
-                    in_bounds(volume, p) && c != 0 && (!by_colour || c == colour)
-                },
-            )
+            flood(volume.size(), voxel, &steps, |p| {
+                let c = volume.get_i(p.x, p.y, p.z);
+                c != 0 && (!by_colour || c == colour)
+            })
         }
     }
 }
@@ -452,29 +465,17 @@ pub fn colour_region(volume: &Volume, voxel: IVec3) -> Vec<IVec3> {
         return Vec::new();
     }
     flood(
+        volume.size(),
         voxel,
-        |p| {
-            vec![
-                p + IVec3::X,
-                p - IVec3::X,
-                p + IVec3::Y,
-                p - IVec3::Y,
-                p + IVec3::Z,
-                p - IVec3::Z,
-            ]
-        },
-        |p| in_bounds(volume, p) && volume.get_i(p.x, p.y, p.z) == colour,
+        &FACE_STEPS,
+        |p| volume.get_i(p.x, p.y, p.z) == colour,
     )
 }
 
 /// Empty cells connected to `start` within one layer perpendicular to
 /// `axis`, bounded by voxels and by the model's box.
 pub fn empty_region_in_plane(volume: &Volume, start: IVec3, axis: usize) -> Vec<IVec3> {
-    flood(
-        start,
-        |p| plane_neighbours(p, axis).to_vec(),
-        |p| in_bounds(volume, p) && volume.get_i(p.x, p.y, p.z) == 0,
-    )
+    flood(volume.size(), start, &plane_neighbours(IVec3::ZERO, axis), |p| volume.get_i(p.x, p.y, p.z) == 0)
 }
 
 /// The cells a stroke covers, before the mode decides what to write.
