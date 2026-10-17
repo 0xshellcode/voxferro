@@ -15,8 +15,9 @@ cp target/release/voxferro "$app/Contents/MacOS/voxferro"
 # They are third-party and not in git (see assets/README.md): copied when a
 # local copy exists, skipped otherwise.
 mkdir -p "$app/Contents/Resources/assets"
-# The sample voxel scripts are ours, and always go in.
-cp -R assets/scripts "$app/Contents/Resources/assets/"
+# Ours always go in: the sample voxel scripts, the showcase scenes and the
+# materials demo, as in the Windows and Linux packages.
+cp -R assets/scripts assets/showcase assets/materials_demo.vox "$app/Contents/Resources/assets/"
 for dir in vox ibl; do
     if [ -d "assets/$dir" ]; then
         cp -R "assets/$dir" "$app/Contents/Resources/assets/"
