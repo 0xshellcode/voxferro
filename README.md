@@ -82,8 +82,8 @@ passing**. Working today:
   the reference editor's four modes -- perspective, free (look around and fly with
   W A S D Q E), orthographic and isometric -- also in the path tracer and
   in saved cameras, panning, and snapshots of the viewport
-- Display switches: voxel edges, frame, grid, background objects and
-  wireframe, with the reference editor's shortcuts (Cmd+E, F, G, B, M)
+- Display switches: voxel edges, frame, grid, background objects,
+  wireframe and shadows, with the reference editor's shortcuts (Cmd+E, F, G, B, M)
 - Render settings (sun, uniform / atmospheric / HDR sky, ground, lens,
   film, bloom) editable in the panel, with undo and saved in the
   file; depth of field with a polygonal aperture
@@ -186,7 +186,7 @@ Cmd+A, Esc, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it.
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]` |
 | Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|free\|frame [all\|selection\|instance]`, `snap [file.png]` |
-| View | `view [edges\|frame\|grid\|bg\|wire] [on\|off]` |
+| View | `view [edges\|frame\|grid\|bg\|wire\|shadow] [on\|off]` |
 | Edit | `full`, `zero`, `rev`, `x2`, `xh`, `loop <axis> <n>`, `scale <axes> <f>`, `shear <axis> <a> <b>`, `rot <axis> <deg>`, `repeat <axes> <n>`, `mir <axis>`, `dia <axis>`, `prim elli\|cyli\|pyra\|cone`, `flood [c]`, `hull`, `dil\|ero [6\|18\|26]`, `mask`, `tex` |
 | Scripts | `xs [-n passes] [-c c1,c2,…] <script> [args…]`, `xs list`, `xs use <script> [args…]` |
 | Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>` |

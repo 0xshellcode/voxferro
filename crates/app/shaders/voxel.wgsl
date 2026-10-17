@@ -8,8 +8,9 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     light_dir: vec4<f32>,
     ambient: vec4<f32>,
-    // x: draw voxel edges.
+    // x: draw voxel edges; y: shadows.
     options: vec4<f32>,
+    light_view_proj: mat4x4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -19,6 +20,22 @@ struct Palette {
     colors: array<vec4<f32>, 256>,
 };
 @group(0) @binding(1) var<uniform> palette: Palette;
+@group(0) @binding(2) var shadow_map: texture_depth_2d;
+@group(0) @binding(3) var shadow_sampler: sampler_comparison;
+
+// How lit a point is, 0 to 1: four comparisons against the shadow map.
+fn lit_fraction(world: vec3<f32>) -> f32 {
+    let p = u.light_view_proj * vec4<f32>(world, 1.0);
+    let ndc = p.xyz / p.w;
+    let uv = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+    let texel = 1.0 / f32(textureDimensions(shadow_map).x);
+    var sum = 0.0;
+    for (var i = 0; i < 4; i++) {
+        let offset = vec2<f32>(f32(i % 2) - 0.5, f32(i / 2) - 0.5) * texel;
+        sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + offset, ndc.z);
+    }
+    return sum * 0.25;
+}
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -62,7 +79,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // It keeps unlit sides readable while editing, which a physically correct
     // term would not.
     let d = dot(u.light_dir.xyz, in.normal);
-    let diffuse = (max(d, 0.0) + max(-d, 0.0) * 0.8) * 1.3;
+    // In shadow, a face keeps a third of the light that reaches it.
+    var front = max(d, 0.0);
+    if (u.options.y > 0.5 && d > 0.0) {
+        front = d * mix(0.35, 1.0, lit_fraction(in.world));
+    }
+    let diffuse = (front + max(-d, 0.0) * 0.8) * 1.3;
     var lit = in.color * (u.ambient.rgb + vec3<f32>(diffuse));
     // Voxel edges: voxels meet on whole world coordinates (placements are
     // whole voxels, and quarter turns keep them whole), so a line is where

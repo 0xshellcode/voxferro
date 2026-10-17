@@ -1604,6 +1604,7 @@ impl App {
             Vec3::new(0.19, 0.18, 0.26), // the editor's own default ambient
             [0.16, 0.16, 0.17],
             self.view.edges,
+            self.view.shadow,
         ))
     }
 
