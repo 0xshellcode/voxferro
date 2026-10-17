@@ -24,7 +24,7 @@
 
 use crate::App;
 use eframe::egui;
-use glam::{IVec3, Vec3};
+use glam::Vec3;
 use voxel_core::kernels::{self, Prim};
 use voxel_core::Volume;
 
@@ -124,27 +124,19 @@ impl App {
     /// selected ones if voxels on this model are selected.
     fn write_changes(&mut self, what: &str, model: usize, before: &Volume, after: &Volume) -> String {
         let only = self.active_selection().filter(|s| s.model == model).map(|s| s.cells().clone());
-        let [sx, sy, sz] = before.size();
-        let mut writes = Vec::new();
-        for z in 0..sz {
-            for y in 0..sy {
-                for x in 0..sx {
-                    let new = after.get(x, y, z);
-                    let at = [x as i32, y as i32, z as i32];
-                    if before.get(x, y, z) != new && only.as_ref().is_none_or(|cells| cells.contains(&at)) {
-                        writes.push((IVec3::from_array(at), new));
-                    }
-                }
-            }
-        }
-        let count = writes.len();
+        let Some(loaded) = self.scene.as_mut() else { return "no model selected".to_owned() };
+        debug_assert_eq!(loaded.doc.scene.models.get(model).map(Volume::size), Some(before.size()));
+        let command = voxel_core::Command::diff(&loaded.doc, model, after, |p| {
+            only.as_ref().is_none_or(|cells| cells.contains(&p.to_array()))
+        });
+        let count = match &command {
+            voxel_core::Command::SetVoxels { changes, .. } => changes.len(),
+            _ => 0,
+        };
         if count == 0 {
             return format!("{what}: nothing changed");
         }
-        let Some(loaded) = self.scene.as_mut() else { return "no model selected".to_owned() };
-        self.history.end_gesture();
-        self.history.set_voxels(&mut loaded.doc, model, writes);
-        self.history.end_gesture();
+        self.history.exec_alone(&mut loaded.doc, command);
         self.mesh_dirty = true;
         format!("{what}: {count} voxels changed")
     }

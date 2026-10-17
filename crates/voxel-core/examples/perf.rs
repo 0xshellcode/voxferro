@@ -7,7 +7,7 @@
 //! nothing uniform.
 use glam::{IVec3, Vec3};
 use std::time::Instant;
-use voxel_core::{Instance, Scene, Volume, brush, formats, kernels, marching, sprites, voxelize};
+use voxel_core::{Command, Document, History, Instance, Scene, Volume, brush, formats, kernels, marching, sprites, voxelize};
 use vox_format::Palette;
 
 fn model(n: u32) -> Volume {
@@ -106,4 +106,18 @@ fn main() {
     }
     time("voxelize 20k tris at 256", || voxelize::voxelize(&mesh, &palette, 256, false).filled_count());
     time("voxelize + fill", || voxelize::voxelize(&mesh, &palette, 256, true).filled_count());
+
+    // An edit of the whole model as the app records it: every changed cell
+    // a write, one undo step.
+    println!("\n-- Undo history");
+    let mut doc = Document { scene: scene.clone(), ..Default::default() };
+    let after = kernels::reverse(&v, 3);
+    let command = time("diff (changed cells)", || Command::diff(&doc, 0, &after, |_| true));
+    if let Command::SetVoxels { changes, .. } = &command {
+        println!("{:<28} {:>9}", "  changes", changes.len());
+    }
+    let mut history = History::default();
+    time("apply and record", || history.exec_alone(&mut doc, command));
+    time("undo", || history.undo(&mut doc));
+    time("redo", || history.redo(&mut doc));
 }

@@ -138,6 +138,35 @@ impl Volume {
         }
     }
 
+    /// The cells, x fastest, then y, then z.
+    pub fn cells(&self) -> &[u8] {
+        &self.voxels
+    }
+
+    /// Many [`Volume::set`]s at once: each touched chunk gets one new
+    /// version rather than one per cell. Cells outside are skipped.
+    pub fn set_many(&mut self, writes: impl IntoIterator<Item = (glam::IVec3, u8)>) {
+        let d = self.chunk_dims();
+        let mut touched = vec![false; self.versions.len()];
+        for (p, value) in writes {
+            if p.x < 0 || p.y < 0 || p.z < 0 {
+                continue;
+            }
+            let (x, y, z) = (p.x as u32, p.y as u32, p.z as u32);
+            if let Some(i) = self.index(x, y, z) {
+                if self.voxels[i] != value {
+                    self.voxels[i] = value;
+                    touched[(x / CHUNK + y / CHUNK * d[0] + z / CHUNK * d[0] * d[1]) as usize] = true;
+                }
+            }
+        }
+        for (version, touched) in self.versions.iter_mut().zip(touched) {
+            if touched {
+                *version = fresh_version();
+            }
+        }
+    }
+
     pub fn is_empty_at(&self, x: u32, y: u32, z: u32) -> bool {
         self.get(x, y, z) == 0
     }

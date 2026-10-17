@@ -79,28 +79,57 @@ impl Command {
                         && (p.z as u32) < sz
                 };
                 // A stroke may name the same cell twice; the last write wins
-                // and the first previous value is the one to restore.
-                let mut seen = std::collections::HashMap::new();
+                // and the first previous value is the one to restore. A bit
+                // per cell of the model says which were named already; only
+                // a repeat looks for its entry, through a map built on the
+                // first one -- a whole-model edit names each cell once.
+                let index = |p: IVec3| p.x as usize + sx as usize * (p.y as usize + sy as usize * p.z as usize);
+                let mut seen = vec![0u64; (sx as usize * sy as usize * sz as usize).div_ceil(64)];
+                let mut at: Option<std::collections::HashMap<IVec3, usize>> = None;
                 let mut changes: Vec<(IVec3, u8, u8)> = Vec::new();
                 for (p, next) in writes {
                     if !inside(p) {
                         continue;
                     }
-                    match seen.get(&p) {
-                        Some(&i) => {
-                            let entry: &mut (IVec3, u8, u8) = &mut changes[i];
-                            entry.2 = next;
+                    let i = index(p);
+                    if seen[i / 64] & (1 << (i % 64)) == 0 {
+                        seen[i / 64] |= 1 << (i % 64);
+                        if let Some(at) = &mut at {
+                            at.insert(p, changes.len());
                         }
-                        None => {
-                            seen.insert(p, changes.len());
-                            changes.push((p, volume.get_i(p.x, p.y, p.z), next));
-                        }
+                        changes.push((p, volume.get_i(p.x, p.y, p.z), next));
+                    } else {
+                        let at = at.get_or_insert_with(|| changes.iter().enumerate().map(|(k, c)| (c.0, k)).collect());
+                        changes[at[&p]].2 = next;
                     }
                 }
                 changes.retain(|&(_, previous, next)| previous != next);
                 changes
             }
             None => Vec::new(),
+        };
+        Self::SetVoxels { model, changes }
+    }
+
+    /// The cells where `after` differs from model `model`, as one
+    /// [`Command::SetVoxels`] -- only those `keep` admits. The two must be
+    /// the same size. Compares the cells directly: the way to record an
+    /// edit of a whole model.
+    pub fn diff(document: &Document, model: usize, after: &Volume, keep: impl Fn(IVec3) -> bool) -> Self {
+        let changes = match document.scene.models.get(model) {
+            Some(before) if before.size() == after.size() => {
+                let [sx, sy, _] = before.size().map(|s| s as usize);
+                before
+                    .cells()
+                    .iter()
+                    .zip(after.cells())
+                    .enumerate()
+                    .filter(|(_, (b, a))| b != a)
+                    .map(|(i, (&b, &a))| (IVec3::new((i % sx) as i32, (i / sx % sy) as i32, (i / (sx * sy)) as i32), b, a))
+                    .filter(|&(p, _, _)| keep(p))
+                    .collect()
+            }
+            _ => Vec::new(),
         };
         Self::SetVoxels { model, changes }
     }
@@ -125,9 +154,7 @@ impl Command {
         match self {
             Self::SetVoxels { model, changes } => {
                 if let Some(volume) = document.model_mut(*model) {
-                    for &(p, _, next) in changes {
-                        set_signed(volume, p, next);
-                    }
+                    volume.set_many(changes.iter().map(|&(p, _, next)| (p, next)));
                 }
             }
             Self::ReplaceModel { model, after, .. } => {
@@ -162,9 +189,7 @@ impl Command {
             Self::SetVoxels { model, changes } => {
                 if let Some(volume) = document.model_mut(*model) {
                     // Reverse order, so overlapping writes unwind correctly.
-                    for &(p, previous, _) in changes.iter().rev() {
-                        set_signed(volume, p, previous);
-                    }
+                    volume.set_many(changes.iter().rev().map(|&(p, previous, _)| (p, previous)));
                 }
             }
             Self::ReplaceModel { model, before, .. } => {
@@ -245,12 +270,6 @@ impl Command {
             }
             _ => false,
         }
-    }
-}
-
-fn set_signed(volume: &mut Volume, p: IVec3, value: u8) {
-    if p.x >= 0 && p.y >= 0 && p.z >= 0 {
-        volume.set(p.x as u32, p.y as u32, p.z as u32, value);
     }
 }
 

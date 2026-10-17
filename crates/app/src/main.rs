@@ -220,6 +220,10 @@ struct App {
     path_tracer: PathTracer,
     /// Render mode, mirroring the editor's Model/Render tabs.
     rendering: bool,
+    /// Edits the tracer's grid has not caught up with: it is only brought
+    /// up to date when a frame is traced, so editing outside Render mode
+    /// does not pay for it.
+    trace_stale: bool,
     environment: Environment,
     /// Depth of field, for the session: the file format has no key for it.
     dof: bool,
@@ -386,6 +390,7 @@ impl App {
             xs: xs_ui::XsState::new(&state.device),
             path_tracer: PathTracer::new(&state.device),
             rendering: false,
+            trace_stale: false,
             environment: Environment::default(),
             env_maps: None,
             environment_source: Vec::new(),
@@ -672,7 +677,11 @@ impl App {
         self.scene_renderer.set_wire(&state.device, self.view.wire.then_some(&mesh));
         self.meshed_for = (!self.view.background).then_some(self.selected);
         let uploaded = started.elapsed();
-        self.sync_trace_volume(state);
+        if self.rendering {
+            self.sync_trace_volume(state);
+        } else {
+            self.trace_stale = true;
+        }
         if self.timings {
             eprintln!(
                 "[voxferro] remesh: mesh {:.1?} ({} chunks), upload {:.1?}, trace grid {:.1?}",
@@ -920,6 +929,15 @@ impl App {
         }
     }
     fn run_command(&mut self, line: &str, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
+        let started = std::time::Instant::now();
+        self.run_command_untimed(line, ctx, state);
+        if self.timings && !line.trim().is_empty() {
+            let shown: String = line.chars().take(60).collect();
+            eprintln!("[voxferro] command {shown}: {:.1?}", started.elapsed());
+        }
+    }
+
+    fn run_command_untimed(&mut self, line: &str, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
         if line.trim().is_empty() {
             return;
         }
@@ -1378,6 +1396,10 @@ impl App {
         }
 
         if self.rendering {
+            if self.trace_stale {
+                self.trace_stale = false;
+                self.sync_trace_volume(state);
+            }
             let basis = self.camera.basis();
             let offset = self.volume_offset();
             let mut egui_renderer = state.renderer.write();
