@@ -7,7 +7,7 @@
 //! else (the tracer, the sky bake) follows from the objects.
 
 use crate::App;
-use crate::pathtrace::{Environment, linear_to_srgb, srgb_to_linear};
+use crate::pathtrace::{Background, Environment, VoxelShape, linear_to_srgb, srgb_to_linear};
 use eframe::{egui, egui_wgpu};
 use glam::Vec3;
 use voxel_core::Command;
@@ -43,8 +43,9 @@ impl App {
         let Some(loaded) = &self.scene else { return };
         self.environment = Environment::from_render_objects(&loaded.doc.render);
         self.environment_source = loaded.doc.render.clone();
-        // Not in the file: a switch of this session.
+        // Not in the file: switches of this session.
         self.environment.dof = self.dof;
+        self.apply_look();
         // The render camera's field of view is a lens setting.
         self.camera.fov_y = self.environment.lens_fov.to_radians();
         if let Some(message) = self.ensure_env_map(state)
@@ -180,6 +181,34 @@ impl App {
             });
         });
 
+        // the reference editor's background and voxel shapes (`pt_b_bg_a`,
+        // `pt_bg_col`, `pt_prim`, `pt_cell`): settings of the session.
+        egui::CollapsingHeader::new("Look").show(ui, |ui| {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Background");
+                for (b, name) in [(Background::Sky, "sky"), (Background::Colour, "colour"), (Background::Transparent, "none")] {
+                    changed |= ui.selectable_value(&mut self.look.background, b, name).changed();
+                }
+            });
+            if self.look.background == Background::Colour {
+                changed |= egui::color_picker::color_edit_button_srgb(ui, &mut self.look.background_rgb).changed();
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Voxels");
+                for (shape, name) in VoxelShape::ALL {
+                    changed |= ui.selectable_value(&mut self.look.shape, shape, name).changed();
+                }
+            });
+            if matches!(self.look.shape, VoxelShape::Sphere | VoxelShape::Cylinder) {
+                changed |= ui.add(egui::Slider::new(&mut self.look.size, 0.0..=1.0).text("size")).changed();
+            }
+            if changed {
+                self.apply_look();
+                self.path_tracer.reset();
+            }
+        });
+
         egui::CollapsingHeader::new("Lens").show(ui, |ui| {
             dragged |= ui.add(egui::Slider::new(&mut env.lens_fov, 5.0..=120.0).text("fov")).changed();
             // Depth of field is a switch of the session: the file has no key
@@ -254,6 +283,34 @@ impl App {
                 env.atmosphere_enabled = false;
                 format!("sky: {}", env.ibl_path)
             }
+            Some("background") => {
+                match args.get(1..).unwrap_or_default() {
+                    ["sky"] => self.look.background = Background::Sky,
+                    ["none" | "transparent"] => self.look.background = Background::Transparent,
+                    rest => match crate::palette_ops::parse_colour(rest) {
+                        Some(c) => {
+                            self.look.background = Background::Colour;
+                            self.look.background_rgb = [c.r, c.g, c.b];
+                        }
+                        None => return "env background sky | none | #rrggbb | r g b".to_owned(),
+                    },
+                }
+                self.apply_look();
+                self.path_tracer.reset();
+                return format!("background {:?}", self.look.background).to_lowercase();
+            }
+            Some("shape") => {
+                let Some(shape) = args.get(1).and_then(|w| VoxelShape::ALL.iter().find(|(_, n)| n == w)).map(|(s, _)| *s) else {
+                    return "env shape cube|sphere|cylinder|brick|clay [size 0-1]".to_owned();
+                };
+                self.look.shape = shape;
+                if let Some(size) = args.get(2).and_then(|v| v.parse::<f32>().ok()) {
+                    self.look.size = size.clamp(0.0, 1.0);
+                }
+                self.apply_look();
+                self.path_tracer.reset();
+                return format!("voxels as {}", args[1]);
+            }
             Some("dof") => {
                 self.dof = args.get(1).is_none_or(|v| *v != "off");
                 self.environment.dof = self.dof;
@@ -306,7 +363,7 @@ impl App {
                 format!("vignette {}", env.vignette)
             }
             _ => {
-                return "env uniform | atmosphere [elev] | ibl [map] [i] [rot] | dof [on|off] | \
+                return "env uniform | atmosphere [elev] | ibl [map] [i] [rot] | dof [on|off] | background sky|none|<colour> | shape <kind> [size] | \
                         lens [aperture] [blades] [angle] | bloom [mix] [scale] [aspect] [threshold] | vig <v> | fog <density> [g]"
                     .to_owned();
             }
@@ -330,4 +387,30 @@ fn stored_colour_edit(ui: &mut egui::Ui, colour: &mut Vec3) -> bool {
         *colour = Vec3::from_array(rgb.map(|c| c as f32 / 255.0));
     }
     changed
+}
+
+/// The render's look for the session: background and voxel shape.
+pub struct Look {
+    pub background: Background,
+    pub background_rgb: [u8; 3],
+    pub shape: VoxelShape,
+    pub size: f32,
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Self { background: Background::Sky, background_rgb: [50, 50, 50], shape: VoxelShape::Cube, size: 1.0 }
+    }
+}
+
+impl App {
+    /// Hands the session's look to the tracer's settings.
+    pub fn apply_look(&mut self) {
+        let e = &mut self.environment;
+        e.background = self.look.background;
+        let lin = |v: u8| (v as f32 / 255.0).powf(2.2);
+        e.background_color = glam::Vec3::new(lin(self.look.background_rgb[0]), lin(self.look.background_rgb[1]), lin(self.look.background_rgb[2]));
+        e.voxel_shape = self.look.shape;
+        e.voxel_size = self.look.size;
+    }
 }

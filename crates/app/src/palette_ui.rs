@@ -10,12 +10,13 @@ use eframe::{egui, egui_wgpu};
 use vox_format::{Color, Material, MaterialKind, MediaKind, ResolvedMaterial};
 use voxel_core::Command;
 
-const KINDS: [(MaterialKind, &str); 5] = [
+const KINDS: [(MaterialKind, &str); 6] = [
     (MaterialKind::Diffuse, "diffuse"),
     (MaterialKind::Metal, "metal"),
     (MaterialKind::Glass, "glass"),
     (MaterialKind::Emissive, "emit"),
     (MaterialKind::Media, "cloud"),
+    (MaterialKind::Blend, "blend"),
 ];
 
 const MEDIA: [(MediaKind, &str); 4] = [
@@ -38,6 +39,8 @@ fn start_kind(r: &mut ResolvedMaterial, kind: MaterialKind) {
             }
         }
         MaterialKind::Diffuse => {}
+        // Starts half metal, half diffuse.
+        MaterialKind::Blend => r.metalness = 0.5,
     }
 }
 
@@ -88,6 +91,13 @@ impl App {
             MaterialKind::Emissive => {
                 slider(ui, &mut r.emission, 0.0..=1.0, "emit");
                 slider(ui, &mut r.flux, 0.0..=4.0, "flux");
+            }
+            MaterialKind::Blend => {
+                slider(ui, &mut r.metalness, 0.0..=1.0, "metal");
+                slider(ui, &mut r.transparency, 0.0..=1.0, "trans");
+                slider(ui, &mut r.roughness, 0.0..=1.0, "rough");
+                slider(ui, &mut r.ior, 1.0..=3.0, "ior");
+                slider(ui, &mut r.emission, 0.0..=1.0, "emit");
             }
             MaterialKind::Media => {
                 ui.horizontal(|ui| {

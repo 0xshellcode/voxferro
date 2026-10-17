@@ -229,6 +229,8 @@ struct App {
     /// A render at a size of its own, under way, and the panel's settings.
     photo: Option<photo::PhotoJob>,
     photo_settings: photo::PhotoSettings,
+    /// Random turns within a turntable frame, for its motion blur.
+    spin_rand: voxel_core::kernels::Rand,
     /// True while the launch's `--run` and `--script` lines run.
     starting_up: bool,
     /// Edits the tracer's grid has not caught up with: it is only brought
@@ -238,6 +240,8 @@ struct App {
     environment: Environment,
     /// Depth of field, for the session: the file format has no key for it.
     dof: bool,
+    /// The render's background and voxel shape, for the session.
+    look: render_ui::Look,
     /// `--timings`: report how long each rebuild takes.
     timings: bool,
     /// Meshes per model chunk, so an edit re-meshes only what it touched.
@@ -431,12 +435,14 @@ impl App {
             rendering: false,
             photo: None,
             photo_settings: Default::default(),
+            spin_rand: voxel_core::kernels::Rand::new(7),
             starting_up: false,
             trace_stale: false,
             environment: Environment::default(),
             env_maps: None,
             environment_source: Vec::new(),
             dof: false,
+            look: Default::default(),
             timings: std::env::args().any(|a| a == "--timings"),
             mesh_cache: Default::default(),
             trace_cache: None,
@@ -1127,7 +1133,7 @@ impl App {
             return;
         }
 
-        if line.split_whitespace().take(2).eq(["render", "image"]) {
+        if line.split_whitespace().take(2).eq(["render", "image"]) || line.split_whitespace().take(2).eq(["render", "spin"]) {
             let message = self.photo_command(line);
             self.console_log.push(message);
             return;
@@ -1494,7 +1500,9 @@ impl App {
     /// Painting it is the caller's: the viewport shows it, and an agent's
     /// capture reads it back while the window is hidden.
     pub fn draw_scene(&mut self, state: &egui_wgpu::RenderState, size: [u32; 2]) -> Option<egui::TextureId> {
-        // A photo traces at its own size, whatever the viewport's.
+        // A turntable turns the camera before each sample; a photo traces
+        // at its own size, whatever the viewport's.
+        self.spin_camera();
         let size = match self.photo_size() {
             Some(photo) => photo,
             None => {

@@ -27,12 +27,17 @@ struct Post {
     star: vec4<f32>,
     // x: diagnostic view; 5 paints magenta without reading the tracer.
     debug: vec4<u32>,
+    // The background (the reference editor's): x 0 the sky, 1 a flat colour (yzw,
+    // linear) behind what the camera sees, 2 transparent.
+    look: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> q: Post;
 @group(0) @binding(1) var<storage, read> accumulator: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> glow: array<vec4<f32>>;
 @group(0) @binding(3) var output: texture_storage_2d<rgba8unorm, write>;
+// Samples that met something, per pixel: over the sample count, opacity.
+@group(0) @binding(4) var<storage, read> coverage: array<f32>;
 
 fn pcg(state: ptr<function, u32>) -> u32 {
     let s = *state * 747796405u + 2891336453u;
@@ -96,6 +101,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     color = color * q.film.x;
 
+    // The background: what the camera saw nothing in. Behind a flat colour
+    // the image is laid over it; transparent, the colour is unmixed from
+    // the missing samples' black so the PNG's alpha carries the edge.
+    let alpha = clamp(coverage[index] / max(accumulator[index].a, 1.0), 0.0, 1.0);
+    if (q.look.x > 1.5) {
+        color = color / max(alpha, 1e-4);
+    } else if (q.look.x > 0.5) {
+        color = color + q.look.yzw * (1.0 - alpha);
+    }
+
     // Vignette. The editor uploads `vig = _vig^2 * 5` (EvalPost); a 0..5
     // range reads as an exponent, so it shapes the usual 16uv(1-u)(1-v)
     // falloff -- 1 in the middle, 0 at the corners. The form is this
@@ -121,5 +136,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dither = (random(&rng) + random(&rng) - 1.0) / 255.0;
     color = color + vec3<f32>(dither);
 
-    textureStore(output, vec2<i32>(gid.xy), vec4<f32>(color, 1.0));
+    textureStore(output, vec2<i32>(gid.xy), vec4<f32>(color, select(1.0, alpha, q.look.x > 1.5)));
 }

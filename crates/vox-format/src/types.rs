@@ -311,19 +311,8 @@ impl Material {
             Some("_emit") => MaterialKind::Emissive,
             // Cloud in the editor's panel: a participating medium.
             Some("_media") => MaterialKind::Media,
-            // `_blend` mixes metal, glass and emission by their own keys;
-            // classify by whichever is actually present.
-            Some("_blend") => {
-                if self.float("_emit").is_some_and(|v| v > 0.0) {
-                    MaterialKind::Emissive
-                } else if self.float("_trans").is_some_and(|v| v > 0.0) {
-                    MaterialKind::Glass
-                } else if self.float("_metal").is_some_and(|v| v > 0.0) {
-                    MaterialKind::Metal
-                } else {
-                    MaterialKind::Diffuse
-                }
-            }
+            // `_blend` mixes metal, glass and emission by their own keys.
+            Some("_blend") => MaterialKind::Blend,
             // Absent in version 200 means diffuse.
             _ => MaterialKind::Diffuse,
         };
@@ -348,10 +337,17 @@ impl Material {
             kind,
             roughness: self.float("_rough").unwrap_or(0.1).clamp(0.0, 1.0),
             ior,
-            metalness: if kind == MaterialKind::Metal { amount("_metal") } else { 0.0 },
+            metalness: match kind {
+                MaterialKind::Metal => amount("_metal"),
+                // A blend's shares default to none of each.
+                MaterialKind::Blend => self.float("_metal").unwrap_or(0.0).clamp(0.0, 1.0),
+                _ => 0.0,
+            },
             // Files from a recent version use `_trans`; the editor's own key table
             // (next to `_metal`, `_rough`, `_emit`...) names it `_alpha`.
-            transparency: if kind == MaterialKind::Glass {
+            transparency: if kind == MaterialKind::Blend {
+                self.float("_trans").or_else(|| self.float("_alpha")).unwrap_or(0.0).clamp(0.0, 1.0)
+            } else if kind == MaterialKind::Glass {
                 self.float("_trans")
                     .or_else(|| self.float("_alpha"))
                     .or(weight)
@@ -360,7 +356,11 @@ impl Material {
             } else {
                 0.0
             },
-            emission: if kind == MaterialKind::Emissive { amount("_emit") } else { 0.0 },
+            emission: match kind {
+                MaterialKind::Emissive => amount("_emit"),
+                MaterialKind::Blend => self.float("_emit").unwrap_or(0.0).clamp(0.0, 1.0),
+                _ => 0.0,
+            },
             flux: self.float("_flux").unwrap_or(0.0).max(0.0),
             // Absorption density: `_d` in version 200, `_att` in version 150.
             // Zero means perfectly clear glass whatever its colour.
@@ -398,6 +398,7 @@ impl Material {
             MaterialKind::Glass => "_glass",
             MaterialKind::Emissive => "_emit",
             MaterialKind::Media => "_media",
+            MaterialKind::Blend => "_blend",
         };
         d.set("_type", kind);
         for key in ["_metal", "_trans", "_alpha", "_emit", "_weight"] {
@@ -428,6 +429,12 @@ impl Material {
                 d.set("_media", (r.media as u32).to_string());
                 d.set("_g", number(r.phase));
             }
+            // Every share under its own key, as version 200 writes them.
+            MaterialKind::Blend => {
+                d.set("_metal", number(r.metalness));
+                d.set("_trans", number(r.transparency));
+                d.set("_emit", number(r.emission));
+            }
         }
         Material { id, properties: d }
     }
@@ -443,6 +450,8 @@ pub enum MaterialKind {
     Emissive = 3,
     /// A participating medium: cloud, smoke, fog in a volume.
     Media = 4,
+    /// the reference editor's Blend: shares of metal, glass and emission at once.
+    Blend = 5,
 }
 
 /// How a medium interacts with light, as the editor's `_media` numbers it

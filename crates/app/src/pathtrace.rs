@@ -6,6 +6,31 @@ use vox_format::Palette;
 use voxel_core::Volume;
 use wgpu::util::DeviceExt;
 
+/// What a camera ray that meets nothing shows (the reference editor's background).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Background {
+    #[default]
+    Sky = 0,
+    Colour = 1,
+    Transparent = 2,
+}
+
+/// How the path tracer draws a voxel (the reference editor's `pt_prim`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VoxelShape {
+    #[default]
+    Cube = 0,
+    Sphere = 1,
+    Cylinder = 2,
+    Brick = 3,
+    Clay = 4,
+}
+
+impl VoxelShape {
+    pub const ALL: [(VoxelShape, &'static str); 5] =
+        [(Self::Cube, "cube"), (Self::Sphere, "sphere"), (Self::Cylinder, "cylinder"), (Self::Brick, "brick"), (Self::Clay, "clay")];
+}
+
 /// Lighting and film settings, read from the file's `rOBJ` chunks where
 /// available.
 #[derive(Debug, Clone)]
@@ -52,6 +77,14 @@ pub struct Environment {
     /// Depth of field on or off. The editor has a switch for it in its
     /// render panel but no key in the file, so it is not saved either.
     pub dof: bool,
+    /// What the camera sees where there is nothing, and its colour
+    /// (linear). Like depth of field, a setting of the session.
+    pub background: Background,
+    pub background_color: Vec3,
+    /// How voxels are drawn, and the sphere's and cylinder's size (0 to 1:
+    /// a radius of 0.25 to 0.5).
+    pub voxel_shape: VoxelShape,
+    pub voxel_size: f32,
 
     /// `_film._vig`: vignette strength.
     pub vignette: f32,
@@ -114,6 +147,10 @@ impl Default for Environment {
             blades: 0,
             blade_rotation: 0.0,
             dof: false,
+            background: Background::Sky,
+            background_color: Vec3::splat(0.2),
+            voxel_shape: VoxelShape::Cube,
+            voxel_size: 1.0,
             vignette: 0.0,
             aces: true,
             gamma: 2.2,
@@ -483,6 +520,8 @@ struct GpuMaterial {
     ior: f32,
     amount: f32,
     emission: [f32; 4],
+    /// x: a Blend's glass share.
+    extra: [f32; 4],
 }
 
 /// Converts an emitter's `_emit` and `_flux` into a radiance multiplier.
@@ -585,6 +624,11 @@ struct Params {
     /// x: fog extinction per voxel, y: fog g.
     fog: [f32; 4],
     fog_color: [f32; 4],
+    /// x: the background, 0 sky, 1 colour, 2 transparent.
+    look: [f32; 4],
+    /// x: voxels as 0 cubes, 1 spheres, 2 cylinders, 3 bricks, 4 clay;
+    /// y: the sphere's and cylinder's radius.
+    shape: [f32; 4],
 }
 
 /// Must match the WGSL `Post`.
@@ -600,6 +644,8 @@ struct PostParams {
     /// x: the diagnostic view (`VOXFERRO_TRACE_DEBUG`); 5 makes this pass
     /// paint a flat magenta without reading the tracer's output.
     debug: [u32; 4],
+    /// x: the background, 0 sky, 1 colour (yzw, linear), 2 transparent.
+    look: [f32; 4],
 }
 
 impl Environment {
@@ -640,6 +686,8 @@ struct Target {
     accumulator: wgpu::Buffer,
     /// Running bloom estimate, accumulated like the image.
     glow: wgpu::Buffer,
+    /// Samples per pixel that met something: the image's opacity.
+    coverage: wgpu::Buffer,
 }
 
 pub struct PathTracer {
@@ -713,6 +761,7 @@ impl PathTracer {
                 storage(6, true),
                 storage(7, true),
                 storage(8, true),
+                storage(9, false),
             ],
         });
 
@@ -752,6 +801,7 @@ impl PathTracer {
                     },
                     count: None,
                 },
+                storage(4, true),
             ],
         });
         let post_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -796,6 +846,7 @@ impl PathTracer {
             ior: 1.3,
             amount: 0.0,
             emission: [0.0; 4],
+            extra: [0.0; 4],
         }; 256];
         let materials = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("path tracer materials"),
@@ -935,6 +986,7 @@ impl PathTracer {
             ior: 1.3,
             amount: 0.0,
             emission: [0.0; 4],
+            extra: [0.0; 4],
         }; 256];
 
         for material in materials {
@@ -946,7 +998,7 @@ impl PathTracer {
             }
             let r = material.resolve();
             let c = palette.color(index);
-            let strength = if r.kind == vox_format::MaterialKind::Emissive {
+            let strength = if matches!(r.kind, vox_format::MaterialKind::Emissive | vox_format::MaterialKind::Blend) {
                 emission_strength(r.emission, r.flux)
             } else {
                 0.0
@@ -962,7 +1014,7 @@ impl PathTracer {
                 },
                 ior: r.ior,
                 amount: match r.kind {
-                    vox_format::MaterialKind::Metal => r.metalness,
+                    vox_format::MaterialKind::Metal | vox_format::MaterialKind::Blend => r.metalness,
                     vox_format::MaterialKind::Glass => r.transparency,
                     // How the medium interacts, as a number the shader rounds.
                     vox_format::MaterialKind::Media => r.media as u32 as f32,
@@ -979,6 +1031,7 @@ impl PathTracer {
                         r.density
                     },
                 ],
+                extra: [if r.kind == vox_format::MaterialKind::Blend { r.transparency } else { 0.0 }, 0.0, 0.0, 0.0],
             };
         }
 
@@ -1116,6 +1169,12 @@ impl PathTracer {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let coverage = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("path tracer coverage"),
+            size: (size[0] as u64) * (size[1] as u64) * 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
 
         let texture_id = match self.target.take() {
             Some(old) => {
@@ -1136,6 +1195,7 @@ impl PathTracer {
             view,
             texture_id,
             accumulator,
+            coverage,
             glow,
         });
         self.reset();
@@ -1235,6 +1295,8 @@ impl PathTracer {
                 0.0,
             ],
             fog_color: environment.fog_color.extend(0.0).to_array(),
+            look: [environment.background as u32 as f32, 0.0, 0.0, 0.0],
+            shape: [environment.voxel_shape as u32 as f32, 0.25 + 0.25 * environment.voxel_size.clamp(0.0, 1.0), 0.0, 0.0],
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
 
@@ -1259,6 +1321,12 @@ impl PathTracer {
             ],
             star: [iterations as f32, angle, step, self.samples as f32],
             debug: [trace_debug_mode(), 0, 0, 0],
+            look: [
+                environment.background as u32 as f32,
+                environment.background_color.x,
+                environment.background_color.y,
+                environment.background_color.z,
+            ],
         };
         queue.write_buffer(&self.post_params, 0, bytemuck::bytes_of(&post));
         let post_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1272,6 +1340,7 @@ impl PathTracer {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(&target.view),
                 },
+                wgpu::BindGroupEntry { binding: 4, resource: target.coverage.as_entire_binding() },
             ],
         });
 
@@ -1310,6 +1379,10 @@ impl PathTracer {
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: self.env_cdf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: target.coverage.as_entire_binding(),
                 },
             ],
         });

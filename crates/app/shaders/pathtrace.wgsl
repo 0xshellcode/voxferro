@@ -72,6 +72,14 @@ struct Params {
     fog: vec4<f32>,
     // The fog's colour (`_k`): what fraction of light a scattering keeps.
     fog_color: vec4<f32>,
+    // What a camera ray that meets nothing shows (the reference editor's background
+    // option): x 0 the sky, 1 a flat colour, 2 nothing -- transparent; the
+    // colour itself is put in by the post pass. Bounces see the sky always.
+    look: vec4<f32>,
+    // How a voxel is drawn: x 0 a cube, 1 a sphere, 2 a cylinder standing
+    // on z, 3 a brick with a stud on top, 4 clay (a smooth surface through
+    // the voxels); y the sphere's and cylinder's radius, 0.25 to 0.5.
+    shape: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -79,6 +87,9 @@ struct Params {
 @group(0) @binding(2) var<storage, read> palette: array<vec4<f32>, 256>;
 // Linear-light accumulator, one vec4 per pixel: rgb sum plus sample count.
 @group(0) @binding(3) var<storage, read_write> accumulator: array<vec4<f32>>;
+// How many of a pixel's samples met something: summed, then divided by the
+// sample count in the post pass, it is the pixel's opacity.
+@group(0) @binding(9) var<storage, read_write> coverage: array<f32>;
 
 const KIND_DIFFUSE: u32 = 0u;
 const KIND_METAL: u32 = 1u;
@@ -88,6 +99,9 @@ const KIND_EMIT: u32 = 3u;
 // it interacts (0 absorb, 1 scatter, 2 emit, 3 subsurface), `roughness` its
 // phase g, `emission.w` its density per voxel.
 const KIND_MEDIA: u32 = 4u;
+// the reference editor's Blend: metal, glass and diffuse at once, a share each
+// (`amount` the metal, `extra.x` the glass), plus emission.
+const KIND_BLEND: u32 = 5u;
 
 // One entry per palette index, resolved on the CPU from the MATL chunks so
 // the shader never sees the two on-disk conventions.
@@ -100,6 +114,8 @@ struct Material {
     // rgb: emitted radiance, already scaled; zero for non-emitters.
     // w: absorption density for transparent materials.
     emission: vec4<f32>,
+    // x: Blend's glass share.
+    extra: vec4<f32>,
 };
 
 // Beer-Lambert absorption through `distance` voxels of material. The colour
@@ -235,6 +251,195 @@ fn is_glass(cell: vec3<i32>) -> bool {
     return index != 0u && materials[index].kind == KIND_GLASS;
 }
 
+// --- Voxels drawn as other shapes ------------------------------------------
+//
+// Each test looks for the shape inside one cell, between the distances
+// t_in (where the ray enters the cell) and t_out (where it leaves); a miss
+// lets the walk go on to the next cell. Glass and media stay cubes.
+
+fn shaped(index: u32) -> bool {
+    let k = materials[index].kind;
+    return p.shape.x > 0.5 && k != KIND_GLASS && k != KIND_MEDIA;
+}
+
+struct ShapeHit {
+    hit: bool,
+    t: f32,
+    normal: vec3<f32>,
+    point: vec3<f32>,
+};
+
+fn no_shape() -> ShapeHit {
+    var h: ShapeHit;
+    h.hit = false;
+    return h;
+}
+
+fn sphere_in(origin: vec3<f32>, dir: vec3<f32>, cell: vec3<i32>, t_in: f32, t_out: f32) -> ShapeHit {
+    let r = p.shape.y;
+    let c = vec3<f32>(cell) + vec3<f32>(0.5);
+    let oc = origin - c;
+    let b = dot(oc, dir);
+    let disc = b * b - (dot(oc, oc) - r * r);
+    if (disc < 0.0) {
+        return no_shape();
+    }
+    let t = -b - sqrt(disc);
+    if (t < max(t_in - 1e-4, 0.0) || t > t_out) {
+        return no_shape();
+    }
+    var h: ShapeHit;
+    h.hit = true;
+    h.t = t;
+    h.normal = normalize(origin + dir * t - c);
+    // Exactly on the surface, however far the ray came from.
+    h.point = c + h.normal * r;
+    return h;
+}
+
+// A cylinder standing on z, `r` round, from z0 to z1 in the cell's column.
+// `cap_low` and `cap_high` say whether its ends are closed: a stack of
+// cylinders is one column, capped only where it ends.
+fn cylinder_in(origin: vec3<f32>, dir: vec3<f32>, centre: vec2<f32>, r: f32, z0: f32, z1: f32,
+               cap_low: bool, cap_high: bool, t_in: f32, t_out: f32) -> ShapeHit {
+    var best = no_shape();
+    best.t = t_out;
+    let o = origin.xy - centre;
+    let a = dot(dir.xy, dir.xy);
+    if (a > 1e-10) {
+        let b = dot(o, dir.xy);
+        let disc = b * b - a * (dot(o, o) - r * r);
+        if (disc >= 0.0) {
+            let t = (-b - sqrt(disc)) / a;
+            let z = origin.z + dir.z * t;
+            if (t >= max(t_in - 1e-4, 0.0) && t <= best.t && z >= z0 && z <= z1) {
+                best.hit = true;
+                best.t = t;
+                let q = normalize(origin.xy + dir.xy * t - centre);
+                best.normal = vec3<f32>(q, 0.0);
+                best.point = vec3<f32>(centre + q * r, z);
+            }
+        }
+    }
+    if (abs(dir.z) > 1e-8) {
+        for (var end = 0; end < 2; end = end + 1) {
+            let high = end == 1;
+            if ((high && !cap_high) || (!high && !cap_low)) {
+                continue;
+            }
+            let z = select(z0, z1, high);
+            let t = (z - origin.z) / dir.z;
+            let q = origin.xy + dir.xy * t - centre;
+            // Only from outside: a ray going down meets the top.
+            let facing = select(dir.z > 0.0, dir.z < 0.0, high);
+            if (facing && t >= max(t_in - 1e-4, 0.0) && t <= best.t && dot(q, q) <= r * r) {
+                best.hit = true;
+                best.t = t;
+                best.normal = vec3<f32>(0.0, 0.0, select(-1.0, 1.0, high));
+                best.point = vec3<f32>(origin.xy + dir.xy * t, z);
+            }
+        }
+    }
+    return best;
+}
+
+// Clay: the occupancy of the voxel centres, blended trilinearly; the
+// surface is where it crosses one half. It stays inside the solid cells.
+fn clay_field(q: vec3<f32>) -> f32 {
+    let g = q - vec3<f32>(0.5);
+    let base = vec3<i32>(floor(g));
+    let f = g - floor(g);
+    var sum = 0.0;
+    for (var k = 0; k < 8; k = k + 1) {
+        let corner = vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1);
+        let w = mix(1.0 - f, f, vec3<f32>(corner));
+        if (voxel_at(base + corner) != 0u) {
+            sum = sum + w.x * w.y * w.z;
+        }
+    }
+    return sum;
+}
+
+fn clay_in(origin: vec3<f32>, dir: vec3<f32>, t_in: f32, t_out: f32, entry: vec3<f32>) -> ShapeHit {
+    let a = max(t_in, 0.0);
+    var prev = a;
+    var inside = clay_field(origin + dir * a) >= 0.5;
+    var t = a;
+    if (!inside) {
+        let steps = 8;
+        var found = false;
+        for (var i = 1; i <= steps; i = i + 1) {
+            t = mix(a, t_out, f32(i) / f32(steps));
+            if (clay_field(origin + dir * t) >= 0.5) {
+                found = true;
+                break;
+            }
+            prev = t;
+        }
+        if (!found) {
+            return no_shape();
+        }
+        var lo = prev;
+        var hi = t;
+        for (var i = 0; i < 10; i = i + 1) {
+            let mid = 0.5 * (lo + hi);
+            if (clay_field(origin + dir * mid) >= 0.5) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        t = hi;
+    }
+    var h: ShapeHit;
+    h.hit = true;
+    h.t = t;
+    h.point = origin + dir * t;
+    let e = 0.05;
+    let grad = vec3<f32>(
+        clay_field(h.point + vec3<f32>(e, 0.0, 0.0)) - clay_field(h.point - vec3<f32>(e, 0.0, 0.0)),
+        clay_field(h.point + vec3<f32>(0.0, e, 0.0)) - clay_field(h.point - vec3<f32>(0.0, e, 0.0)),
+        clay_field(h.point + vec3<f32>(0.0, 0.0, e)) - clay_field(h.point - vec3<f32>(0.0, 0.0, e))
+    );
+    h.normal = select(entry, -normalize(grad), dot(grad, grad) > 1e-12);
+    if (dot(h.normal, dir) > 0.0) {
+        h.normal = entry;
+    }
+    return h;
+}
+
+// The shape in a solid cell, entered through the face `entry` points out of.
+fn shape_in(origin: vec3<f32>, dir: vec3<f32>, cell: vec3<i32>, t_in: f32, t_out: f32, entry: vec3<f32>) -> ShapeHit {
+    let kind = u32(p.shape.x + 0.5);
+    if (kind == 1u) {
+        return sphere_in(origin, dir, cell, t_in, t_out);
+    }
+    if (kind == 2u) {
+        let c = vec2<f32>(cell.xy) + vec2<f32>(0.5);
+        let z0 = f32(cell.z);
+        let below = voxel_at(cell - vec3<i32>(0, 0, 1)) == 0u;
+        let above = voxel_at(cell + vec3<i32>(0, 0, 1)) == 0u;
+        return cylinder_in(origin, dir, c, p.shape.y, z0, z0 + 1.0, below, above, t_in, t_out);
+    }
+    if (kind == 4u) {
+        return clay_in(origin, dir, t_in, t_out, entry);
+    }
+    // Bricks: the voxel is a cube.
+    var h: ShapeHit;
+    h.hit = true;
+    h.t = t_in;
+    h.normal = entry;
+    h.point = face_point(origin, dir, t_in, cell, entry);
+    return h;
+}
+
+// A brick's stud, in the empty cell above it: 0.3 round, 0.1875 high.
+fn stud_in(origin: vec3<f32>, dir: vec3<f32>, cell: vec3<i32>, t_in: f32, t_out: f32) -> ShapeHit {
+    let c = vec2<f32>(cell.xy) + vec2<f32>(0.5);
+    let z0 = f32(cell.z);
+    return cylinder_in(origin, dir, c, 0.3, z0, z0 + 0.1875, false, true, t_in, t_out);
+}
+
 // mode 0: stop at the first solid voxel.
 // mode 1: stop at the first voxel that is not glass, empty included. A ray
 //         that has entered glass starts inside solid material, where mode 0
@@ -301,6 +506,36 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, mode: u32) 
         var stop = voxel_at(cell) != 0u;
         if (mode == 1u) {
             stop = !is_glass(cell);
+        }
+        // Voxels drawn as other shapes: the shape in the cell, or on.
+        if (mode == 0u && p.shape.x > 0.5) {
+            let t_out = min(min(t_max.x, t_max.y), t_max.z);
+            if (stop && shaped(voxel_at(cell))) {
+                let s = shape_in(origin, direction, cell, travelled, t_out, normal);
+                stop = false;
+                if (s.hit) {
+                    result.hit = true;
+                    result.cell = cell;
+                    result.normal = s.normal;
+                    result.distance = s.t;
+                    result.point = s.point;
+                    return result;
+                }
+            } else if (!stop && u32(p.shape.x + 0.5) == 3u) {
+                let under = cell - vec3<i32>(0, 0, 1);
+                if (voxel_at(under) != 0u && shaped(voxel_at(under))) {
+                    let s = stud_in(origin, direction, cell, travelled, t_out);
+                    if (s.hit) {
+                        // Coloured as the brick it sits on.
+                        result.hit = true;
+                        result.cell = under;
+                        result.normal = s.normal;
+                        result.distance = s.t;
+                        result.point = s.point;
+                        return result;
+                    }
+                }
+            }
         }
         if (stop) {
             result.hit = true;
@@ -851,6 +1086,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Scattering events in media and fog so far; they have their own budget.
     var scatters = 0;
     let far = f32(p.volume_size.x + p.volume_size.y + p.volume_size.z) * 2.0;
+    // Whether the path has met anything yet -- a voxel, the ground, the
+    // fog. A camera ray that has not is the background, and transparent
+    // or a flat colour when the render asks for that.
+    var met = false;
     // An opaque voxel reached through glass, to shade next iteration.
     var forced = false;
     var forced_hit: Hit;
@@ -907,6 +1146,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             let s = pulled_back - log(max(1.0 - random(&rng), 1e-7)) / p.fog.x;
             if (s < reach) {
+                met = true;
                 let point = origin + direction * s;
                 throughput = throughput * p.fog_color.rgb;
                 let to_sun = normalize(p.sun_direction.xyz);
@@ -928,6 +1168,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
         if (t_ground > 0.0 && (!hit.hit || t_ground < hit.distance)) {
+            met = true;
             let point = origin + direction * t_ground;
             let up = vec3<f32>(0.0, 0.0, 1.0);
             let lifted = point + up * 0.001;
@@ -961,9 +1202,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         pulled_back = 0.0;
         if (!hit.hit) {
-            radiance = radiance + throughput * sky(direction, specular, env_sampled);
+            // Only bounces light from the sky once the background is a
+            // colour or nothing: the camera does not see it.
+            if (met || p.look.x < 0.5) {
+                radiance = radiance + throughput * sky(direction, specular, env_sampled);
+            }
             break;
         }
+        met = true;
 
         let index = voxel_at(hit.cell);
         let albedo = palette[index].rgb;
@@ -972,7 +1218,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Offset off the surface, or the next ray re-hits the voxel it left.
         let outside = surface + hit.normal * 0.001;
 
-        if (m.kind == KIND_EMIT && specular) {
+        if ((m.kind == KIND_EMIT || m.kind == KIND_BLEND) && specular) {
             radiance = radiance + throughput * m.emission.rgb;
         }
 
@@ -1013,7 +1259,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // often as it contributes.
         let lobe = random(&rng);
 
-        if (m.kind == KIND_METAL && lobe < m.amount) {
+        // Blend: metal for its share, then glass for its share of the rest,
+        // then diffuse.
+        let blend_glass = m.kind == KIND_BLEND && lobe >= m.amount
+            && (lobe - m.amount) / max(1.0 - m.amount, 1e-6) < m.extra.x;
+        if ((m.kind == KIND_METAL || m.kind == KIND_BLEND) && lobe < m.amount) {
             // Mirror reflection, blurred by roughness. The CPU already
             // applied the editor's 0.15 scale, so this is used as-is.
             let fuzz = m.roughness;
@@ -1031,7 +1281,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
 
-        if (m.kind == KIND_GLASS && lobe < m.amount) {
+        if ((m.kind == KIND_GLASS && lobe < m.amount) || blend_glass) {
             let cos_i = -dot(direction, hit.normal);
             if (random(&rng) < fresnel(cos_i, m.ior)) {
                 // Specular reflection off the glass, untinted.
@@ -1087,10 +1337,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Accumulate in linear light. Resetting on camera motion keeps a moved
     // view from averaging against frames of the old one.
     var total = vec4<f32>(radiance, 1.0);
+    var covered = select(0.0, 1.0, met);
     if (p.reset == 0u) {
         total = total + accumulator[index];
+        covered = covered + coverage[index];
     }
     accumulator[index] = total;
+    coverage[index] = covered;
 
     // Exposure, bloom, vignette and the tone curve are applied by the
     // post-processing pass (post.wgsl), which can read neighbouring pixels.
