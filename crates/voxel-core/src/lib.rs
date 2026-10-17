@@ -14,6 +14,7 @@ pub mod export;
 pub mod formats;
 pub mod greedy;
 pub mod kernels;
+pub mod marching;
 mod mesh;
 pub mod mesh_cache;
 pub mod ops;

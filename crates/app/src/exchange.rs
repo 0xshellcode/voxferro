@@ -18,9 +18,10 @@ use crate::App;
 use voxel_core::formats::{self, Imported};
 
 /// The export formats, as the reference editor's Export buttons name them.
-pub const FORMATS: [(&str, &str, &str); 8] = [
+pub const FORMATS: [(&str, &str, &str); 9] = [
     ("obj", "obj", "Merged faces, Y up, with a palette texture"),
     ("ply", "ply", "A quad per visible face, coloured, scale 0.1"),
+    ("mc", "ply", "A smooth surface by marching cubes, coloured, scale 0.1"),
     ("cube", "ply", "Every voxel a separate cube, scale 0.1"),
     ("point", "ply", "A coloured point per voxel"),
     ("xraw", "xraw", "The selected model as an XRAW volume"),
@@ -83,6 +84,7 @@ impl App {
         };
         Ok(match format {
             "ply" => formats::ply_mesh(scene, palette, keep, MESH_SCALE).into_bytes(),
+            "mc" => voxel_core::marching::ply(scene, palette, keep, MESH_SCALE).into_bytes(),
             "cube" => formats::ply_cubes(scene, palette, keep, MESH_SCALE, CUBE_MARGIN).into_bytes(),
             "point" => formats::ply_points(scene, palette, keep, 1.0, glam::Vec3::ZERO).into_bytes(),
             "xraw" => formats::xraw(selected()?, palette),
@@ -107,6 +109,7 @@ impl App {
             .unwrap_or_else(|| "model".to_owned());
         let suffix = match format {
             "cube" => "-cubes",
+            "mc" => "-mc",
             "point" => "-points",
             "slab" => "-slab6",
             "slice" => "-slices",
