@@ -9,6 +9,10 @@ building something real, not to clone the reference editor line by line. File
 interoperability is a goal; the architecture is its own and idiomatic
 Rust.
 
+A guide to how it works inside -- the crates, the `.vox` format, meshing,
+the path tracer, the GPU kernels and the MCP server -- is in
+[`docs/index.html`](docs/index.html).
+
 ## Gallery
 
 Everything below was made and rendered with Voxferro itself: the scenes are
