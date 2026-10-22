@@ -4,10 +4,8 @@
 
 A voxel editor in Rust, native on macOS (Apple silicon and Intel), Windows and Linux, compatible with the reference editor's `.vox` format.
 
-A learning project: the goal is to understand modern graphics and Rust by
-building something real, not to clone the reference editor line by line. File
-interoperability is a goal; the architecture is its own and idiomatic
-Rust.
+File interoperability is a goal; the architecture is its own, in
+idiomatic Rust, and does not copy the reference editor line by line.
 
 A guide to how it works inside -- the crates, the `.vox` format, meshing,
 the path tracer, the GPU kernels and the MCP server -- is in
