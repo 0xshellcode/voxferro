@@ -39,6 +39,7 @@ mod palette_ui;
 mod project;
 mod move_tool;
 mod outline;
+mod tree_menu;
 mod pattern;
 mod pathtrace;
 mod render_ui;
@@ -240,6 +241,11 @@ struct App {
     environment: Environment,
     /// Depth of field, for the session: the file format has no key for it.
     dof: bool,
+    /// Render › Camera › DOF's fixed focus (`pt_fix_focus`, `pt_focus`):
+    /// the focus depth kept through camera moves. Unfixed, the render
+    /// focuses on the point the camera orbits. For the session, as there.
+    fix_focus: bool,
+    focus: f32,
     /// The render's background and voxel shape, for the session.
     look: render_ui::Look,
     /// `--timings`: report how long each rebuild takes.
@@ -279,6 +285,12 @@ struct App {
     /// Groups opened with Tab, outermost first: the last one's children are
     /// the objects.
     open_groups: Vec<i32>,
+    /// Groups closed in the outline, by transform node. A view setting of
+    /// the session.
+    collapsed: std::collections::HashSet<i32>,
+    /// The layer selected in the layer list: the one `layer only` and
+    /// `layer select` act on.
+    current_layer: i32,
     /// `object transform copy`: a rotation and a box centre.
     transform_clip: Option<(glam::Mat3, glam::Vec3)>,
     /// Palette colours selected together (Shift+click), and the region
@@ -446,6 +458,8 @@ impl App {
             env_maps: None,
             environment_source: Vec::new(),
             dof: false,
+            fix_focus: false,
+            focus: 0.0,
             look: Default::default(),
             timings: std::env::args().any(|a| a == "--timings"),
             mesh_cache: Default::default(),
@@ -463,6 +477,8 @@ impl App {
             selected_group: None,
             objects: Vec::new(),
             open_groups: Vec::new(),
+            collapsed: Default::default(),
+            current_layer: 0,
             transform_clip: None,
             palette_selection: Vec::new(),
             palette_region: Vec::new(),
@@ -1116,9 +1132,11 @@ impl App {
             return;
         }
 
-        if matches!(line.split_whitespace().next(), Some("group" | "ungroup" | "node" | "layer")) {
+        if matches!(line.split_whitespace().next(), Some("group" | "ungroup" | "node" | "layer" | "tree")) {
             let message = if line.starts_with("layer") {
                 self.layer_command(line)
+            } else if line.starts_with("tree") {
+                self.tree_command(line)
             } else {
                 self.group_command(line)
             };
@@ -1538,9 +1556,10 @@ impl App {
                 basis,
                 self.camera.fov_y,
                 self.camera.ortho().then(|| self.camera.half_height()),
-                // In focus: the point the camera orbits, which framing and
-                // panning put on the subject.
-                self.camera.distance,
+                // In focus: the depth fixed by a click, or else the point
+                // the camera orbits, which framing and panning put on the
+                // subject.
+                if self.fix_focus { self.focus } else { self.camera.distance },
                 &self.environment,
                 offset,
             );
@@ -1651,6 +1670,14 @@ impl App {
             view_cube::corner_rect(rect, self.view_cube_shown, self.ruler_shown).is_some_and(|r| r.contains(p))
         });
         if !headless {
+            if self.rendering
+                && response.clicked()
+                && !on_cube
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                let message = self.focus_at(pos, rect);
+                self.console_log.push(message);
+            }
             if pressed && response.hovered() && !on_cube {
                 let hit = !self.rendering
                     && pointer.is_some_and(|pos| {

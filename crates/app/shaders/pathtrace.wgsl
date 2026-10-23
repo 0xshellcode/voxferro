@@ -57,7 +57,9 @@ struct Params {
     // x, y: map width and height.
     ibl_size: vec4<u32>,
 
-    // x: orthographic half-height in world units; 0 means perspective.
+    // x: orthographic half-height in world units; 0 means a lens. y: the
+    // lens (`_lens._proj`): 0 perspective, 1 stereographic, 2 panorama;
+    // z: its scale from the screen (`view_fov`).
     projection: vec4<f32>,
 
     // Depth of field. x: lens radius over focus distance (the editor's
@@ -87,6 +89,12 @@ struct Params {
     lines: vec4<f32>,
     grid_color: vec4<f32>,
     edge_color: vec4<f32>,
+    // Render › Sample: x mirror and glass events a path may take
+    // (`_bounce._specular`), y the most light one sample may carry
+    // (`_bounce._energy`, 0 for no limit), z 1 to spread samples over the
+    // pixel (anti-aliasing) or 0 for its centre; w 1 when a diffuse depth
+    // of 0 ends paths in the uniform sky's light.
+    sample: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -1196,6 +1204,17 @@ fn sky(direction: vec3<f32>, include_sun: bool, env_sampled: bool) -> vec3<f32> 
     return light;
 }
 
+// The energy limit (`_bounce._energy`): a contribution whose brightest
+// channel passes it is scaled down to it, keeping its hue. Rare bright
+// paths are what show as fireflies. `deep` is false at the first hit.
+fn energy(light: vec3<f32>, deep: bool) -> vec3<f32> {
+    let limit = p.sample.y;
+    if (!deep || limit <= 0.0) {
+        return light;
+    }
+    return light * (limit / max(max(light.x, max(light.y, light.z)), limit));
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= p.resolution.x || gid.y >= p.resolution.y) {
@@ -1208,7 +1227,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Jitter inside the pixel: that is what turns accumulation into
     // antialiasing instead of just averaging the same sample repeatedly.
-    let jitter = vec2<f32>(random(&rng), random(&rng));
+    var jitter = vec2<f32>(0.5);
+    if (p.sample.z > 0.5) {
+        jitter = vec2<f32>(random(&rng), random(&rng));
+    }
     let pixel = (vec2<f32>(gid.xy) + jitter) / vec2<f32>(p.resolution);
     let ndc = vec2<f32>(pixel.x * 2.0 - 1.0, 1.0 - pixel.y * 2.0);
 
@@ -1217,16 +1239,41 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         + p.right.xyz * (ndc.x * p.tan_half_fov * p.aspect)
         + p.up.xyz * (ndc.y * p.tan_half_fov)
     );
+    // The wide lenses, as `LensProjection::direction` in pathtrace.rs.
+    let st = vec2<f32>(ndc.x * p.aspect, ndc.y) * p.projection.z;
+    if (p.projection.x == 0.0 && p.projection.y > 0.5) {
+        var local: vec3<f32>;
+        if (p.projection.y < 1.5) {
+            local = vec3<f32>(2.0 * st, 1.0 - dot(st, st));
+        } else {
+            local = vec3<f32>(cos(st.y) * sin(st.x), sin(st.y), cos(st.y) * cos(st.x));
+        }
+        direction = normalize(p.right.xyz * local.x + p.up.xyz * local.y + p.forward.xyz * local.z);
+    }
     var origin = p.origin.xyz + p.volume_offset.xyz;
 
     // Thin lens: start the ray somewhere on the aperture and aim it at the
-    // point this pixel sees on the focal plane. Points on that plane stay
-    // sharp; the rest blurs with distance from it.
+    // point this pixel sees in focus. In perspective that is a plane at the
+    // focus depth along the view; the wide lenses focus at that distance
+    // along each ray, the lens across the ray. Points in focus stay sharp;
+    // the rest blurs with distance from them.
     if (p.lens.x > 0.0 && p.lens.y > 0.0 && p.projection.x == 0.0) {
-        let focus = origin + direction * (p.lens.y / dot(direction, p.forward.xyz));
         let on_lens = aperture_sample(&rng) * (p.lens.x * p.lens.y);
-        origin = origin + p.right.xyz * on_lens.x + p.up.xyz * on_lens.y;
-        direction = normalize(focus - origin);
+        if (p.projection.y < 0.5) {
+            let focus = origin + direction * (p.lens.y / dot(direction, p.forward.xyz));
+            origin = origin + p.right.xyz * on_lens.x + p.up.xyz * on_lens.y;
+            direction = normalize(focus - origin);
+        } else {
+            let focus = origin + direction * p.lens.y;
+            var across = cross(direction, p.up.xyz);
+            if (dot(across, across) < 1e-6) {
+                across = cross(direction, p.right.xyz);
+            }
+            across = normalize(across);
+            let above = cross(across, direction);
+            origin = origin + across * on_lens.x + above * on_lens.y;
+            direction = normalize(focus - origin);
+        }
     }
     // Distance the primary ray starts behind the eye, not to be counted
     // as distance through the haze toward the horizon.
@@ -1271,14 +1318,27 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var forced = false;
     var forced_hit: Hit;
 
+    // Each kind of event has its own depth, as in the editor (`_bounce`):
+    // diffuse bounces after the first hit (`_diffuse`; 0 is direct light
+    // only), mirror and glass events (`_specular`) and scattering in media
+    // and fog (`_scatter`). A path ends when one of them runs out.
+    var diffuse_events = 0;
+    var specular_events = 0;
     // A diagnostic view replaces the whole path.
-    var last_bounce = i32(p.bounces);
+    var steps = 128;
     if (p.emitter_info.y != 0u) {
         radiance = debug_view(p.emitter_info.y, origin, direction);
-        last_bounce = -1;
+        steps = 0;
     }
 
-    for (var bounce = 0; bounce <= last_bounce; bounce = bounce + 1) {
+    for (var step = 0; step < steps; step = step + 1) {
+        // The editor's cap on all events together.
+        if (diffuse_events + specular_events + scatters > 15) {
+            break;
+        }
+        // Light reaching the camera after the first event is held to the
+        // energy limit; direct light at the first hit never is.
+        let deep = diffuse_events + specular_events + scatters > 0;
         // A ray that starts inside glass (a bounce off a voxel under water)
         // first walks out of it, or onto the next opaque voxel.
         var from_glass = forced;
@@ -1313,7 +1373,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Fog: a homogeneous medium everywhere. Sample how far the ray goes
         // before it scatters; if that is before whatever it would reach,
         // it scatters there instead.
-        if (p.fog.x > 0.0 && !from_glass) {
+        if (p.fog.x > 0.0 && !from_glass && scatters >= i32(p.fog.z)) {
+            // Fog scatters once a path; after that it only dims.
+            var reach = far;
+            if (hit.hit) {
+                reach = min(reach, hit.distance);
+            }
+            if (t_ground > 0.0) {
+                reach = min(reach, t_ground);
+            }
+            throughput = throughput * exp(-p.fog.x * max(reach - pulled_back, 0.0));
+        } else if (p.fog.x > 0.0 && !from_glass) {
             var reach = 1e5;
             if (hit.hit) {
                 reach = hit.distance;
@@ -1330,17 +1400,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 // The fog does not dim the sun on its way in: an infinite
                 // medium would leave no sunlight at all.
                 let visible = shadow(point, to_sun, far);
-                radiance = radiance + throughput * visible * p.sun_color.rgb * p.sun_intensity
-                    * hg_phase(dot(direction, to_sun), p.fog.y) * PI;
+                radiance = radiance + energy(throughput * visible * p.sun_color.rgb * p.sun_intensity
+                    * hg_phase(dot(direction, to_sun), p.fog.y) * PI, deep);
                 direction = sample_hg(direction, p.fog.y, &rng);
                 origin = point;
                 pulled_back = 0.0;
                 specular = false;
                 env_sampled = false;
-                scatters = scatters + 1;
-                if (scatters <= i32(p.fog.z)) {
-                    bounce = bounce - 1;
-                }
+                // Fog scatters a path once: it spends the whole budget.
+                scatters = i32(p.fog.z);
                 continue;
             }
         }
@@ -1358,18 +1426,27 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let fade = horizon_fade(max(t_ground - pulled_back, 0.0));
             pulled_back = 0.0;
             let horizon = normalize(vec3<f32>(direction.xy, 0.02 * length(direction.xy)));
-            radiance = radiance + throughput * fade * background(horizon);
+            radiance = radiance + energy(throughput * fade * background(horizon), deep);
             throughput = throughput * (1.0 - fade) * lined(p.ground_color.rgb, point, up, vec3<i32>(0), true);
 
             // A diffuse surface like any other: sun, emitters, a bounce.
             let to_sun = normalize(p.sun_direction.xyz);
             if (to_sun.z > 0.0) {
                 let visible = shadow(lifted, to_sun, 1e5);
-                radiance = radiance + throughput * visible * p.sun_color.rgb * p.sun_intensity * to_sun.z;
+                radiance = radiance + energy(throughput * visible * p.sun_color.rgb * p.sun_intensity * to_sun.z, deep);
             }
-            radiance = radiance + throughput * sample_emitters(lifted, up, &rng);
-            radiance = radiance + throughput * sample_env(lifted, up, &rng);
+            radiance = radiance + energy(throughput * sample_emitters(lifted, up, &rng), deep);
+            radiance = radiance + energy(throughput * sample_env(lifted, up, &rng), deep);
 
+            diffuse_events = diffuse_events + 1;
+            if (diffuse_events > i32(p.bounces)) {
+                if (p.sample.w > 0.5) {
+                    radiance = radiance + energy(throughput * background(up), deep);
+                }
+                break;
+            }
+            // After a diffuse bounce, at most one more mirror or glass event.
+            specular_events = max(specular_events, i32(p.sample.x) - 1);
             direction = sample_hemisphere(up, &rng);
             origin = lifted;
             specular = false;
@@ -1382,7 +1459,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Only bounces light from the sky once the background is a
             // colour or nothing: the camera does not see it.
             if (met || p.look.x < 0.5) {
-                radiance = radiance + throughput * sky(direction, specular, env_sampled);
+                radiance = radiance + energy(throughput * sky(direction, specular, env_sampled), deep);
             }
             break;
         }
@@ -1400,20 +1477,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let outside = surface + hit.normal * 0.001;
 
         if ((m.kind == KIND_EMIT || m.kind == KIND_BLEND) && specular) {
-            radiance = radiance + throughput * m.emission.rgb;
+            radiance = radiance + energy(throughput * m.emission.rgb, deep);
         }
 
         if (m.kind == KIND_MEDIA) {
             let w = walk_medium(surface + direction * 0.001, direction, true, &rng);
-            radiance = radiance + throughput * w.emitted;
+            radiance = radiance + energy(throughput * w.emitted, deep);
             throughput = throughput * w.transmittance;
             if (!w.scattered) {
                 // Straight through: on from where the medium ends, without
                 // spending a bounce.
                 origin = w.point + direction * 0.001;
                 crossings = crossings + 1;
-                if (crossings < 32) {
-                    bounce = bounce - 1;
+                if (crossings >= 32) {
+                    break;
                 }
                 continue;
             }
@@ -1422,16 +1499,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             throughput = throughput * w.albedo;
             let to_sun = normalize(p.sun_direction.xyz);
             let visible = shadow(w.point, to_sun, far);
-            radiance = radiance + throughput * visible * p.sun_color.rgb * p.sun_intensity
-                * hg_phase(dot(direction, to_sun), w.g) * PI;
+            radiance = radiance + energy(throughput * visible * p.sun_color.rgb * p.sun_intensity
+                * hg_phase(dot(direction, to_sun), w.g) * PI, deep);
             direction = sample_hg(direction, w.g, &rng);
             origin = w.point;
             specular = false;
             env_sampled = false;
             scatters = scatters + 1;
-            if (scatters <= i32(p.fog.z)) {
-                bounce = bounce - 1;
+            if (scatters > i32(p.fog.z)) {
+                break;
             }
+            // After a scattering in a cloud, one more of each surface event.
+            diffuse_events = max(diffuse_events, i32(p.bounces) - 1);
+            specular_events = max(specular_events, i32(p.sample.x) - 1);
             continue;
         }
 
@@ -1444,7 +1524,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // then diffuse.
         let blend_glass = m.kind == KIND_BLEND && lobe >= m.amount
             && (lobe - m.amount) / max(1.0 - m.amount, 1e-6) < m.extra.x;
-        if ((m.kind == KIND_METAL || m.kind == KIND_BLEND) && lobe < m.amount) {
+        let mirror = (m.kind == KIND_METAL || m.kind == KIND_BLEND) && lobe < m.amount;
+        if (mirror || (m.kind == KIND_GLASS && lobe < m.amount) || blend_glass) {
+            specular_events = specular_events + 1;
+            if (specular_events > i32(p.sample.x)) {
+                break;
+            }
+        }
+        if (mirror) {
             // Mirror reflection, blurred by roughness. The CPU already
             // applied the editor's 0.15 scale, so this is used as-is.
             let fuzz = m.roughness;
@@ -1501,13 +1588,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let facing = dot(hit.normal, to_sun);
         if (facing > 0.0) {
             let visible = shadow(outside, to_sun, far);
-            radiance = radiance + throughput * visible * p.sun_color.rgb * p.sun_intensity * facing;
+            radiance = radiance + energy(throughput * visible * p.sun_color.rgb * p.sun_intensity * facing, deep);
         }
 
         // Direct light from emissive voxels.
-        radiance = radiance + throughput * sample_emitters(outside, hit.normal, &rng);
-        radiance = radiance + throughput * sample_env(outside, hit.normal, &rng);
+        radiance = radiance + energy(throughput * sample_emitters(outside, hit.normal, &rng), deep);
+        radiance = radiance + energy(throughput * sample_env(outside, hit.normal, &rng), deep);
 
+        diffuse_events = diffuse_events + 1;
+        if (diffuse_events > i32(p.bounces)) {
+            if (p.sample.w > 0.5) {
+                radiance = radiance + energy(throughput * background(hit.normal), deep);
+            }
+            break;
+        }
+        specular_events = max(specular_events, i32(p.sample.x) - 1);
         // Cosine-weighted bounce; the lambertian term cancels.
         direction = sample_hemisphere(hit.normal, &rng);
         origin = outside;

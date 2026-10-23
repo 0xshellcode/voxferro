@@ -7,7 +7,7 @@
 //! else (the tracer, the sky bake) follows from the objects.
 
 use crate::App;
-use crate::pathtrace::{Background, Environment, VoxelShape, linear_to_srgb, srgb_to_linear};
+use crate::pathtrace::{Background, Environment, LensProjection, VoxelShape, linear_to_srgb, srgb_to_linear};
 use eframe::{egui, egui_wgpu};
 use glam::Vec3;
 use voxel_core::Command;
@@ -46,14 +46,61 @@ impl App {
         // Not in the file: switches of this session.
         self.environment.dof = self.dof;
         self.apply_look();
-        // The render camera's field of view is a lens setting.
-        self.camera.fov_y = self.environment.lens_fov.to_radians();
+        // The render camera's field of view is a lens setting. A wide lens
+        // may ask for up to a full turn; the perspective stops short of
+        // half of one.
+        self.camera.fov_y = self.environment.lens_fov.min(178.0).to_radians();
         if let Some(message) = self.ensure_env_map(state)
             && message.contains("not found")
         {
             self.console_log.push(message);
         }
         self.path_tracer.reset();
+    }
+
+    /// A click on the render: the depth there becomes the focus, fixed, and
+    /// depth of field turns on (the reference editor's "Click Voxel to Set Focus").
+    /// The depth is along the view in perspective, along the ray through
+    /// the wide lenses, as each focuses; the nearest visible voxel or the
+    /// ground.
+    pub fn focus_at(&mut self, pos: egui::Pos2, rect: egui::Rect) -> String {
+        if self.camera.ortho() {
+            return "a parallel view has no focus".to_owned();
+        }
+        let Some(loaded) = &self.scene else { return "nothing open".to_owned() };
+        let shown = match self.photo_size() {
+            Some([w, h]) => crate::photo::letterbox(rect, w as f32 / h as f32),
+            None => rect,
+        };
+        let aspect = shown.width() / shown.height().max(1.0);
+        let st = glam::Vec2::new(
+            ((pos.x - shown.left()) / shown.width() * 2.0 - 1.0) * aspect,
+            1.0 - (pos.y - shown.top()) / shown.height() * 2.0,
+        );
+        let env = &self.environment;
+        let factor = match env.projection {
+            LensProjection::Perspective => env.projection.view_factor(self.camera.fov_y.to_degrees()),
+            wide => wide.view_factor(env.lens_fov),
+        };
+        let basis = self.camera.basis();
+        let direction = (basis * env.projection.direction(st, factor)).normalize();
+        let eye = self.camera.eye();
+        let visible = self.visibility();
+        let voxel = loaded.doc.scene.pick(eye, direction, crate::edit::PICK_RANGE, |i| visible.shows(i)).map(|p| p.distance);
+        let ground = (env.ground_enabled && direction.z < 0.0 && eye.z > 0.0).then(|| -eye.z / direction.z);
+        let Some(distance) = [voxel, ground].into_iter().flatten().reduce(f32::min) else {
+            return "nothing there to focus on".to_owned();
+        };
+        let depth = match env.projection {
+            LensProjection::Perspective => distance * direction.dot(basis.z_axis),
+            _ => distance,
+        };
+        self.focus = depth;
+        self.fix_focus = true;
+        self.dof = true;
+        self.environment.dof = true;
+        self.path_tracer.reset();
+        format!("focus at {depth:.1}")
     }
 
     /// Environment maps found in the search folders, by file name.
@@ -228,17 +275,40 @@ impl App {
         });
 
         egui::CollapsingHeader::new("Lens").show(ui, |ui| {
-            dragged |= ui.add(egui::Slider::new(&mut env.lens_fov, 5.0..=120.0).text("fov")).changed();
+            ui.horizontal(|ui| {
+                for (projection, name, hint) in [
+                    (LensProjection::Perspective, "Perspective", "Perspective projection"),
+                    (LensProjection::Stereographic, "SG", "Stereographic projection: wide angles without stretching at the edges"),
+                    (LensProjection::Panorama, "Panorama", "Every direction around the camera; a 2:1 image holds the whole turn"),
+                ] {
+                    clicked |= ui.selectable_value(&mut env.projection, projection, name).on_hover_text(hint).changed();
+                }
+            });
+            dragged |= ui.add(egui::Slider::new(&mut env.lens_fov, 1.0..=360.0).text("fov"))
+                .on_hover_text("Perspective reaches 178 degrees, stereographic 356; the panorama has its own")
+                .changed();
             // Depth of field is a switch of the session: the file has no key
-            // for it, as in the editor. It focuses on the orbit target.
+            // for it, as in the editor.
             if ui
                 .checkbox(&mut self.dof, "depth of field")
-                .on_hover_text("Focus is the point the camera orbits: frame or pan to move it")
+                .on_hover_text("Click the render to focus there; until then, the point the camera orbits is in focus")
                 .changed()
             {
                 self.environment.dof = self.dof;
                 self.path_tracer.reset();
             }
+            ui.horizontal(|ui| {
+                let mut changed = ui
+                    .checkbox(&mut self.fix_focus, "fixed focus")
+                    .on_hover_text("Keep the focus depth when the camera moves; a click in the render sets it")
+                    .changed();
+                changed |= ui
+                    .add_enabled(self.fix_focus, egui::DragValue::new(&mut self.focus).range(0.0..=9999.9).speed(0.5).max_decimals(1))
+                    .changed();
+                if changed {
+                    self.path_tracer.reset();
+                }
+            });
             dragged |= ui.add(egui::Slider::new(&mut env.aperture, 0.0..=2.0).text("aperture")).changed();
             dragged |= ui.add(egui::Slider::new(&mut env.blades, 0..=12).text("blades")).changed();
             dragged |= ui.add(egui::Slider::new(&mut env.blade_rotation, 0.0..=360.0).text("blade angle")).changed();
@@ -249,7 +319,22 @@ impl App {
             dragged |= ui.add(egui::Slider::new(&mut env.vignette, 0.0..=1.0).text("vignette")).changed();
             dragged |= ui.add(egui::Slider::new(&mut env.gamma, 1.0..=3.0).text("gamma")).changed();
             clicked |= ui.checkbox(&mut env.aces, "ACES tone curve").changed();
-            dragged |= ui.add(egui::Slider::new(&mut env.bounces, 1..=8).text("bounces")).changed();
+        });
+
+        // Render › Sample, with the reference editor's ranges.
+        egui::CollapsingHeader::new("Sample").show(ui, |ui| {
+            dragged |= ui.add(egui::Slider::new(&mut env.bounces, 0..=15).text("diffuse"))
+                .on_hover_text("Diffuse bounces after the first hit; 0 is direct light only").changed();
+            dragged |= ui.add(egui::Slider::new(&mut env.specular_bounces, 5..=15).text("specular"))
+                .on_hover_text("Reflections and refractions a path may take").changed();
+            dragged |= ui.add(egui::Slider::new(&mut env.scatter_bounces, 5..=15).text("scatter"))
+                .on_hover_text("Scattering in clouds and fog").changed();
+            dragged |= ui.add(egui::Slider::new(&mut env.energy, 1.0..=5000.0).logarithmic(true).text("energy"))
+                .on_hover_text("The most light one sample may carry: lower removes fireflies").changed();
+            if ui.checkbox(&mut self.look.antialias, "anti-aliasing").on_hover_text("Off, every sample goes through the pixel's centre").changed() {
+                self.apply_look();
+                self.path_tracer.reset();
+            }
         });
 
         egui::CollapsingHeader::new("Bloom").show(ui, |ui| {
@@ -377,13 +462,70 @@ impl App {
                 }
                 format!("fog: density {} g {}", env.fog_density, env.fog_g)
             }
+            Some("bounce") => {
+                // the reference editor's ranges: diffuse 0-15, specular and scatter 5-15.
+                let n = |i: usize, lo: u32| args.get(i).and_then(|v| v.parse::<u32>().ok()).map(|v| v.clamp(lo, 15));
+                let (Some(diffuse), specular, scatter) = (n(1, 0), n(2, 5), n(3, 5)) else {
+                    return "env bounce <diffuse 0-15> [specular 5-15] [scatter 5-15]".to_owned();
+                };
+                env.bounces = diffuse;
+                env.specular_bounces = specular.unwrap_or(env.specular_bounces);
+                env.scatter_bounces = scatter.unwrap_or(env.scatter_bounces);
+                format!("bounces: diffuse {} specular {} scatter {}", env.bounces, env.specular_bounces, env.scatter_bounces)
+            }
+            Some("energy") => {
+                let Some(e) = args.get(1).and_then(|v| v.parse::<f32>().ok()) else {
+                    return "env energy <1-5000>".to_owned();
+                };
+                env.energy = e.clamp(1.0, 5000.0);
+                format!("energy limit {}", env.energy)
+            }
+            Some("aa") => {
+                self.look.antialias = match args.get(1) {
+                    Some(&"on") => true,
+                    Some(&"off") => false,
+                    None => !self.look.antialias,
+                    _ => return "env aa [on|off]".to_owned(),
+                };
+                self.apply_look();
+                self.path_tracer.reset();
+                return format!("anti-aliasing {}", if self.look.antialias { "on" } else { "off" });
+            }
+            Some("proj") => {
+                env.projection = match args.get(1).copied() {
+                    Some("perspective" | "pers") => LensProjection::Perspective,
+                    Some("sg" | "stereographic") => LensProjection::Stereographic,
+                    Some("panorama" | "pano") => LensProjection::Panorama,
+                    _ => return "env proj perspective|sg|panorama".to_owned(),
+                };
+                if let Some(fov) = args.get(2).and_then(|v| v.parse::<f32>().ok()) {
+                    env.lens_fov = fov.clamp(1.0, 360.0);
+                }
+                format!("lens: {:?}, fov {}", env.projection, env.lens_fov).to_lowercase()
+            }
+            Some("focus") => {
+                match args.get(1).copied() {
+                    Some("auto" | "off") => self.fix_focus = false,
+                    Some(v) => match v.parse::<f32>() {
+                        Ok(d) => {
+                            self.focus = d.clamp(0.0, 9999.9);
+                            self.fix_focus = true;
+                        }
+                        Err(_) => return "env focus <depth> | auto".to_owned(),
+                    },
+                    None => return "env focus <depth> | auto".to_owned(),
+                }
+                self.path_tracer.reset();
+                return if self.fix_focus { format!("focus fixed at {}", self.focus) } else { "focus on the orbit point".to_owned() };
+            }
             Some("vig") => {
                 env.vignette = args.get(1).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0).clamp(0.0, 1.0);
                 format!("vignette {}", env.vignette)
             }
             _ => {
                 return "env uniform | atmosphere [elev] | ibl [map] [i] [rot] | dof [on|off] | background sky|none|<colour> | shape <kind> [size] | grid|edge on|off [width] | \
-                        lens [aperture] [blades] [angle] | bloom [mix] [scale] [aspect] [threshold] | vig <v> | fog <density> [g]"
+                        lens [aperture] [blades] [angle] | bloom [mix] [scale] [aspect] [threshold] | vig <v> | fog <density> [g] | \
+                        bounce <diffuse> [specular] [scatter] | energy <n> | aa [on|off] | proj perspective|sg|panorama [fov] | focus <depth>|auto"
                     .to_owned();
             }
         };
@@ -418,6 +560,8 @@ pub struct Look {
     pub lines: crate::pathtrace::Lines,
     pub grid_rgb: [u8; 3],
     pub edge_rgb: [u8; 3],
+    /// Render › Sample › Anti-Aliasing (`pt_b_aa`).
+    pub antialias: bool,
 }
 
 impl Default for Look {
@@ -430,6 +574,7 @@ impl Default for Look {
             lines: Default::default(),
             grid_rgb: [0, 0, 0],
             edge_rgb: [0, 0, 0],
+            antialias: true,
         }
     }
 }
@@ -483,6 +628,7 @@ impl App {
         e.background_color = glam::Vec3::new(lin(self.look.background_rgb[0]), lin(self.look.background_rgb[1]), lin(self.look.background_rgb[2]));
         e.voxel_shape = self.look.shape;
         e.voxel_size = self.look.size;
+        e.antialias = self.look.antialias;
         let rgb = |c: [u8; 3]| glam::Vec3::new(lin(c[0]), lin(c[1]), lin(c[2]));
         e.lines = crate::pathtrace::Lines {
             grid_color: rgb(self.look.grid_rgb),

@@ -15,6 +15,60 @@ pub enum Background {
     Transparent = 2,
 }
 
+/// How camera rays leave the eye (the reference editor's `pt_proj`, saved as
+/// `_lens._proj`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LensProjection {
+    #[default]
+    Perspective = 0,
+    /// Stereographic: a wide angle that keeps shapes round at the edges.
+    Stereographic = 1,
+    /// Equirectangular: every direction around the eye.
+    Panorama = 2,
+}
+
+impl LensProjection {
+    pub fn from_index(i: u32) -> Self {
+        match i {
+            1 => Self::Stereographic,
+            2 => Self::Panorama,
+            _ => Self::Perspective,
+        }
+    }
+
+    /// The scale from the screen to the projection, for a field of view in
+    /// degrees, as the editor uploads it (`view_fov`): the tangent of half
+    /// the angle in perspective, of a quarter in stereographic, both kept
+    /// within 1 to 89 degrees; the panorama ignores the field of view.
+    pub fn view_factor(self, fov_degrees: f32) -> f32 {
+        let tan = |a: f32| a.clamp(1.0, 89.0).to_radians().tan();
+        match self {
+            Self::Perspective => tan(fov_degrees / 2.0),
+            Self::Stereographic => tan(fov_degrees / 4.0),
+            Self::Panorama => std::f32::consts::FRAC_PI_2,
+        }
+    }
+
+    /// The direction through screen point `st` -- y from -1 at the bottom
+    /// to 1 at the top, x as far as the aspect ratio reaches -- in camera
+    /// space: x right, y up, z forward. The shader has the same formulas.
+    pub fn direction(self, st: glam::Vec2, factor: f32) -> Vec3 {
+        let s = st * factor;
+        match self {
+            Self::Perspective => Vec3::new(s.x, s.y, 1.0).normalize(),
+            // The inverse stereographic map: the screen plane wrapped onto
+            // the sphere from its far pole.
+            Self::Stereographic => Vec3::new(2.0 * s.x, 2.0 * s.y, 1.0 - s.length_squared()).normalize(),
+            // Longitude and latitude, a quarter turn per unit of `st`: a
+            // 2:1 image covers every direction.
+            Self::Panorama => {
+                let (lon, lat) = (s.x, s.y);
+                Vec3::new(lat.cos() * lon.sin(), lat.sin(), lat.cos() * lon.cos())
+            }
+        }
+    }
+}
+
 /// How the path tracer draws a voxel (the reference editor's `pt_prim`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VoxelShape {
@@ -79,7 +133,20 @@ pub struct Environment {
     /// shadows, which is what the editor's `_area` controls.
     pub sun_angular_radius: f32,
     pub exposure: f32,
+    /// `_bounce._diffuse`: diffuse bounces after the first hit; 0 is direct
+    /// light only.
     pub bounces: u32,
+    /// `_bounce._specular`: mirror, glass reflection and refraction events
+    /// a path may take, counted apart from diffuse ones.
+    pub specular_bounces: u32,
+    /// `_bounce._energy` (Render › Sample › Energy, `pt_clamp`): the most
+    /// light one sample may carry, which keeps rare bright paths from
+    /// showing as fireflies.
+    pub energy: f32,
+    /// Anti-aliasing (`pt_b_aa`): each sample at a random point of its
+    /// pixel. Off, every sample goes through the pixel's centre. A setting
+    /// of the session.
+    pub antialias: bool,
     /// Infinite ground plane at world z = 0, as the editor's render view
     /// draws it. On by default, which is also the editor's default.
     pub ground_enabled: bool,
@@ -102,6 +169,8 @@ pub struct Environment {
 
     /// `_lens._fov`: the render camera's vertical field of view, degrees.
     pub lens_fov: f32,
+    /// `_lens._proj` (`pt_proj`): how camera rays leave the eye.
+    pub projection: LensProjection,
     /// `_lens._aperture`: lens size; the editor uploads `_aperture * 0.03`
     /// as the lens radius over the focus distance.
     pub aperture: f32,
@@ -166,6 +235,10 @@ impl Default for Environment {
             exposure: EXPOSURE_SCALE,
             // `_bounce._diffuse` in a file the editor saved with defaults.
             bounces: 2,
+            // `_specular 5` and `_energy 3` in every sample file.
+            specular_bounces: 5,
+            energy: 3.0,
+            antialias: true,
             ground_enabled: true,
             // `_ground._color` is 80 80 80 in every sample file.
             ground_color: Vec3::splat(srgb_to_linear(80)),
@@ -181,6 +254,7 @@ impl Default for Environment {
             // `_lens`, `_film` and `_bloom` as the editor writes them for a
             // new scene (every sample file carries these values).
             lens_fov: 45.0,
+            projection: LensProjection::Perspective,
             aperture: 0.25,
             blades: 0,
             blade_rotation: 0.0,
@@ -352,15 +426,21 @@ impl Environment {
                         env.ibl_path = path.to_owned();
                     }
                 }
-                // Bounce budget. The editor keeps separate counts per event
-                // (`_diffuse` 2, `_specular` 5, `_scatter` 5 by default);
-                // this tracer has one, so it follows the diffuse count.
+                // Bounce budget: a count per kind of event (`_diffuse` 2,
+                // `_specular` 5, `_scatter` 5 by default) and the energy
+                // clamp.
                 Some("_bounce") => {
                     if let Some(b) = object.get("_diffuse").and_then(|v| v.parse::<u32>().ok()) {
-                        env.bounces = b.clamp(1, 16);
+                        env.bounces = b.min(16);
                     }
                     if let Some(b) = object.get("_scatter").and_then(|v| v.parse::<u32>().ok()) {
                         env.scatter_bounces = b.min(64);
+                    }
+                    if let Some(b) = object.get("_specular").and_then(|v| v.parse::<u32>().ok()) {
+                        env.specular_bounces = b.min(64);
+                    }
+                    if let Some(e) = object.get("_energy").and_then(|v| v.parse::<f32>().ok()) {
+                        env.energy = e.max(0.0);
                     }
                 }
                 Some("_film") => {
@@ -382,7 +462,12 @@ impl Environment {
                 Some("_lens") => {
                     let number = |k: &str| object.get(k).and_then(|v| v.parse::<f32>().ok());
                     if let Some(v) = number("_fov") {
-                        env.lens_fov = v.clamp(1.0, 160.0);
+                        // Up to a full turn, which the panorama can use; the
+                        // perspective caps its own when rendering.
+                        env.lens_fov = v.clamp(1.0, 360.0);
+                    }
+                    if let Some(v) = object.get("_proj").and_then(|v| v.parse::<u32>().ok()) {
+                        env.projection = LensProjection::from_index(v);
                     }
                     if let Some(v) = number("_aperture") {
                         env.aperture = v.max(0.0);
@@ -507,6 +592,7 @@ impl Environment {
         film.set("_gam", num(self.gamma));
 
         let lens = object(&mut out, "_lens");
+        lens.set("_proj", (self.projection as u32).to_string());
         lens.set("_fov", num(self.lens_fov));
         lens.set("_aperture", num(self.aperture));
         lens.set("_blade_n", self.blades.to_string());
@@ -525,6 +611,8 @@ impl Environment {
         let bounce = object(&mut out, "_bounce");
         bounce.set("_diffuse", self.bounces.to_string());
         bounce.set("_scatter", self.scatter_bounces.to_string());
+        bounce.set("_specular", self.specular_bounces.to_string());
+        bounce.set("_energy", num(self.energy));
         out
     }
 }
@@ -674,6 +762,9 @@ struct Params {
     lines: [f32; 4],
     grid_color: [f32; 4],
     edge_color: [f32; 4],
+    /// x: specular depth, y: energy limit per sample (0 none), z:
+    /// anti-aliasing on.
+    sample: [f32; 4],
 }
 
 /// The grid and edge lines of the render. Widths are a share of a voxel.
@@ -1346,10 +1437,12 @@ impl PathTracer {
             sun_direction: environment.sun_direction.extend(0.0).to_array(),
             sun_color: environment.effective_sun_color().extend(0.0).to_array(),
             sky_color: environment.sky_color.extend(0.0).to_array(),
-            tan_half_fov: (fov_y * 0.5).tan(),
+            // Within the 1 to 89 degrees the editor allows half the angle.
+            tan_half_fov: LensProjection::Perspective.view_factor(fov_y.to_degrees()),
             aspect: size[0] as f32 / size[1].max(1) as f32,
             exposure: environment.exposure,
-            bounces: environment.bounces,
+            // The editor takes a depth of 0 as 1 (see `sample.w`).
+            bounces: environment.bounces.max(1),
             sun_intensity: environment.sun_intensity,
             sky_intensity: environment.sky_intensity,
             sun_angular_radius: environment.sun_angular_radius,
@@ -1383,7 +1476,12 @@ impl PathTracer {
                 Some(map) => [map.width, map.height, 0, 0],
                 None => [1, 1, 0, 0],
             },
-            projection: [ortho_half_height.unwrap_or(0.0), 0.0, 0.0, 0.0],
+            projection: [
+                ortho_half_height.unwrap_or(0.0),
+                environment.projection as u32 as f32,
+                environment.projection.view_factor(environment.lens_fov),
+                0.0,
+            ],
             lens: [
                 if environment.dof { environment.aperture * 0.03 } else { 0.0 },
                 focus_distance,
@@ -1410,6 +1508,14 @@ impl PathTracer {
             },
             grid_color: environment.lines.grid_color.extend(0.0).to_array(),
             edge_color: environment.lines.edge_color.extend(0.0).to_array(),
+            sample: [
+                environment.specular_bounces as f32,
+                environment.energy,
+                environment.antialias as u32 as f32,
+                // A diffuse depth of 0 under the uniform sky: one bounce,
+                // ending in the sky's light (the editor's `OPT_LE`).
+                (environment.bounces == 0 && !environment.ibl_enabled && !environment.atmosphere_enabled) as u32 as f32,
+            ],
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
 
@@ -1910,5 +2016,39 @@ mod tests {
         let back = Environment::from_render_objects(&written);
         assert_eq!((back.fog_density, back.scatter_bounces), (12.5, 3));
         assert!(written.iter().any(|o| o.get("_specular") == Some("5")), "other bounce counts survive");
+    }
+
+    #[test]
+    fn the_lenses_aim_where_the_editor_does() {
+        let near = |a: Vec3, b: Vec3| (a - b).length() < 1e-5;
+        for lens in [LensProjection::Perspective, LensProjection::Stereographic, LensProjection::Panorama] {
+            assert!(near(lens.direction(glam::Vec2::ZERO, 0.7), Vec3::Z), "{lens:?}: the centre looks ahead");
+        }
+        // Stereographic: the top of a 180 degree view looks straight up.
+        let sg = LensProjection::Stereographic;
+        assert!(near(sg.direction(glam::Vec2::Y, sg.view_factor(180.0)), Vec3::Y));
+        // Panorama: across a 2:1 image, a full turn; the edges look behind.
+        let pano = LensProjection::Panorama;
+        let k = pano.view_factor(10.0);
+        assert!(near(pano.direction(glam::Vec2::new(2.0, 0.0), k), -Vec3::Z));
+        assert!(near(pano.direction(glam::Vec2::new(1.0, 0.0), k), Vec3::X));
+        assert!(near(pano.direction(glam::Vec2::new(0.0, 1.0), k), Vec3::Y));
+        // The perspective keeps half its angle within 1 to 89 degrees.
+        let pers = LensProjection::Perspective;
+        assert!((pers.view_factor(90.0) - 1.0).abs() < 1e-6);
+        assert_eq!(pers.view_factor(300.0), pers.view_factor(178.0));
+    }
+
+    #[test]
+    fn sample_settings_and_the_lens_round_trip() {
+        let env = Environment::default();
+        assert_eq!((env.bounces, env.specular_bounces, env.scatter_bounces, env.energy), (2, 5, 5, 3.0));
+        assert_eq!(env.projection, LensProjection::Perspective);
+        let edited = Environment { bounces: 0, specular_bounces: 9, energy: 250.0, projection: LensProjection::Panorama, lens_fov: 300.0, ..env };
+        let written = edited.write_render_objects(&[]);
+        let back = Environment::from_render_objects(&written);
+        assert_eq!((back.bounces, back.specular_bounces, back.energy), (0, 9, 250.0));
+        assert_eq!((back.projection, back.lens_fov), (LensProjection::Panorama, 300.0));
+        assert!(written.iter().any(|o| o.get("_type") == Some("_lens") && o.get("_proj") == Some("2")));
     }
 }

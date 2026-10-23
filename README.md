@@ -48,7 +48,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **286 tests
+Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **291 tests
 passing**; 41 and 42 (Windows and Linux) are prepared and built in CI, not
 yet tried on real machines. Working today:
 
@@ -82,7 +82,9 @@ yet tried on real machines. Working today:
   a placement copied from one object and pasted on others (whole, only the
   rotation or only the position); Tab into a group, Shift+Tab out
 - Editable scene: move, turn, duplicate, add and remove models; groups
-  (create, move, turn, hide, dissolve, drag in the tree) and named layers with visibility, all
+  (create, move, turn, hide, dissolve, drag in the tree, open and close,
+  sort by name; hide others, show all) and named layers with visibility
+  (one layer alone, sorted by name, its objects selected), all
   saved in the file
 - Palette and materials editable from the interface, with undo
 - Animation: playback, transform keys (interpolated as in
@@ -113,7 +115,10 @@ yet tried on real machines. Working today:
   motion blur, and a numeric camera panel with roll
 - Render settings (sun, uniform / atmospheric / HDR sky, ground, lens,
   film, bloom) editable in the panel, with undo and saved in the
-  file; depth of field with a polygonal aperture
+  file; depth of field with a polygonal aperture, focused with a click;
+  stereographic and panorama lenses; the reference editor's sample options
+  (diffuse, specular and scatter depths, an energy limit against
+  fireflies, anti-aliasing on or off)
 - Command console
 - Voxel operations as compute kernels in WGSL
 - Voxel scripts (`xs`): the reference editor's GLSL scripts run unchanged, and WGSL
@@ -258,13 +263,13 @@ Enter keeps and Esc drops a pending mouse transform.
 | Scene | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
 | Objects | `object all\|none\|invert\|add i\|remove i\|list`, `object move dx dy dz\|turn x\|y\|z\|delete`, `object align x\|y\|z -1\|0\|+1`, `object ground`, `object flip <axes>`, `object union\|intersect\|operand\|subtract\|replace`, `object copy [ref]\|cut\|paste\|own`, `object transform copy\|paste [rot\|pos]\|reset`, `object level in\|out` (Tab, Shift+Tab) |
 | Palette | `palette open\|save <file.png>`, `palette reset`, `palette default 0-3`, `palette swap\|gradient\|copy <a> <b>`, `palette paste <i>`, `palette <i> <r> <g> <b>`, `palette select all\|none\|invert\|used\|unused`, `palette sort <keys>`, `palette rand`, `palette set\|fill <colour>`, `palette adjust h\|s\|v\|r\|g\|b <n>`, `palette copy\|paste`, `material <i> <diffuse\|metal\|glass\|emit\|cloud\|blend> [key=value]…` |
-| Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `layer list\|new\|hide\|show\|name\|assign` |
+| Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `tree sort\|expand [all]\|close [inactive]\|hide [deep\|others]\|show [deep\|all]\|toggle`, `layer list\|new\|hide\|show\|toggle\|name\|assign\|current n\|only [n]\|all\|sort\|select [n]` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]`, `anim step <n>`, `anim key next\|prev\|first\|last`, `anim loop on\|off`, `anim reverse`, `anim global [on\|off]` |
 | Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|free\|frame [all\|selection\|group\|instance]` (`orth`, `pers` also), `camera zoom <f>\|slots\|save <0-9>\|load <0-9>`, `snap [file.png]`, `snap window [file.png]`, `render save <file.png>`, `render image <w> <h> <samples> <file.png>\|cancel`, `render spin <frames> <degrees> <blur %> <w> <h> <samples> <file.png>`, `camera set x\|y\|z\|pitch\|yaw\|roll\|zoom\|fov\|mouse\|keys <v>` |
 | View | `view [edges\|frame\|grid\|bg\|wire\|shadow] [on\|off]`, `view cube [on\|off]`, `view ruler [on\|off]` |
 | Edit | `full`, `zero`, `rev`, `x2`, `xh`, `loop <axis> <n>`, `scale <axes> <f>`, `shear <axis> <a> <b>`, `rot <axis> <deg>`, `repeat <axes> <n>`, `mir <axis>`, `dia <axis>`, `prim elli\|cyli\|pyra\|cone`, `flood [c]`, `hull`, `dil\|ero [6\|18\|26]`, `mask`, `tex`, `maze [p]`, `noise [seed] [scale] [lo] [hi]`, `fractal` |
 | Scripts | `xs [-n passes] [-c c1,c2,…] <script> [args…]`, `xs list`, `xs use <script> [args…]` |
-| Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>\|background sky\|none\|<colour>\|shape cube\|sphere\|cylinder\|brick\|clay\|mc [size]`, `env grid on\|off [width] [spacing] [ground]`, `env edge on\|off [width]`, `env grid\|edge colour <colour>` |
+| Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>\|background sky\|none\|<colour>\|shape cube\|sphere\|cylinder\|brick\|clay\|mc [size]`, `env grid on\|off [width] [spacing] [ground]`, `env edge on\|off [width]`, `env grid\|edge colour <colour>`, `env bounce <diffuse> [specular] [scatter]`, `env energy <1-5000>`, `env aa [on\|off]`, `env proj perspective\|sg\|panorama [fov]`, `env focus <depth>\|auto` |
 
 For testing without a mouse: `--click fx fy` and `--drag fx0 fy0 fx1 fy1`, in
 fractions of the viewport (see the flags above).

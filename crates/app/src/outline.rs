@@ -135,8 +135,14 @@ impl App {
         }
     }
 
-    /// `layer list | new [name] | hide <n> | show <n> | name <n> <text> |
-    /// assign <n>` (assign moves the selected instance there)
+    /// `layer list | new [name] | hide <n> | show <n> | toggle <n> | name <n>
+    /// <text> | assign <n> | current <n> | only [n] | all | sort | select [n]`
+    ///
+    /// `assign` moves the selected instance there. `only` shows one layer
+    /// (the current one by default) and hides the rest, `all` shows every
+    /// layer, `sort` orders the list by name (the reference editor's `lay_vis` and
+    /// `lay_sort`), and `select` picks the visible objects of the open group
+    /// on that layer (`osel_layer`).
     pub fn layer_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().skip(1).collect();
         let Some(loaded) = self.scene.as_ref() else { return "nothing open".to_owned() };
@@ -185,6 +191,73 @@ impl App {
                 self.exec_layers(layers, false);
                 format!("layer {n} renamed")
             }
+            ["toggle", n] => {
+                let Some(layer) = id_of(n).and_then(|id| layers.iter_mut().find(|l| l.id == id)) else {
+                    return format!("no layer {n}");
+                };
+                let hidden = layer.is_hidden();
+                if hidden {
+                    layer.attributes.remove("_hidden");
+                } else {
+                    layer.attributes.set("_hidden", "1");
+                }
+                self.exec_layers(layers, false);
+                format!("layer {n} {}", if hidden { "shown" } else { "hidden" })
+            }
+            ["current", n] => match id_of(n).filter(|id| layers.iter().any(|l| l.id == *id)) {
+                Some(id) => {
+                    self.current_layer = id;
+                    format!("current layer {id}")
+                }
+                None => format!("no layer {n}"),
+            },
+            ["only", rest @ ..] => {
+                let id = rest.first().and_then(|n| id_of(n)).unwrap_or(self.current_layer);
+                if !layers.iter().any(|l| l.id == id) {
+                    return format!("no layer {id}");
+                }
+                for layer in &mut layers {
+                    if layer.id == id {
+                        layer.attributes.remove("_hidden");
+                    } else {
+                        layer.attributes.set("_hidden", "1");
+                    }
+                }
+                self.exec_layers(layers, false);
+                format!("only layer {id} shown")
+            }
+            ["all"] => {
+                for layer in &mut layers {
+                    layer.attributes.remove("_hidden");
+                }
+                self.exec_layers(layers, false);
+                "every layer shown".to_owned()
+            }
+            ["sort"] => {
+                // Byte order, as the editor compares: capitals first, unnamed
+                // first of all. Ids stay, so nothing on a layer moves.
+                layers.sort_by(|a, b| a.name().unwrap_or("").as_bytes().cmp(b.name().unwrap_or("").as_bytes()));
+                self.exec_layers(layers, false);
+                "layers sorted by name".to_owned()
+            }
+            ["select", rest @ ..] => {
+                let id = rest.first().and_then(|n| id_of(n)).unwrap_or(self.current_layer);
+                let scene = &loaded.doc.scene;
+                let rows = scene.tree();
+                let shown = |layer: i32| layers.iter().find(|l| l.id == layer).is_none_or(|l| !l.is_hidden());
+                let picked: Vec<i32> = scene
+                    .children_of(self.open_groups.last().copied())
+                    .into_iter()
+                    .filter(|&n| rows.iter().any(|r| r.node == n && !r.hidden && r.layer == id && shown(r.layer)))
+                    .collect();
+                let count = picked.len();
+                self.selected_group = None;
+                if let Some(index) = picked.iter().find_map(|&n| scene.instances_under(n).first().copied()) {
+                    self.selected = index;
+                }
+                self.objects = picked;
+                format!("{count} objects on layer {id} selected")
+            }
             ["assign", n] => {
                 let Some(id) = id_of(n).filter(|id| layers.iter().any(|l| l.id == *id)) else {
                     return format!("no layer {n}");
@@ -195,7 +268,7 @@ impl App {
                     Err(e) => format!("error: {e}"),
                 }
             }
-            _ => "layer list | new [name] | hide <n> | show <n> | name <n> <text> | assign <n>".to_owned(),
+            _ => "layer list | new [name] | hide|show|toggle <n> | name <n> <text> | assign <n> | current <n> | only [n] | all | sort | select [n]".to_owned(),
         }
     }
 
@@ -237,6 +310,9 @@ impl App {
         let models: Vec<usize> = loaded.doc.scene.instances.iter().map(|i| i.model_index).collect();
 
         let mut clicked: Option<(TreeRow, bool)> = None;
+        // A group opened or closed with its arrow, and a menu command.
+        let mut folded: Option<i32> = None;
+        let mut menu: Option<&'static str> = None;
         // A row dragged onto a group (or onto the root line) moves there.
         let mut dropped: Option<(i32, Option<i32>)> = None;
         // The scene itself heads the tree, as the drop target for taking
@@ -248,7 +324,20 @@ impl App {
         // No scroll area of its own: nested in the panel's, egui sized it to
         // a few rows and hid the rest. The panel scrolls instead.
         ui.vertical(|ui| {
+            // Rows under a closed group are skipped: the tree lists depth
+            // first, so they are the deeper ones that follow it.
+            let mut closed_at: Option<usize> = None;
             for row in &rows {
+                if let Some(depth) = closed_at {
+                    if row.depth > depth {
+                        continue;
+                    }
+                    closed_at = None;
+                }
+                let closed = row.kind == TreeKind::Group && self.collapsed.contains(&row.node);
+                if closed {
+                    closed_at = Some(row.depth);
+                }
                 let (label, on) = match row.kind {
                     TreeKind::Group => (
                         format!("{}/", row.name.as_deref().unwrap_or("group")),
@@ -264,6 +353,12 @@ impl App {
                 let label = if row.hidden { format!("{label}  (hidden)") } else { label };
                 ui.horizontal(|ui| {
                     ui.add_space(row.depth as f32 * 12.0);
+                    if row.kind == TreeKind::Group {
+                        let arrow = if closed { crate::layout::icon::CARET_RIGHT } else { crate::layout::icon::CARET_DOWN };
+                        if ui.small_button(arrow).on_hover_text(if closed { "Expand" } else { "Close" }).clicked() {
+                            folded = Some(row.node);
+                        }
+                    }
                     // Groups in bold: egui's default font has no tree glyphs.
                     let mut text = egui::RichText::new(label);
                     if row.kind == TreeKind::Group {
@@ -280,6 +375,15 @@ impl App {
                     if response.drag_started() {
                         response.dnd_set_drag_payload(TreeDrag(row.node));
                     }
+                    if response.secondary_clicked() && !on {
+                        // The menu acts on what the row is: select it first.
+                        clicked = Some((row.clone(), false));
+                    }
+                    response.context_menu(|ui| {
+                        if let Some(line) = tree_menu_ui(ui) {
+                            menu = Some(line);
+                        }
+                    });
                     if row.kind == TreeKind::Group
                         && let Some(dragged) = drop_onto(ui, &response)
                     {
@@ -301,6 +405,11 @@ impl App {
                 self.console_log.push(message);
             }
         }
+        if let Some(node) = folded
+            && !self.collapsed.remove(&node)
+        {
+            self.collapsed.insert(node);
+        }
         if let Some((row, additive)) = clicked {
             match row.kind {
                 TreeKind::Group => {
@@ -317,6 +426,11 @@ impl App {
                     }
                 }
             }
+        }
+
+        if let Some(line) = menu {
+            let message = self.tree_command(line);
+            self.console_log.push(message);
         }
 
         let node = self.target_node();
@@ -467,6 +581,8 @@ impl App {
         let Some(loaded) = &self.scene else { return };
         let layers = loaded.doc.layers.clone();
         let mut edited: Option<(Vec<Layer>, bool)> = None;
+        let mut current = self.current_layer;
+        let mut menu: Option<String> = None;
         egui::ScrollArea::vertical().max_height(150.0).id_salt("layers").show(ui, |ui| {
             for (index, layer) in layers.iter().enumerate() {
                 ui.horizontal(|ui| {
@@ -486,7 +602,19 @@ impl App {
                         .map_or(egui::Color32::GRAY, |[r, g, b]| egui::Color32::from_rgb(r, g, b));
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                     ui.painter().rect_filled(rect, 2.0, colour);
-                    ui.label(format!("{}", layer.id));
+                    // The id selects the layer: the one the menu's Hide
+                    // others and Select objects mean.
+                    let id = ui
+                        .selectable_label(current == layer.id, format!("{}", layer.id))
+                        .on_hover_text("Select the layer; right-click for its menu");
+                    if id.clicked() || id.secondary_clicked() {
+                        current = layer.id;
+                    }
+                    id.context_menu(|ui| {
+                        if let Some(line) = layer_menu_ui(ui, layer.id) {
+                            menu = Some(line);
+                        }
+                    });
                     let mut name = layer.name().unwrap_or_default().to_owned();
                     if ui.add(egui::TextEdit::singleline(&mut name).desired_width(120.0)).changed() {
                         let mut after = layers.clone();
@@ -501,14 +629,66 @@ impl App {
                 });
             }
         });
+        self.current_layer = current;
         if let Some((after, merge)) = edited {
             self.exec_layers(after, merge);
+        }
+        if let Some(line) = menu {
+            let message = self.layer_command(&line);
+            self.console_log.push(message);
         }
         if ui.small_button("New layer").clicked() {
             let message = self.layer_command("layer new");
             self.console_log.push(message);
         }
     }
+}
+
+/// The outline's menu, the reference editor's items: the console line of the one
+/// chosen. On a row's right-click, acting on the selection.
+fn tree_menu_ui(ui: &mut egui::Ui) -> Option<&'static str> {
+    let items: [(&str, &str, &'static str); 9] = [
+        ("Sort by name", "The open group's objects (or the selected ones) by name; again to reverse", "tree sort"),
+        ("Close", "Close the selected groups and the groups inside them", "tree close"),
+        ("Close inactive", "Close every group but the way to the open one", "tree close inactive"),
+        ("Expand", "Open the selected groups and the groups inside them", "tree expand"),
+        ("Expand all", "Open every group", "tree expand all"),
+        ("Hide", "Hide the selected objects and everything inside them", "tree hide deep"),
+        ("Hide others", "Hide everything but the selection and the way to it", "tree hide others"),
+        ("Show", "Show the selected objects and everything inside them", "tree show deep"),
+        ("Show all", "Show every object", "tree show all"),
+    ];
+    let mut chosen = None;
+    for (i, (label, hint, line)) in items.into_iter().enumerate() {
+        if matches!(i, 1 | 5) {
+            ui.separator();
+        }
+        if ui.button(label).on_hover_text(hint).clicked() {
+            chosen = Some(line);
+            ui.close();
+        }
+    }
+    chosen
+}
+
+/// The layer list's menu (`lay_vis`, `lay_sort`, `osel_layer`): the
+/// console line of the item chosen, for layer `id`.
+fn layer_menu_ui(ui: &mut egui::Ui, id: i32) -> Option<String> {
+    let items: [(&str, &str, String); 5] = [
+        ("Select objects", "Select the visible objects of the open group on this layer", format!("layer select {id}")),
+        ("Hide others", "Show this layer alone", format!("layer only {id}")),
+        ("Show all", "Show every layer", "layer all".to_owned()),
+        ("Toggle", "Hide or show this layer", format!("layer toggle {id}")),
+        ("Sort by name", "Order the list by name", "layer sort".to_owned()),
+    ];
+    let mut chosen = None;
+    for (label, hint, line) in items {
+        if ui.button(label).on_hover_text(hint).clicked() {
+            chosen = Some(line);
+            ui.close();
+        }
+    }
+    chosen
 }
 
 /// What a dragged outline row carries: its transform node.

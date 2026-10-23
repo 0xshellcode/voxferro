@@ -449,6 +449,127 @@ impl Scene {
         Ok(nodes)
     }
 
+    /// The nodes with an attribute set, or removed with `None`, on several
+    /// transform nodes at once: hiding or showing a selection in one step.
+    pub fn with_nodes_attribute(&self, nodes: &[i32], key: &str, value: Option<&str>) -> Result<Vec<SceneNode>, GraphError> {
+        let mut out = self.nodes.clone();
+        for node in &mut out {
+            if let SceneNode::Transform(t) = node
+                && nodes.contains(&t.id)
+            {
+                match value {
+                    Some(v) => t.attributes.set(key, v),
+                    None => t.attributes.remove(key),
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The nodes with `hide` hidden and `show` shown, in one step.
+    pub fn with_visibility(&self, hide: &[i32], show: &[i32]) -> Result<Vec<SceneNode>, GraphError> {
+        let mut out = self.nodes.clone();
+        for node in &mut out {
+            if let SceneNode::Transform(t) = node {
+                if show.contains(&t.id) {
+                    t.attributes.remove("_hidden");
+                } else if hide.contains(&t.id) {
+                    t.attributes.set("_hidden", "1");
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The transform nodes directly inside a group, in order, by the
+    /// group's transform node; `None` is the scene itself (the root group).
+    pub fn children_of(&self, group: Option<i32>) -> Vec<i32> {
+        let id = match group {
+            None => root_group(&self.nodes),
+            Some(node) => match find(&self.nodes, node) {
+                Some(SceneNode::Transform(t)) => Some(t.child),
+                _ => None,
+            },
+        };
+        match id.and_then(|id| find(&self.nodes, id)) {
+            Some(SceneNode::Group(g)) => g.children.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Transform node `node` and every transform node under it.
+    pub fn nodes_under(&self, node: i32) -> Vec<i32> {
+        self.subtree(node)
+    }
+
+    /// The transform nodes from the outermost group down to `node`, itself
+    /// included: the groups it sits in. Empty if it is not in the tree.
+    pub fn path_to(&self, node: i32) -> Vec<i32> {
+        let mut out = vec![node];
+        let root = root_group(&self.nodes);
+        let mut at = node;
+        while let Some(group) = parent_group(&self.nodes, at) {
+            if Some(group) == root || out.len() > self.nodes.len() {
+                break;
+            }
+            // The transform node holding that group.
+            let Some(holder) = self.nodes.iter().find_map(|n| match n {
+                SceneNode::Transform(t) if t.child == group => Some(t.id),
+                _ => None,
+            }) else {
+                break;
+            };
+            out.push(holder);
+            at = holder;
+        }
+        out.reverse();
+        out
+    }
+
+    /// The nodes with the children of a group (`None`: the scene) sorted by
+    /// name, as the reference editor's `sort` does: only the `picked` ones when two
+    /// or more are picked, each into one of their own places, the others
+    /// staying where they are; all of them otherwise. Names compare byte
+    /// by byte, so capitals come first and unnamed nodes before any name.
+    /// Already in order, they are reversed instead.
+    pub fn with_children_sorted(&self, group: Option<i32>, picked: &[i32]) -> Result<Vec<SceneNode>, GraphError> {
+        let children = self.children_of(group);
+        let chosen: Vec<i32> = if picked.iter().filter(|n| children.contains(n)).count() >= 2 {
+            children.iter().copied().filter(|n| picked.contains(n)).collect()
+        } else {
+            children.clone()
+        };
+        let name = |id: i32| match find(&self.nodes, id) {
+            Some(SceneNode::Transform(t)) => t.attributes.get("_name").unwrap_or("").as_bytes().to_vec(),
+            _ => Vec::new(),
+        };
+        let mut sorted = chosen.clone();
+        sorted.sort_by_key(|&id| name(id));
+        if sorted == chosen {
+            sorted.reverse();
+        }
+        let mut next = sorted.into_iter();
+        let order: Vec<i32> = children
+            .iter()
+            .map(|&c| if chosen.contains(&c) { next.next().unwrap_or(c) } else { c })
+            .collect();
+
+        let group_id = match group {
+            None => root_group(&self.nodes),
+            Some(node) => match find(&self.nodes, node) {
+                Some(SceneNode::Transform(t)) => Some(t.child),
+                _ => None,
+            },
+        }
+        .ok_or(GraphError::NotAGroup)?;
+        let mut nodes = self.nodes.clone();
+        match nodes.iter_mut().find(|n| n.id() == group_id) {
+            Some(SceneNode::Group(g)) => g.children = order,
+            _ => return Err(GraphError::NotAGroup),
+        }
+        Ok(compact(nodes))
+    }
+
     /// The nodes with instance `index` on another layer.
     pub fn with_instance_layer(&self, index: usize, layer: i32) -> Result<Vec<SceneNode>, GraphError> {
         let instance = self.instances.get(index).ok_or(GraphError::NoInstance)?;
@@ -1208,5 +1329,72 @@ mod tests {
         apply(&mut s, nodes);
         assert_eq!(s.instances[0].transform.translation, before);
     }
-}
 
+    /// Three instances named `b`, `a` and `C`, in that order, at the root.
+    fn named() -> Scene {
+        let mut s = scene();
+        let nodes = s.with_instance_duplicated(0, IVec3::new(10, 0, 0)).unwrap();
+        apply(&mut s, nodes);
+        for (i, name) in ["b", "a", "C"].iter().enumerate() {
+            let node = s.instances[i].node.unwrap();
+            let nodes = s.with_node_attribute(node, "_name", Some(name)).unwrap();
+            apply(&mut s, nodes);
+        }
+        s
+    }
+
+    fn names(s: &Scene, group: Option<i32>) -> Vec<String> {
+        s.children_of(group)
+            .into_iter()
+            .map(|n| match find(&s.nodes, n) {
+                Some(SceneNode::Transform(t)) => t.attributes.get("_name").unwrap_or("").to_owned(),
+                _ => String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sorting_orders_by_name_and_a_sorted_list_reverses() {
+        let mut s = named();
+        let nodes = s.with_children_sorted(None, &[]).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(names(&s, None), ["C", "a", "b"], "byte order: capitals first");
+        assert_depth_first(&s.nodes);
+        let nodes = s.with_children_sorted(None, &[]).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(names(&s, None), ["b", "a", "C"], "already sorted: reversed");
+    }
+
+    #[test]
+    fn sorting_a_selection_keeps_the_others_in_place() {
+        let mut s = named();
+        // `b` (first) and `C` (last) picked: they swap, `a` stays between.
+        let picked = [s.instances[0].node.unwrap(), s.instances[2].node.unwrap()];
+        let nodes = s.with_children_sorted(None, &picked).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(names(&s, None), ["C", "a", "b"]);
+        // One picked is not a selection to sort: everything is.
+        let mut s = named();
+        let nodes = s.with_children_sorted(None, &picked[..1]).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(names(&s, None), ["C", "a", "b"]);
+    }
+
+    #[test]
+    fn a_path_runs_from_the_outermost_group_down() {
+        let mut s = scene();
+        let nodes = s.with_grouped(&[0, 1]).unwrap();
+        apply(&mut s, nodes);
+        let nodes = s.with_grouped(&[0]).unwrap();
+        apply(&mut s, nodes);
+        let outer = s.tree()[0].node;
+        let inner = s.groups_above(0)[1];
+        let leaf = s.instances[0].node.unwrap();
+        assert_eq!(s.path_to(leaf), vec![outer, inner, leaf]);
+        assert_eq!(s.children_of(None), vec![outer]);
+        assert!(s.nodes_under(outer).contains(&leaf));
+        let nodes = s.with_nodes_attribute(&[inner, leaf], "_hidden", Some("1")).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(s.tree().iter().filter(|r| r.hidden).count(), 2);
+    }
+}
