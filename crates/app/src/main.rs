@@ -362,6 +362,18 @@ struct App {
     resize_to: [u32; 3],
     /// The viewport's display switches.
     view: view_options::ViewOptions,
+    /// the reference editor's editor options: occlusion, shading, fade, colours,
+    /// frame spacing, interface scale.
+    editor_view: view_options::EditorView,
+    /// File › Export's switches: only the selected objects, and each model
+    /// in its own coordinates (`export_sel`, `export_local`).
+    export_selected: bool,
+    export_local: bool,
+    /// A file dropped on the window, and where, while its menu is open.
+    dropped: Option<(String, egui::Pos2)>,
+    /// What the viewport mesh was built with: the occlusion switch and the
+    /// faded instances (see `App::fade_key`). A change re-meshes.
+    meshed_with: (bool, Option<usize>),
     /// The instance the mesh was built around, while the background is
     /// hidden: selecting another must remesh.
     meshed_for: Option<usize>,
@@ -531,6 +543,11 @@ impl App {
             clipboard: voxel_core::Clipboard::default(),
             resize_to: [32; 3],
             view: view_options::ViewOptions::default(),
+            editor_view: Default::default(),
+            export_selected: false,
+            export_local: false,
+            dropped: None,
+            meshed_with: (true, None),
             meshed_for: None,
             pending_snap: None,
             view_cube_shown: true,
@@ -639,6 +656,9 @@ impl App {
         #[cfg(target_os = "macos")]
         macos_open::set_waker(&cc.egui_ctx);
         layout::apply_theme(&cc.egui_ctx);
+        // Cmd+minus and Cmd+plus are the interface scale's, in eighths as
+        // the reference editor steps it (`view_input`), not egui's own tenths.
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
 
         // Run before the first frame, so --screenshot captures the result.
         app.starting_up = true;
@@ -796,10 +816,14 @@ impl App {
             .then(|| loaded.doc.scene.instances.get(self.selected))
             .flatten()
             .map(|i| i as *const voxel_core::Instance);
+        self.mesh_cache.occlusion = self.editor_view.ao;
+        let edited = self.fade_key().and_then(|i| loaded.doc.scene.instances.get(i)).map(|i| i as *const voxel_core::Instance);
+        let several = loaded.doc.scene.instances.len() > 1;
         self.mesh_cache.build(
             &loaded.doc.scene,
             |i| visible.shows(i) && only.is_none_or(|o| std::ptr::eq(o, i)),
             |model| selection.filter(|s| s.model == model).map(|s| s.cells()),
+            |i| several && edited.is_some_and(|e| !std::ptr::eq(e, i)),
         )
     }
 
@@ -1243,6 +1267,12 @@ impl App {
             return;
         }
 
+        if line.split_whitespace().next() == Some("note") {
+            let message = self.note_command(line);
+            self.console_log.push(message);
+            return;
+        }
+
         if matches!(line.split_whitespace().next(), Some("palette" | "material")) {
             let message = self.palette_command(line, state);
             self.console_log.push(message);
@@ -1535,6 +1565,12 @@ impl App {
         };
         let view_proj = self.camera.view_proj(size[0] as f32 / size[1] as f32);
 
+        // The occlusion switch and the faded objects are baked in the mesh.
+        let meshed_with = (self.editor_view.ao, self.fade_key());
+        if meshed_with != self.meshed_with {
+            self.meshed_with = meshed_with;
+            self.mesh_dirty = true;
+        }
         if self.mesh_dirty {
             self.remesh(state);
         }
@@ -1571,6 +1607,7 @@ impl App {
             self.guide_lines = guides;
         }
 
+        let shading = self.shading();
         let mut egui_renderer = state.renderer.write();
         Some(self.scene_renderer.render(
             &state.device,
@@ -1580,9 +1617,9 @@ impl App {
             view_proj,
             self.light_dir,
             Vec3::new(0.19, 0.18, 0.26), // the editor's own default ambient
-            [0.16, 0.16, 0.17],
             self.view.edges,
             self.view.shadow,
+            &shading,
         ))
     }
 
@@ -1975,6 +2012,9 @@ impl eframe::App for App {
             ui.label("no wgpu render state");
             return;
         };
+        if ui.ctx().zoom_factor() != self.editor_view.scale {
+            ui.ctx().set_zoom_factor(self.editor_view.scale);
+        }
 
         // egui 0.36 dropped SidePanel for a generic Panel with side
         // constructors, and sizes it with default_size rather than

@@ -256,6 +256,10 @@ impl App {
         egui::Panel::bottom("project export").show(ui, |ui| {
             egui::CollapsingHeader::new("EXPORT").id_salt("project export").show(ui, |ui| {
                 ui.add_enabled_ui(self.scene.is_some(), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.export_selected, "Selected").on_hover_text("Only export the selected objects");
+                        ui.checkbox(&mut self.export_local, "Local").on_hover_text("Export each model in its own space: its placement left out");
+                    });
                     ui.horizontal_wrapped(|ui| {
                         for (name, _, hint) in crate::exchange::FORMATS {
                             if ui.button(name).on_hover_text(hint).clicked() {

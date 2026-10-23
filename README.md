@@ -48,7 +48,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **291 tests
+Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **295 tests
 passing**; 41 and 42 (Windows and Linux) are prepared and built in CI, not
 yet tried on real machines. Working today:
 
@@ -104,9 +104,19 @@ yet tried on real machines. Working today:
   W A S D Q E), orthographic and isometric -- also in the path tracer and
   in saved cameras, panning, a view cube with a camera ruler (drag to turn
   in 5° steps), and snapshots of the viewport or the whole window
-- Display switches: voxel edges, frame, grid, background objects,
+- Display switches: voxel edges, frame lines, grid, background objects,
   wireframe and shadows, with the reference editor's shortcuts (Cmd+E, F, G, B, M;
-  in the render, Cmd+E and Cmd+G switch its own edges and grid)
+  in the render, Cmd+E and Cmd+G switch its own edges and grid);
+  the reference editor's view options: ambient occlusion, constant shading, the
+  other models faded while one is edited, the background, frame, edge and
+  selection colours, the frame lines' spacing and the interface scale
+  (Cmd+minus, Cmd+plus)
+- Palette notes: a line of text per row, edited in the panel, saved in
+  the file (or not), exported and imported as text
+- Dropping a file on the window asks what to do with it: open it, add
+  its models to the scene, or take it as the palette
+- Exports of only the selected objects, or of each model in its own
+  coordinates
 - Palette tools: several colours selected, sorted by hue, saturation or
   value (the display order only), random recolouring, HSV and hex editing
 - Render: transparent or coloured background, the Blend material (a lamp
@@ -254,7 +264,7 @@ Enter keeps and Esc drops a pending mouse transform.
 | Group | Commands |
 |---|---|
 | History | `undo`, `redo` |
-| Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `recover <path>`, `export [obj\|ply\|mc\|cube\|point\|xraw\|qb\|slab\|slice\|iso\|2d] <path>`, `import <path>`, `import <file.obj> [size] [fill]`, `import materials\|render\|cameras\|palette <file.vox\|file.txt>`, `export materials\|render\|cameras <file.txt>`, `autosave [on\|off\|<minutes>\|recover\|discard]` |
+| Files | `open [path]`, `new [n \| x y z]`, `save [path]`, `recover <path>`, `export [obj\|ply\|mc\|cube\|point\|xraw\|qb\|slab\|slice\|iso\|2d] <path>`, `import <path>`, `import <file.obj> [size] [fill]`, `import materials\|render\|cameras\|palette\|notes <file.vox\|file.txt>`, `export materials\|render\|cameras\|notes <file.txt>`, `export selected\|local [on\|off]`, `note <row> [text]\|clear\|save on\|off`, `autosave [on\|off\|<minutes>\|recover\|discard]` |
 | Project | `project [list \| dir <path> \| open <name> \| rename <name> \| dup \| delete]` |
 | Brush | `brush [attach\|erase\|paint\|select\|move] [voxel\|box\|line\|square\|circle\|face\|fill\|shader\|pattern]`, `brush size <1-64>`, `brush tip cube\|sphere\|2d\|3d`, `brush centre fill\|ring\|even\|odd`, `brush project on\|off`, `brush face color\|geo\|4\|8\|palette\|voxel`, `brush mirror\|axis <axes>`, `brush region same\|color\|geo [4\|8]`, `brush pick` (eyedropper), `color <n>` |
 | Pattern | `pattern selection\|open <file.vox>\|match on\|off\|turn x\|y\|z\|colours own\|brush\|clear` |
@@ -266,7 +276,7 @@ Enter keeps and Esc drops a pending mouse transform.
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `tree sort\|expand [all]\|close [inactive]\|hide [deep\|others]\|show [deep\|all]\|toggle`, `layer list\|new\|hide\|show\|toggle\|name\|assign\|current n\|only [n]\|all\|sort\|select [n]` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]`, `anim step <n>`, `anim key next\|prev\|first\|last`, `anim loop on\|off`, `anim reverse`, `anim global [on\|off]` |
 | Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|free\|frame [all\|selection\|group\|instance]` (`orth`, `pers` also), `camera zoom <f>\|slots\|save <0-9>\|load <0-9>`, `snap [file.png]`, `snap window [file.png]`, `render save <file.png>`, `render image <w> <h> <samples> <file.png>\|cancel`, `render spin <frames> <degrees> <blur %> <w> <h> <samples> <file.png>`, `camera set x\|y\|z\|pitch\|yaw\|roll\|zoom\|fov\|mouse\|keys <v>` |
-| View | `view [edges\|frame\|grid\|bg\|wire\|shadow] [on\|off]`, `view cube [on\|off]`, `view ruler [on\|off]` |
+| View | `view [edges\|frame\|grid\|bg\|wire\|shadow] [on\|off]`, `view cube [on\|off]`, `view ruler [on\|off]`, `view ao\|flat\|fade [on\|off]`, `view colour bg\|grid\|edge\|select <colour>`, `view spacing <n>`, `view scale <f>\|inc\|dec` |
 | Edit | `full`, `zero`, `rev`, `x2`, `xh`, `loop <axis> <n>`, `scale <axes> <f>`, `shear <axis> <a> <b>`, `rot <axis> <deg>`, `repeat <axes> <n>`, `mir <axis>`, `dia <axis>`, `prim elli\|cyli\|pyra\|cone`, `flood [c]`, `hull`, `dil\|ero [6\|18\|26]`, `mask`, `tex`, `maze [p]`, `noise [seed] [scale] [lo] [hi]`, `fractal` |
 | Scripts | `xs [-n passes] [-c c1,c2,…] <script> [args…]`, `xs list`, `xs use <script> [args…]` |
 | Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>\|background sky\|none\|<colour>\|shape cube\|sphere\|cylinder\|brick\|clay\|mc [size]`, `env grid on\|off [width] [spacing] [ground]`, `env edge on\|off [width]`, `env grid\|edge colour <colour>`, `env bounce <diffuse> [specular] [scatter]`, `env energy <1-5000>`, `env aa [on\|off]`, `env proj perspective\|sg\|panorama [fov]`, `env focus <depth>\|auto` |

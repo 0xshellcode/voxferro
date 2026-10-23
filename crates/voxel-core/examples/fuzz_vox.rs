@@ -97,7 +97,7 @@ fn load_path(bytes: &[u8]) {
             let scene = Scene::from_file_at_frame(&file, frame);
             step(&format!("scene at frame {frame}: {} instances", scene.instances.len()));
             let mut cache = MeshCache::default();
-            let mesh = cache.build(&scene, |_| true, |_| None);
+            let mesh = cache.build(&scene, |_| true, |_| None, |_| false);
             std::hint::black_box(mesh.triangle_count());
             step("meshed");
             let _ = scene.bake(|_| true, 64 * 1024 * 1024);

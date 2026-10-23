@@ -322,6 +322,9 @@ impl App {
             ui.add_space(4.0);
             self.palette_tools_ui(ui, state);
         });
+        egui::CollapsingHeader::new(egui::RichText::new("NOTE").size(10.5)).id_salt("palette notes").show(ui, |ui| {
+            self.notes_ui(ui);
+        });
     }
 
     fn brush_column(&mut self, ui: &mut egui::Ui) {
@@ -514,11 +517,58 @@ impl App {
         });
     }
 
+    /// the reference editor's Option menu: how the editor's view draws the models.
+    fn editor_view_ui(&mut self, ui: &mut egui::Ui) {
+        caption(ui, "EDITOR VIEW");
+        let mut lines: Vec<String> = Vec::new();
+        let e = self.editor_view;
+        ui.horizontal(|ui| {
+            for (on, word, label, hint) in [
+                (e.ao, "ao", "Occlusion", "Ambient occlusion: corners between voxels darken"),
+                (e.flat, "flat", "Flat", "Constant shading: the palette colours, unlit"),
+                (e.fade, "fade", "Fade", "Fade the other models toward the background while editing one"),
+            ] {
+                let mut v = on;
+                if ui.checkbox(&mut v, label).on_hover_text(hint).changed() {
+                    lines.push(format!("view {word} {}", if v { "on" } else { "off" }));
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            for (word, label, rgb) in [("bg", "Back", e.background), ("grid", "Frame", e.grid), ("edge", "Edge", e.edge), ("select", "Select", e.select)] {
+                let mut c = rgb;
+                ui.label(label);
+                if ui.color_edit_button_srgb(&mut c).changed() {
+                    lines.push(format!("view colour {word} {} {} {}", c[0], c[1], c[2]));
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            let mut spacing = e.spacing;
+            if ui.add(egui::DragValue::new(&mut spacing).range(1..=128).prefix("frame every ")).on_hover_text("Frame lines (Cmd+F) every this many voxels").changed() {
+                lines.push(format!("view spacing {spacing}"));
+            }
+            ui.label(format!("scale {}", e.scale));
+            if ui.small_button("-").on_hover_text("Smaller interface (Cmd+minus)").clicked() {
+                lines.push("view scale dec".to_owned());
+            }
+            if ui.small_button("+").on_hover_text("Larger interface (Cmd+plus)").clicked() {
+                lines.push("view scale inc".to_owned());
+            }
+        });
+        for line in lines {
+            let message = self.view_command(&line);
+            self.console_log.push(message);
+        }
+    }
+
     /// The gear's window: the graphics backend, agents over MCP, and help.
     fn settings_window(&mut self, ctx: &egui::Context, _state: &egui_wgpu::RenderState) {
         let mut open = self.settings_open;
         egui::Window::new("Settings").open(&mut open).resizable(false).default_width(320.0).show(ctx, |ui| {
             ui.label(format!("Graphics: {}", self.backend));
+            ui.separator();
+            self.editor_view_ui(ui);
             ui.separator();
             self.mcp_panel(ui);
             ui.separator();
@@ -528,7 +578,7 @@ impl App {
                 "Shift+drag or middle-drag pans; scroll zooms.",
                 "Option+Shift+click selects a group (again: one level in).",
                 "the reference editor's keys: V F B L C P shapes, T R G modes, M N select, 1 2 3 mirror, Cmd+1 2 3 axis, U full, I fill, 5 frame, Alt+click eyedropper; Alt+1-7 views, O ortho, - + brush size.",
-                "Cmd+E/F/G/B/M display switches; Cmd+Z undo.",
+                "Cmd+E/F/G/B/M display switches; Cmd+minus and Cmd+plus scale the interface; Cmd+Z undo.",
                 "Free camera: W A S D Q E fly.",
             ] {
                 ui.label(egui::RichText::new(line).size(11.5));

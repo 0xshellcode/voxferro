@@ -15,6 +15,17 @@
 //! ... <file.txt>` reads them back, one undo step. The block names are this
 //! editor's choice; the reader takes any name, and comments (`//`) and blank
 //! lines are skipped, so the reference editor's own files read too.
+//!
+//! The palette's notes (`export notes`, `import notes`) are one block of
+//! bare quoted lines, a note each, as the reference editor writes its note
+//! component (read from its a recent version executable):
+//!
+//! ```text
+//! note : {
+//!     'Skin'
+//!     ''
+//! }
+//! ```
 
 use vox_format::Dict;
 
@@ -61,6 +72,38 @@ pub fn write(blocks: &[(String, Dict)]) -> String {
     out
 }
 
+/// The palette notes as a component file.
+pub fn write_notes(notes: &[String]) -> String {
+    let mut out = String::from("note : {\n");
+    for note in notes {
+        out.push_str(&format!("    '{note}'\n"));
+    }
+    out.push_str("}\n");
+    out
+}
+
+/// The notes of a component file: its quoted lines, in order.
+pub fn parse_notes(text: &str) -> Result<Vec<String>, String> {
+    let mut notes = Vec::new();
+    let mut inside = false;
+    for (n, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        if line.ends_with('{') {
+            inside = true;
+        } else if line == "}" {
+            inside = false;
+        } else if inside && line.len() >= 2 && line.starts_with('\'') && line.ends_with('\'') {
+            notes.push(line[1..line.len() - 1].to_owned());
+        } else {
+            return Err(format!("line {}: expected a quoted note", n + 1));
+        }
+    }
+    Ok(notes)
+}
+
 /// A dict with `_id` first, then `rest`.
 fn with_id(id: i32, rest: &Dict) -> Dict {
     let mut d = Dict::default();
@@ -85,7 +128,13 @@ impl crate::App {
                 .map(|d| (d.get("_type").unwrap_or("render").trim_start_matches('_').to_owned(), d.clone()))
                 .collect(),
             "cameras" => doc.cameras.iter().map(|c| ("camera".to_owned(), with_id(c.id, &c.attributes))).collect(),
-            _ => return "export materials|render|cameras <file.txt>".to_owned(),
+            "notes" => {
+                return match std::fs::write(path, write_notes(&doc.notes)) {
+                    Ok(()) => format!("exported {} notes to {path}", doc.notes.len()),
+                    Err(e) => format!("error: could not write {path}: {e}"),
+                };
+            }
+            _ => return "export materials|render|cameras|notes <file.txt>".to_owned(),
         };
         match std::fs::write(path, write(&blocks)) {
             Ok(()) => format!("exported {} {what} to {path}", blocks.len()),
@@ -127,8 +176,94 @@ impl crate::App {
                     })
                     .collect(),
             },
-            _ => return Err("import materials|render|cameras <file.txt>".to_owned()),
+            // In order, each note beyond the file's left blank.
+            "notes" => {
+                let mut after = parse_notes(text)?;
+                after.resize(doc.notes.len().max(after.len()), String::new());
+                voxel_core::Command::SetNotes { before: doc.notes.clone(), after }
+            }
+            _ => return Err("import materials|render|cameras|notes <file.txt>".to_owned()),
         })
+    }
+}
+
+impl crate::App {
+    /// `note <row 0-31> [text]`, `note clear`, `note save on|off`: the
+    /// palette's notes, a line for each row of eight colours as shown.
+    /// `note clear` empties them all, as the reference editor's does; `note save off`
+    /// leaves them out of saved files (its "Save in the File").
+    pub fn note_command(&mut self, line: &str) -> String {
+        let words: Vec<&str> = line.split_whitespace().skip(1).collect();
+        let usage = "note <row 0-31> [text] | note clear | note save on|off";
+        let Some(loaded) = self.scene.as_mut() else { return "nothing open".to_owned() };
+        let before = loaded.doc.notes.clone();
+        let mut after = before.clone();
+        let message = match words.as_slice() {
+            ["clear"] => {
+                after.iter_mut().for_each(String::clear);
+                "notes cleared".to_owned()
+            }
+            ["save", switch] => {
+                let on = match *switch {
+                    "on" => true,
+                    "off" => false,
+                    _ => return usage.to_owned(),
+                };
+                crate::scene::SAVE_NOTES.store(on, std::sync::atomic::Ordering::Relaxed);
+                return format!("notes {} saved in the file", if on { "are" } else { "are not" });
+            }
+            [row, text @ ..] => match row.parse::<usize>() {
+                Ok(row) if row < 32 => {
+                    // The files the reference editor writes carry all 32.
+                    after.resize(after.len().max(32), String::new());
+                    after[row] = text.join(" ");
+                    format!("note {row} set")
+                }
+                _ => return usage.to_owned(),
+            },
+            [] => return usage.to_owned(),
+        };
+        self.history.end_gesture();
+        self.history.exec_alone(&mut loaded.doc, voxel_core::Command::SetNotes { before, after });
+        message
+    }
+
+    /// A text field for each palette row, beside its eight colours.
+    pub fn notes_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use eframe::egui;
+        let Some(loaded) = &self.scene else { return };
+        let doc = &loaded.doc;
+        let mut notes = doc.notes.clone();
+        notes.resize(notes.len().max(32), String::new());
+        let mut edited = None;
+        egui::ScrollArea::vertical().max_height(220.0).id_salt("notes").show(ui, |ui| {
+            for (row, note) in notes.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    // The row's colours, as the palette shows them.
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(48.0, 10.0), egui::Sense::hover());
+                    for k in 0..8 {
+                        let index = doc.palette_order[row * 8 + k];
+                        let c = doc.palette.color(index);
+                        let cell = egui::Rect::from_min_size(rect.min + egui::vec2(k as f32 * 6.0, 0.0), egui::vec2(6.0, 10.0));
+                        ui.painter().rect_filled(cell, 0.0, egui::Color32::from_rgb(c.r, c.g, c.b));
+                    }
+                    if ui.add(egui::TextEdit::singleline(note).desired_width(110.0)).changed() {
+                        edited = Some(row);
+                    }
+                });
+            }
+        });
+        if edited.is_some() {
+            let before = doc.notes.clone();
+            if let Some(loaded) = self.scene.as_mut() {
+                // Typing merges until the next gesture.
+                self.history.exec(&mut loaded.doc, voxel_core::Command::SetNotes { before, after: notes });
+            }
+        }
+        if ui.small_button("Clear").on_hover_text("Empty every note").clicked() {
+            let message = self.note_command("note clear");
+            self.console_log.push(message);
+        }
     }
 }
 
@@ -151,5 +286,14 @@ mod tests {
         let blocks = parse(ok).unwrap();
         assert_eq!(blocks[0].1.get("_i"), Some("1"));
         assert!(parse("x : {\n a = '1'\n").is_err());
+    }
+
+    #[test]
+    fn notes_round_trip_as_quoted_lines() {
+        let notes = vec!["Skin".to_owned(), String::new(), "Stone grey".to_owned()];
+        let text = write_notes(&notes);
+        assert_eq!(text, "note : {\n    'Skin'\n    ''\n    'Stone grey'\n}\n");
+        assert_eq!(parse_notes(&text).unwrap(), notes);
+        assert!(parse_notes("note : {\n  Skin\n}\n").is_err());
     }
 }

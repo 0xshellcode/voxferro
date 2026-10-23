@@ -25,6 +25,26 @@ struct Uniforms {
     options: [f32; 4],
     /// World to the shadow map's clip space.
     light_view_proj: [[f32; 4]; 4],
+    /// x: constant shading, y: how much a faded object keeps, z: frame
+    /// spacing (0 none).
+    view: [f32; 4],
+    background: [f32; 4],
+    edge_color: [f32; 4],
+    grid_color: [f32; 4],
+    select_color: [f32; 4],
+}
+
+/// the reference editor's editor options the voxel shader draws with.
+#[derive(Debug, Clone, Copy)]
+pub struct Shading {
+    pub constant: bool,
+    pub fade: f32,
+    pub frame_spacing: u32,
+    /// Colours as display values, 0 to 1.
+    pub background: [f32; 3],
+    pub edge: [f32; 3],
+    pub grid: [f32; 3],
+    pub select: [f32; 3],
 }
 
 /// The shadow map's side, in texels.
@@ -532,10 +552,11 @@ impl SceneRenderer {
         view_proj: Mat4,
         light_dir: Vec3,
         ambient: Vec3,
-        clear: [f32; 3],
         edges: bool,
         shadows: bool,
+        shading: &Shading,
     ) -> egui::TextureId {
+        let clear = shading.background;
         self.ensure_target(device, renderer, size);
         let target = self.target.as_ref().expect("target was just ensured");
 
@@ -545,6 +566,11 @@ impl SceneRenderer {
             ambient: [ambient.x, ambient.y, ambient.z, 1.0],
             options: [edges as u8 as f32, shadows as u8 as f32, 0.0, 0.0],
             light_view_proj: self.light_view_proj(light_dir).to_cols_array_2d(),
+            view: [shading.constant as u8 as f32, shading.fade, shading.frame_spacing as f32, 0.0],
+            background: [shading.background[0], shading.background[1], shading.background[2], 1.0],
+            edge_color: [shading.edge[0], shading.edge[1], shading.edge[2], 1.0],
+            grid_color: [shading.grid[0], shading.grid[1], shading.grid[2], 1.0],
+            select_color: [shading.select[0], shading.select[1], shading.select[2], 1.0],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 

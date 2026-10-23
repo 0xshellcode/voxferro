@@ -27,6 +27,9 @@ pub struct Document {
     /// The palette as shown: display slot to colour index (`IMAP`).
     /// Sorting reorders this, never the colours, so voxels keep theirs.
     pub palette_order: Box<[u8; 256]>,
+    /// The palette's notes (`NOTE`): one line of text for each row of eight
+    /// colours, 32 in all in the files the reference editor writes.
+    pub notes: Vec<String>,
 }
 
 impl Default for Document {
@@ -40,6 +43,7 @@ impl Default for Document {
             meta: Vec::new(),
             cameras: Vec::new(),
             palette_order: identity_order(),
+            notes: Vec::new(),
         }
     }
 }

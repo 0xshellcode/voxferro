@@ -8,6 +8,12 @@
 //! formats (xraw, qb, slab, slice) take the selected model, since each holds
 //! one grid.
 //!
+//! Two switches, the reference editor's (`export_sel`, `export_local`, read from its
+//! a recent version executable), shape what the mesh formats take: `export
+//! selected on` only the selected objects, `export local on` each model in
+//! its own coordinates -- its placement and its groups' left out, centred
+//! on the origin. Both are off by default and kept for the session.
+//!
 //! `import <path>` adds the models of another file to this scene, each a new
 //! model and instance, all one undo step: a the reference editor `.vox` (each model
 //! where that file puts it, unturned), XRAW, Qubicle QB or SLAB6 -- told apart by their content,
@@ -40,9 +46,43 @@ const MESH_SCALE: f32 = 0.1;
 const CUBE_MARGIN: f32 = 0.1;
 
 impl App {
+    /// The scene the mesh exports write: the document's, or a copy with
+    /// only the selected objects and each model at the origin, as the
+    /// export switches ask.
+    pub(crate) fn export_scene(&self) -> Option<std::borrow::Cow<'_, voxel_core::Scene>> {
+        let loaded = self.scene.as_ref()?;
+        let scene = &loaded.doc.scene;
+        if !self.export_selected && !self.export_local {
+            return Some(std::borrow::Cow::Borrowed(scene));
+        }
+        let mut copy = scene.clone();
+        if self.export_selected {
+            let chosen = self.object_indices();
+            let chosen = if chosen.is_empty() { vec![self.selected] } else { chosen };
+            copy.instances = scene.instances.iter().enumerate().filter(|(i, _)| chosen.contains(i)).map(|(_, inst)| inst.clone()).collect();
+        }
+        if self.export_local {
+            for instance in &mut copy.instances {
+                instance.transform = voxel_core::Transform::default();
+                instance.parent = voxel_core::Transform::default();
+            }
+        }
+        Some(std::borrow::Cow::Owned(copy))
+    }
+
     pub fn export_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().skip(1).collect();
-        if let [what @ ("materials" | "render" | "cameras"), path @ ..] = words.as_slice() {
+        if let [which @ ("selected" | "local"), rest @ ..] = words.as_slice() {
+            let slot = if *which == "selected" { &mut self.export_selected } else { &mut self.export_local };
+            *slot = match rest {
+                [] => !*slot,
+                ["on"] => true,
+                ["off"] => false,
+                _ => return format!("export {which} [on|off]"),
+            };
+            return format!("export {which} {}", if *slot { "on" } else { "off" });
+        }
+        if let [what @ ("materials" | "render" | "cameras" | "notes"), path @ ..] = words.as_slice() {
             if path.is_empty() {
                 return format!("export {what} <file.txt>");
             }
@@ -86,7 +126,8 @@ impl App {
 
     fn export_bytes(&self, format: &str) -> Result<Vec<u8>, String> {
         let loaded = self.scene.as_ref().ok_or("nothing open")?;
-        let (scene, palette) = (&loaded.doc.scene, &loaded.doc.palette);
+        let exported = self.export_scene().ok_or("nothing open")?;
+        let (scene, palette) = (exported.as_ref(), &loaded.doc.palette);
         let visible = self.visibility();
         let keep = |i: &voxel_core::Instance| visible.shows(i);
         let selected = || {
@@ -185,7 +226,8 @@ impl App {
             ),
             "render" => voxel_core::Command::SetRender { before: doc.render.clone(), after: other.render.clone() },
             "cameras" => voxel_core::Command::SetCameras { before: doc.cameras.clone(), after: other.cameras.clone() },
-            _ => return "import materials|render|cameras|palette <file.vox>".to_owned(),
+            "notes" => voxel_core::Command::SetNotes { before: doc.notes.clone(), after: other.notes.clone() },
+            _ => return "import materials|render|cameras|palette|notes <file.vox>".to_owned(),
         };
         self.history.end_gesture();
         let changed = self.history.exec_alone(&mut loaded.doc, command);
@@ -196,10 +238,7 @@ impl App {
 
     pub fn import_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().collect();
-        if words.get(1) == Some(&"notes") {
-            return "palette notes are not imported: this editor keeps them only as the file had them".to_owned();
-        }
-        if let Some(what) = words.get(1).filter(|w| matches!(**w, "materials" | "render" | "cameras" | "palette")) {
+        if let Some(what) = words.get(1).filter(|w| matches!(**w, "materials" | "render" | "cameras" | "palette" | "notes")) {
             let path = words[2..].join(" ");
             if path.is_empty() {
                 return format!("import {what} <file.vox>");

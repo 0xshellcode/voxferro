@@ -1,7 +1,12 @@
 //! Loading and saving a `.vox` file.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use vox_format::VoxFile;
 use voxel_core::{Document, Scene};
+
+/// File › Note's "Save in the File" (`save_note`): whether saving writes the
+/// palette's notes. On by default; a switch of the session, as there.
+pub static SAVE_NOTES: AtomicBool = AtomicBool::new(true);
 
 /// A loaded file: its scene graph flattened into placed models, plus the
 /// palette they share.
@@ -58,6 +63,7 @@ impl LoadedScene {
                 meta: file.meta.clone(),
                 cameras: file.cameras.clone(),
                 palette_order: voxel_core::display_order(file.index_map.as_deref()),
+                notes: file.color_names.clone(),
             },
             source: file,
             path,
@@ -103,6 +109,7 @@ impl LoadedScene {
         file.layers = self.doc.layers.clone();
         file.meta = self.doc.meta.clone();
         file.cameras = self.doc.cameras.clone();
+        file.color_names = if SAVE_NOTES.load(Ordering::Relaxed) { self.doc.notes.clone() } else { Vec::new() };
 
         let bytes = file.to_bytes();
 
@@ -137,3 +144,26 @@ fn layers_for(file: &VoxFile) -> Vec<vox_format::Layer> {
     layers
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notes_survive_a_save_unless_left_out() {
+        let path = std::env::temp_dir().join(format!("voxferro-notes-{}.vox", std::process::id()));
+        let path = path.to_string_lossy().into_owned();
+        let mut scene = LoadedScene::new_empty([4, 4, 4]);
+        scene.doc.scene.models[0].set(1, 1, 1, 9);
+        scene.doc.notes = vec!["Skin".to_owned(), String::new(), "Stone".to_owned()];
+        scene.save(&path).unwrap();
+        assert_eq!(LoadedScene::load(&path).unwrap().doc.notes, scene.doc.notes);
+
+        SAVE_NOTES.store(false, Ordering::Relaxed);
+        let saved = scene.save(&path);
+        SAVE_NOTES.store(true, Ordering::Relaxed);
+        saved.unwrap();
+        assert!(LoadedScene::load(&path).unwrap().doc.notes.is_empty(), "\"Save in the File\" off");
+        let _ = std::fs::remove_file(&path);
+    }
+}

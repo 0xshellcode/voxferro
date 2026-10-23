@@ -135,8 +135,9 @@ impl App {
         let path = path.with_extension("obj");
         let stem = path.file_stem()?.to_string_lossy().into_owned();
         let visible = self.visibility();
+        let scene = self.export_scene()?;
         let export = voxel_core::export::export_obj(
-            &loaded.doc.scene,
+            scene.as_ref(),
             &loaded.doc.palette,
             |i| visible.shows(i),
             &stem,
@@ -246,22 +247,69 @@ impl App {
             self.request(Discarding::New(NEW_MODEL_SIZE), ctx, state);
         }
 
+        // A file dropped on the window asks what to do with it, where it
+        // landed, as the reference editor's drop menu does.
         let dropped = ctx.input(|i| {
-            i.raw
-                .dropped_files
-                .iter()
-                .map(|f| f.path().to_path_buf())
-                .find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("vox")))
+            let at = i.pointer.latest_pos().unwrap_or_default();
+            i.raw.dropped_files.first().map(|f| (f.path().to_string_lossy().into_owned(), at))
         });
-        if let Some(path) = dropped {
-            self.request(Discarding::Open(Some(path.to_string_lossy().into_owned())), ctx, state);
+        if let Some(drop) = dropped {
+            self.dropped = Some(drop);
         }
+        self.drop_menu_ui(ctx, state);
 
         // Closing the window with unsaved work: cancel the close and ask.
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.is_dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm = Some(Confirm { action: Discarding::Quit });
         }
+    }
+
+    /// The menu for a dropped file: open it as the project, add its models
+    /// to this one, or take it as the palette -- what its kind allows.
+    fn drop_menu_ui(&mut self, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
+        let Some((path, at)) = self.dropped.clone() else { return };
+        let ext = std::path::Path::new(&path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        let name = std::path::Path::new(&path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
+        let can_import = matches!(ext.as_str(), "vox" | "xraw" | "qb" | "obj");
+        let mut choice: Option<&str> = None;
+        let shown = egui::Area::new(egui::Id::new("drop menu")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.label(egui::RichText::new(&name).strong());
+                if ext == "vox" && ui.button("Open project").on_hover_text("Open it in place of this one").clicked() {
+                    choice = Some("open");
+                }
+                if can_import && ui.button("Import models").on_hover_text("Add its models to this scene").clicked() {
+                    choice = Some("import");
+                }
+                if ext == "png" && ui.button("Use as palette").on_hover_text("A 256x1 palette image").clicked() {
+                    choice = Some("palette");
+                }
+                if !can_import && ext != "png" {
+                    ui.label("Voxferro cannot open this kind of file.");
+                }
+                if ui.button("Cancel").clicked() {
+                    choice = Some("cancel");
+                }
+            });
+        });
+        // A click anywhere else, or Escape, dismisses it.
+        let away = ctx.input(|i| i.pointer.any_pressed() && !i.pointer.latest_pos().is_some_and(|p| shown.response.rect.contains(p)))
+            || ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        if choice.is_none() && !away {
+            return;
+        }
+        self.dropped = None;
+        let message = match choice {
+            Some("open") => {
+                self.request(Discarding::Open(Some(path)), ctx, state);
+                return;
+            }
+            Some("import") => self.import_command(&format!("import {path}")),
+            Some("palette") => self.palette_file_command(&format!("palette open {path}"), state).unwrap_or_default(),
+            _ => return,
+        };
+        self.console_log.push(message);
     }
 
     /// The unsaved-changes prompt, while one is pending.

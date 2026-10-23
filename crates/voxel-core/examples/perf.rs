@@ -40,6 +40,20 @@ fn main() {
     let n: u32 = std::env::args().nth(1).and_then(|a| a.parse().ok()).unwrap_or(256);
     let v = time(&format!("build {n}^3 model"), || model(n));
     println!("{} voxels filled\n", v.filled_count());
+
+    println!("-- Viewport mesh");
+    for occlusion in [false, true] {
+        let label = if occlusion { "with occlusion" } else { "plain" };
+        let mut scene = voxel_core::Scene::default();
+        scene.models.push(v.clone());
+        scene.instances.push(voxel_core::Instance::default());
+        let mut cache = voxel_core::mesh_cache::MeshCache::default();
+        cache.occlusion = occlusion;
+        time(&format!("  full, {label}"), || cache.build(&scene, |_| true, |_| None, |_| false));
+        scene.models[0].set(n / 2 + 5, n / 2 + 5, n / 2 + 5, 3);
+        time(&format!("  one voxel, {label}"), || cache.build(&scene, |_| true, |_| None, |_| false));
+    }
+
     let palette = Palette::specification_default();
     let six = kernels::neighbours(6).unwrap();
     let all = kernels::neighbours(26).unwrap();

@@ -30,6 +30,9 @@ pub struct Volume {
     size: [u32; 3],
     voxels: Vec<u8>,
     versions: Vec<u64>,
+    /// Per chunk, a version that changes only when a voxel on its outer
+    /// layer does: all a neighbouring chunk's mesh depends on.
+    rims: Vec<u64>,
 }
 
 /// Equal voxels, whatever the versions.
@@ -48,6 +51,7 @@ impl Volume {
             size,
             voxels: vec![0; count],
             versions: (0..chunk_count).map(|_| fresh_version()).collect(),
+            rims: (0..chunk_count).map(|_| fresh_version()).collect(),
         }
     }
 
@@ -75,6 +79,21 @@ impl Volume {
             return 0;
         }
         self.versions[(c[0] as u32 + c[1] as u32 * d[0] + c[2] as u32 * d[0] * d[1]) as usize]
+    }
+
+    /// The version of chunk `c`'s outer layer of voxels (see `rims`), or 0
+    /// outside.
+    pub fn chunk_rim_version(&self, c: [i32; 3]) -> u64 {
+        let d = self.chunk_dims();
+        if c.iter().zip(d).any(|(&c, d)| c < 0 || c as u32 >= d) {
+            return 0;
+        }
+        self.rims[(c[0] as u32 + c[1] as u32 * d[0] + c[2] as u32 * d[0] * d[1]) as usize]
+    }
+
+    /// Whether a cell lies on its chunk's outer layer.
+    fn on_rim(x: u32, y: u32, z: u32) -> bool {
+        [x, y, z].iter().any(|&a| a % CHUNK == 0 || a % CHUNK == CHUNK - 1)
     }
 
     /// Builds a volume from a parsed model's sparse voxel list.
@@ -133,7 +152,11 @@ impl Volume {
                 self.voxels[i] = value;
                 let d = self.chunk_dims();
                 let (cx, cy, cz) = (x / CHUNK, y / CHUNK, z / CHUNK);
-                self.versions[(cx + cy * d[0] + cz * d[0] * d[1]) as usize] = fresh_version();
+                let c = (cx + cy * d[0] + cz * d[0] * d[1]) as usize;
+                self.versions[c] = fresh_version();
+                if Self::on_rim(x, y, z) {
+                    self.rims[c] = fresh_version();
+                }
             }
     }
 
@@ -147,6 +170,7 @@ impl Volume {
     pub fn set_many(&mut self, writes: impl IntoIterator<Item = (glam::IVec3, u8)>) {
         let d = self.chunk_dims();
         let mut touched = vec![false; self.versions.len()];
+        let mut rim = vec![false; self.versions.len()];
         for (p, value) in writes {
             if p.x < 0 || p.y < 0 || p.z < 0 {
                 continue;
@@ -155,11 +179,18 @@ impl Volume {
             if let Some(i) = self.index(x, y, z)
                 && self.voxels[i] != value {
                     self.voxels[i] = value;
-                    touched[(x / CHUNK + y / CHUNK * d[0] + z / CHUNK * d[0] * d[1]) as usize] = true;
+                    let c = (x / CHUNK + y / CHUNK * d[0] + z / CHUNK * d[0] * d[1]) as usize;
+                    touched[c] = true;
+                    rim[c] |= Self::on_rim(x, y, z);
                 }
         }
         for (version, touched) in self.versions.iter_mut().zip(touched) {
             if touched {
+                *version = fresh_version();
+            }
+        }
+        for (version, rim) in self.rims.iter_mut().zip(rim) {
+            if rim {
                 *version = fresh_version();
             }
         }

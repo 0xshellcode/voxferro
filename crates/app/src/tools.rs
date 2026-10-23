@@ -260,9 +260,18 @@ impl App {
             if i & 2 == 0 { 0.0 } else { size.y },
             if i & 4 == 0 { 0.0 } else { size.z },
         );
+        // The box always; the frame's lines every `spacing` voxels across
+        // its floor.
+        for (a, b) in crate::CUBE_EDGES {
+            segment(corner(a), corner(b), FRAME);
+        }
         if self.view.frame {
-            for (a, b) in crate::CUBE_EDGES {
-                segment(corner(a), corner(b), FRAME);
+            let k = self.editor_view.spacing.max(1) as usize;
+            for x in (k..volume.size()[0] as usize).step_by(k) {
+                segment(Vec3::new(x as f32, 0.0, 0.0), Vec3::new(x as f32, size.y, 0.0), FRAME);
+            }
+            for y in (k..volume.size()[1] as usize).step_by(k) {
+                segment(Vec3::new(0.0, y as f32, 0.0), Vec3::new(size.x, y as f32, 0.0), FRAME);
             }
         }
         out
