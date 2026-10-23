@@ -238,6 +238,30 @@ impl App {
 
     pub fn import_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().collect();
+        // the reference editor's Import Sprites: the file's models imported, then
+        // packed into one looping animation, a frame each.
+        if words.get(1) == Some(&"sprites") {
+            let path = words[2..].join(" ");
+            if path.is_empty() {
+                return "import sprites <file>".to_owned();
+            }
+            let before = self.scene.as_ref().map_or(0, |s| s.doc.scene.instances.len());
+            let imported = self.import_command(&format!("import {path}"));
+            let after = self.scene.as_ref().map_or(0, |s| s.doc.scene.instances.len());
+            let indices: Vec<usize> = (before..after).collect();
+            if indices.len() < 2 {
+                return imported;
+            }
+            let packed = self.scene.as_ref().map(|s| s.doc.scene.with_packed(&indices, false, true));
+            return match packed.map(|nodes| self.exec_graph(nodes, false)) {
+                Some(Ok(())) => {
+                    self.forget_picks();
+                    format!("{imported}; packed as a looping animation of {} frames", indices.len())
+                }
+                Some(Err(e)) => format!("{imported}; error: {e}"),
+                None => imported,
+            };
+        }
         if let Some(what) = words.get(1).filter(|w| matches!(**w, "materials" | "render" | "cameras" | "palette" | "notes")) {
             let path = words[2..].join(" ");
             if path.is_empty() {

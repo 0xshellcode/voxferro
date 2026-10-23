@@ -121,6 +121,57 @@ impl App {
                     Err(e) => format!("error: {e}"),
                 }
             }
+            // the reference editor's `asel`: keys picked on the timeline, for F6.
+            ["select", which @ ("all" | "invert" | "none")] => {
+                let Some(node) = self.target_node() else { return "nothing selected".to_owned() };
+                let keys: Vec<u32> = self
+                    .scene
+                    .as_ref()
+                    .and_then(|l| l.doc.scene.nodes.iter().find(|n| n.id() == node).cloned())
+                    .and_then(|n| match n {
+                        vox_format::SceneNode::Transform(t) if voxel_core::anim::is_keyed(&t) => {
+                            Some(voxel_core::anim::keyframes(&t).iter().map(|k| k.0).collect())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                if self.key_selection.0 != Some(node) {
+                    self.key_selection = (Some(node), Default::default());
+                }
+                let picked = &mut self.key_selection.1;
+                match *which {
+                    "all" => picked.extend(&keys),
+                    "none" => picked.clear(),
+                    _ => {
+                        for k in keys {
+                            if !picked.remove(&k) {
+                                picked.insert(k);
+                            }
+                        }
+                    }
+                }
+                format!("{} keys picked", picked.len())
+            }
+            // With keys picked, all of them, as the reference editor's `adel`.
+            ["unkey"] if self.key_selection.0.is_some() && self.key_selection.0 == self.target_node() && !self.key_selection.1.is_empty() => {
+                let node = self.key_selection.0.unwrap_or_default();
+                let frames: Vec<u32> = std::mem::take(&mut self.key_selection.1).into_iter().collect();
+                let Some(loaded) = &self.scene else { return "nothing open".to_owned() };
+                let count = |nodes: &[vox_format::SceneNode]| match nodes.iter().find(|n| n.id() == node) {
+                    Some(vox_format::SceneNode::Transform(t)) => voxel_core::anim::keyframes(t).len(),
+                    _ => 0,
+                };
+                let before = count(&loaded.doc.scene.nodes);
+                let nodes = loaded.doc.scene.with_keys_removed(node, &frames);
+                match self.exec_graph(nodes, false) {
+                    Ok(()) => {
+                        let after = self.scene.as_ref().map_or(0, |l| count(&l.doc.scene.nodes));
+                        // A node keeps one key, whatever was picked.
+                        format!("{} keys removed", before - after)
+                    }
+                    Err(e) => format!("error: {e}"),
+                }
+            }
             ["unkey"] => {
                 let target = self.selected_group.or_else(|| {
                     let loaded = self.scene.as_ref()?;
@@ -342,11 +393,17 @@ impl App {
             }
         });
         let markers = target.clone();
+        let picked: Vec<u32> = if self.key_selection.0 == node { self.key_selection.1.iter().copied().collect() } else { Vec::new() };
         if let Some((keys, shape_frames)) = target {
             if keys.len() > 1 {
                 for f in keys {
                     let c = egui::pos2(x_of(f), rect.top() + 9.0);
-                    painter.rect_filled(egui::Rect::from_center_size(c, egui::vec2(6.0, 6.0)), 1.0, egui::Color32::from_rgb(255, 210, 90));
+                    let key = egui::Rect::from_center_size(c, egui::vec2(6.0, 6.0));
+                    painter.rect_filled(key, 1.0, egui::Color32::from_rgb(255, 210, 90));
+                    // A picked key is ringed.
+                    if picked.contains(&f) {
+                        painter.rect_stroke(key.expand(2.0), 1.0, egui::Stroke::new(1.5, egui::Color32::WHITE), egui::StrokeKind::Outside);
+                    }
                 }
             }
             if shape_frames.len() > 1 {
@@ -398,6 +455,19 @@ impl App {
                             drag.frame = to;
                         }
                         self.set_frame(to);
+                    }
+                }
+            } else if response.clicked() && ui.input(|i| i.modifiers.command || i.modifiers.shift) {
+                // Cmd or Shift+click picks a key, or lets it go.
+                let near = markers.as_ref().and_then(|(keys, _)| {
+                    keys.iter().copied().filter(|_| keys.len() > 1).min_by_key(|f| (x_of(*f) - pos.x).abs() as i32).filter(|f| (x_of(*f) - pos.x).abs() <= 6.0)
+                });
+                if let (Some(f), Some(node)) = (near, node) {
+                    if self.key_selection.0 != Some(node) {
+                        self.key_selection = (Some(node), Default::default());
+                    }
+                    if !self.key_selection.1.remove(&f) {
+                        self.key_selection.1.insert(f);
                     }
                 }
             } else if response.clicked() || response.dragged() {

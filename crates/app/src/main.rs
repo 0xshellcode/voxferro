@@ -375,6 +375,9 @@ struct App {
     material_clip: Option<Option<vox_format::Material>>,
     /// F1: the console takes the keyboard on the next frame.
     focus_console: bool,
+    /// Keys picked on the timeline (Cmd or Shift+click, `anim select`):
+    /// the transform node and its frames. F6 removes them.
+    key_selection: (Option<i32>, std::collections::BTreeSet<u32>),
     /// What the viewport mesh was built with: the occlusion switch and the
     /// faded instances (see `App::fade_key`). A change re-meshes.
     meshed_with: (bool, Option<usize>),
@@ -553,6 +556,7 @@ impl App {
             dropped: None,
             material_clip: None,
             focus_console: false,
+            key_selection: (None, Default::default()),
             meshed_with: (true, None),
             meshed_for: None,
             pending_snap: None,

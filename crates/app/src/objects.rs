@@ -320,7 +320,42 @@ impl App {
             ["operand"] => return self.take_operand(),
             ["subtract"] => return self.apply_operand(false),
             ["replace"] => return self.apply_operand(true),
-            ["copy"] => return self.copy_objects(false),
+            // the reference editor's `ocopy frame` copies objects as they are at this
+            // frame, without their keys: what `object copy` always does.
+            ["copy"] | ["copy", "frame"] => return self.copy_objects(false),
+            ["pack", flags @ ..] if flags.iter().all(|f| matches!(*f, "xform" | "loop")) => {
+                let indices = self.object_indices();
+                if indices.is_empty() {
+                    return "select the objects to pack".to_owned();
+                }
+                let Some(scene) = self.scene_ref() else { return "nothing open".to_owned() };
+                let nodes = scene.with_packed(&indices, flags.contains(&"xform"), flags.contains(&"loop"));
+                return match self.exec_graph(nodes, false) {
+                    Ok(()) => {
+                        self.forget_picks();
+                        format!("{} objects packed into one, a frame each", indices.len())
+                    }
+                    Err(e) => format!("error: {e}"),
+                };
+            }
+            ["unpack"] => {
+                let indices = self.object_indices();
+                let indices = if indices.is_empty() { vec![self.selected] } else { indices };
+                // From the last, so the indices still name the same ones.
+                self.history.begin_group();
+                let mut done = 0;
+                for &i in indices.iter().rev() {
+                    let nodes = self.scene_ref().map(|s| s.with_unpacked(i));
+                    if let Some(nodes) = nodes
+                        && self.exec_graph(nodes, false).is_ok()
+                    {
+                        done += 1;
+                    }
+                }
+                self.history.end_group();
+                self.forget_picks();
+                return if done > 0 { format!("{done} animated objects unpacked, a model each") } else { "nothing to unpack: no object shows more than one model".to_owned() };
+            }
             ["copy", "ref"] => return self.copy_objects(true),
             ["cut"] => {
                 let copied = self.copy_objects(true);

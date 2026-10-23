@@ -128,7 +128,7 @@ fn volume_of(cells: &HashMap<IVec3, u8>) -> Option<(Volume, Transform)> {
 }
 
 impl App {
-    fn scene_ref(&self) -> Option<&Scene> {
+    pub(crate) fn scene_ref(&self) -> Option<&Scene> {
         Some(&self.scene.as_ref()?.doc.scene)
     }
 

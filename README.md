@@ -48,7 +48,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **295 tests
+Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **297 tests
 passing**; 41 and 42 (Windows and Linux) are prepared and built in CI, not
 yet tried on real machines. Working today:
 
@@ -91,7 +91,10 @@ yet tried on real machines. Working today:
   the reference editor a recent version), shape frames, range, timeline (with
   draggable keys) and export of rendered frames to PNG; stepping a frame
   or a key at a time (`,` `.`, Cmd+`,` Cmd+`.`), loops, reversed keys, and
-  Global Time (off, only the open group animates)
+  Global Time (off, only the open group animates); several models packed
+  into the frames of one (and unpacked again), a file's models imported
+  as a looping sprite animation, and keys picked on the timeline
+  (Cmd/Shift+click) to remove together
 - Export to OBJ + MTL + palette texture, and to the reference editor's other
   formats: PLY (faces, cubes or points), a smooth surface by marching
   cubes, XRAW, Qubicle QB, SLAB6, PNG
@@ -279,10 +282,10 @@ that material back to diffuse.
 | Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz`, `transform scale <axes> <f>`, `transform rotate <axis> <deg>`, `transform wrap <x\|-x\|y\|-y\|z\|-z> <cells> [two]`, `transform spacing <x> <y> <z>`, `transform drag move\|scale\|turn\|wrap\|off`, `transform keep\|drop` |
 | Model | `rotate x\|y\|z` (or `rot90`), `mirror x\|y\|z` (or `flip`), `crop` (or `shrink`), `resize x y z`, `fill`, `clear`, `box`, `sphere`, `voxels x y z c …`, `gpu …` |
 | Scene | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
-| Objects | `object all\|none\|invert\|add i\|remove i\|list`, `object move dx dy dz\|turn x\|y\|z [-]\|delete`, `object align x\|y\|z -1\|0\|+1`, `object ground`, `object flip <axes>`, `object union\|intersect\|operand\|subtract\|replace`, `object copy [ref]\|cut\|paste\|own`, `object transform copy\|paste [rot\|pos]\|reset`, `object level in\|out` (Tab, Shift+Tab) |
+| Objects | `object all\|none\|invert\|add i\|remove i\|list`, `object move dx dy dz\|turn x\|y\|z [-]\|delete`, `object align x\|y\|z -1\|0\|+1`, `object ground`, `object flip <axes>`, `object union\|intersect\|operand\|subtract\|replace`, `object copy [ref\|frame]\|cut\|paste\|own`, `object transform copy\|paste [rot\|pos]\|reset`, `object level in\|out` (Tab, Shift+Tab) |
 | Palette | `palette open\|save <file.png>`, `palette reset`, `palette default 0-3`, `palette swap\|gradient\|copy <a> <b>`, `palette paste <i>`, `palette <i> <r> <g> <b>`, `palette select all\|none\|invert\|used\|unused`, `palette sort <keys>`, `palette rand`, `palette set\|fill <colour>`, `palette adjust h\|s\|v\|r\|g\|b <n>`, `palette copy\|paste`, `material <i> <diffuse\|metal\|glass\|emit\|cloud\|blend> [key=value]…`, `material copy\|paste\|reset` |
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `tree sort\|expand [all]\|close [inactive]\|hide [deep\|others]\|show [deep\|all]\|toggle`, `layer list\|new\|hide\|show\|toggle\|name\|assign\|current n\|only [n]\|all\|sort\|select [n]` |
-| Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]`, `anim step <n>`, `anim key next\|prev\|first\|last`, `anim loop on\|off`, `anim reverse`, `anim global [on\|off]` |
+| Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]`, `anim step <n>`, `anim key next\|prev\|first\|last`, `anim loop on\|off`, `anim reverse`, `anim global [on\|off]`, `anim select all\|invert\|none`, `object pack [xform] [loop]`, `object unpack`, `import sprites <file>` |
 | Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|free\|frame [all\|selection\|group\|instance]` (`orth`, `pers` also), `camera zoom <f>\|slots\|save <0-9>\|load <0-9>`, `snap [file.png]`, `snap window [file.png]`, `render save <file.png>`, `render image <w> <h> <samples> <file.png>\|cancel`, `render spin <frames> <degrees> <blur %> <w> <h> <samples> <file.png>`, `camera set x\|y\|z\|pitch\|yaw\|roll\|zoom\|fov\|mouse\|keys <v>` |
 | View | `view [edges\|frame\|grid\|bg\|wire\|shadow] [on\|off]`, `view cube [on\|off]`, `view ruler [on\|off]`, `view ao\|flat\|fade [on\|off]`, `view colour bg\|grid\|edge\|select <colour>`, `view spacing <n>`, `view scale <f>\|inc\|dec` |
 | Edit | `full`, `zero`, `rev`, `x2`, `xh`, `loop <axis> <n>`, `scale <axes> <f>`, `shear <axis> <a> <b>`, `rot <axis> <deg>`, `repeat <axes> <n>`, `mir <axis>`, `dia <axis>`, `prim elli\|cyli\|pyra\|cone`, `flood [c]`, `hull`, `dil\|ero [6\|18\|26]`, `mask`, `tex`, `maze [p]`, `noise [seed] [scale] [lo] [hi]`, `fractal` |

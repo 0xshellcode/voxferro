@@ -283,6 +283,9 @@ impl App {
                 if can_import && ui.button("Import models").on_hover_text("Add its models to this scene").clicked() {
                     choice = Some("import");
                 }
+                if can_import && ui.button("Import sprites").on_hover_text("Its models as the frames of one looping animation").clicked() {
+                    choice = Some("sprites");
+                }
                 if ext == "png" && ui.button("Use as palette").on_hover_text("A 256x1 palette image").clicked() {
                     choice = Some("palette");
                 }
@@ -307,6 +310,8 @@ impl App {
                 return;
             }
             Some("import") => self.import_command(&format!("import {path}")),
+            // the reference editor's Import Sprites: import, then pack what came in.
+            Some("sprites") => self.import_command(&format!("import sprites {path}")),
             Some("palette") => self.palette_file_command(&format!("palette open {path}"), state).unwrap_or_default(),
             _ => return,
         };

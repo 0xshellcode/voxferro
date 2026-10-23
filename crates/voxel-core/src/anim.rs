@@ -43,6 +43,22 @@ pub fn keyframes(node: &TransformNode) -> Vec<(u32, Transform)> {
     keys
 }
 
+/// Whether a transform node carries keys (`_f`), rather than one placement.
+pub fn is_keyed(node: &TransformNode) -> bool {
+    node.frames.iter().any(|d| d.get("_f").is_some())
+}
+
+/// A transform node's placement at `frame`, stepping from key to key
+/// without interpolating: the key on that frame, else the one before, else
+/// the first; `_loop` wraps the frame first. How the reference editor's unpack places
+/// each frame.
+pub fn key_at(node: &TransformNode, frame: u32) -> Transform {
+    let keys = keyframes(node);
+    let Some(&(_, first)) = keys.first() else { return Transform::default() };
+    let frame = if looping(&node.attributes) { frame % (keys.last().map_or(0, |k| k.0) + 1) } else { frame };
+    keys.iter().rev().find(|k| k.0 <= frame).map_or(first, |k| k.1)
+}
+
 /// A transform node's own placement at `frame`.
 ///
 /// Before the first key, the first key holds; after the last, the last.

@@ -317,6 +317,23 @@ impl Scene {
 
     /// The nodes without the key transform node `node` has on the current
     /// frame. Its only key cannot go.
+    /// The nodes with the keys of transform node `node` on `frames` removed
+    /// -- all but one, if they were all of them.
+    pub fn with_keys_removed(&self, node: i32, frames: &[u32]) -> Result<Vec<SceneNode>, GraphError> {
+        let mut nodes = self.nodes.clone();
+        let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == node) else {
+            return Err(GraphError::NotPlaceable);
+        };
+        let mut removed = false;
+        for &f in frames {
+            removed |= crate::anim::remove_key(t, f);
+        }
+        if !removed {
+            return Err(GraphError::NoKey);
+        }
+        Ok(nodes)
+    }
+
     pub fn with_key_removed(&self, node: i32) -> Result<Vec<SceneNode>, GraphError> {
         let mut nodes = self.nodes.clone();
         let Some(SceneNode::Transform(t)) = nodes.iter_mut().find(|n| n.id() == node) else {
@@ -567,6 +584,136 @@ impl Scene {
             Some(SceneNode::Group(g)) => g.children = order,
             _ => return Err(GraphError::NotAGroup),
         }
+        Ok(compact(nodes))
+    }
+
+    /// The nodes with instances packed into one animated object, as
+    /// the reference editor's `opack` (Pack Models to Animation) does.
+    ///
+    /// `indices` are taken in outline order. The new object takes the first
+    /// one's place in its group, its name, layer and placement; its shape
+    /// shows each instance's model on a frame of its own -- 0, 1, 2... when
+    /// the first instance has no keys, else each one's first key's frame
+    /// (instances without keys are dropped then, as are later ones on a
+    /// frame already taken). With `xform`, each frame is also keyed at that
+    /// instance's placement, unless they are all placed alike; with
+    /// `looped`, the shape loops (`_loop`). The packed instances go.
+    pub fn with_packed(&self, indices: &[usize], xform: bool, looped: bool) -> Result<Vec<SceneNode>, GraphError> {
+        let mut picked: Vec<&Instance> = Vec::new();
+        for &i in indices {
+            let instance = self.instances.get(i).ok_or(GraphError::NoInstance)?;
+            instance.node.ok_or(GraphError::NotPlaceable)?;
+            picked.push(instance);
+        }
+        let first = *picked.first().ok_or(GraphError::NoInstance)?;
+        let transform_of = |inst: &Instance| match find(&self.nodes, inst.node.unwrap_or(-1)) {
+            Some(SceneNode::Transform(t)) => Some(t),
+            _ => None,
+        };
+        let head = transform_of(first).ok_or(GraphError::NotPlaceable)?;
+        let group = parent_group(&self.nodes, head.id).ok_or(GraphError::NoGroup)?;
+
+        // Each instance's frame.
+        let mut framed: Vec<(i64, &Instance)> = if !crate::anim::is_keyed(head) {
+            picked.iter().enumerate().map(|(k, &inst)| (k as i64, inst)).collect()
+        } else {
+            picked
+                .iter()
+                .map(|&inst| {
+                    let f = transform_of(inst)
+                        .filter(|t| crate::anim::is_keyed(t))
+                        .and_then(|t| crate::anim::keyframes(t).first().map(|k| k.0 as i64))
+                        .unwrap_or(-1);
+                    (f, inst)
+                })
+                .collect()
+        };
+        framed.sort_by_key(|(f, _)| *f);
+        framed.dedup_by_key(|(f, _)| *f);
+        framed.retain(|(f, _)| *f >= 0);
+
+        // Placements under the first instance's parent.
+        let local = |inst: &Instance| inst.transform.then(&first.parent.inverse());
+        let next = self.nodes.iter().map(SceneNode::id).max().unwrap_or(-1) + 1;
+        let mut transform = TransformNode { id: next, attributes: Dict::default(), child: next + 1, layer: head.layer, frames: Vec::new() };
+        if let Some(name) = head.attributes.get("_name") {
+            transform.attributes.set("_name", name);
+        }
+        let differ = framed.iter().any(|(_, inst)| local(inst) != local(first));
+        if xform && differ {
+            for (f, inst) in &framed {
+                crate::anim::set_local_at(&mut transform, *f as u32, local(inst));
+            }
+        } else {
+            let l = local(first);
+            transform.set_placement(l.translation.to_array(), l.rotation_bits());
+        }
+        let mut shape = ShapeNode { id: next + 1, attributes: Dict::default(), models: Vec::new() };
+        for (f, inst) in &framed {
+            shape.models.push(ShapeModel {
+                model_id: inst.model_index as i32,
+                attributes: Dict(vec![("_f".into(), f.to_string())]),
+            });
+        }
+        if looped {
+            shape.attributes.set("_loop", "1");
+        }
+
+        let mut nodes = self.nodes.clone();
+        let gone: Vec<i32> = picked.iter().filter_map(|inst| transform_of(inst)).flat_map(|t| [t.id, t.child]).collect();
+        if let Some(SceneNode::Group(g)) = nodes.iter_mut().find(|n| n.id() == group) {
+            let at = g.children.iter().position(|&c| c == head.id).unwrap_or(g.children.len());
+            g.children.insert(at, next);
+        }
+        for node in &mut nodes {
+            if let SceneNode::Group(g) = node {
+                g.children.retain(|c| !gone.contains(c));
+            }
+        }
+        nodes.retain(|n| !gone.contains(&n.id()));
+        nodes.push(SceneNode::Transform(transform));
+        nodes.push(SceneNode::Shape(shape));
+        Ok(compact(nodes))
+    }
+
+    /// The nodes with an animated instance unpacked, as the reference editor's
+    /// `ounpack`: each model of its shape becomes an instance of its own, in
+    /// its place, placed as the key at that model's frame (stepping between
+    /// keys, not interpolating) and named as the original.
+    pub fn with_unpacked(&self, index: usize) -> Result<Vec<SceneNode>, GraphError> {
+        let instance = self.instances.get(index).ok_or(GraphError::NoInstance)?;
+        let node = instance.node.ok_or(GraphError::NotPlaceable)?;
+        let Some(SceneNode::Transform(t)) = find(&self.nodes, node) else { return Err(GraphError::NotPlaceable) };
+        let Some(SceneNode::Shape(s)) = find(&self.nodes, t.child) else { return Err(GraphError::NotPlaceable) };
+        if s.models.len() < 2 {
+            return Err(GraphError::NoKey);
+        }
+        let group = parent_group(&self.nodes, t.id).ok_or(GraphError::NoGroup)?;
+        let frame_of = |m: &ShapeModel| m.attributes.get("_f").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        let mut models = s.models.clone();
+        models.sort_by_key(frame_of);
+
+        let mut nodes = self.nodes.clone();
+        let mut next = nodes.iter().map(SceneNode::id).max().unwrap_or(-1) + 1;
+        let mut added = Vec::new();
+        for m in models {
+            let local = crate::anim::key_at(t, frame_of(&m));
+            let mut transform = TransformNode { id: next, attributes: Dict::default(), child: next + 1, layer: t.layer, frames: Vec::new() };
+            if let Some(name) = t.attributes.get("_name") {
+                transform.attributes.set("_name", name);
+            }
+            transform.set_placement(local.translation.to_array(), local.rotation_bits());
+            nodes.push(SceneNode::Transform(transform));
+            nodes.push(SceneNode::Shape(ShapeNode { id: next + 1, attributes: Dict::default(), models: vec![m] }));
+            added.push(next);
+            next += 2;
+        }
+        if let Some(SceneNode::Group(g)) = nodes.iter_mut().find(|n| n.id() == group) {
+            let at = g.children.iter().position(|&c| c == t.id).unwrap_or(g.children.len());
+            g.children.splice(at..=at.min(g.children.len().saturating_sub(1)), added);
+        }
+        let gone = [t.id, t.child];
+        nodes.retain(|n| !gone.contains(&n.id()));
         Ok(compact(nodes))
     }
 
@@ -1396,5 +1543,57 @@ mod tests {
         let nodes = s.with_nodes_attribute(&[inner, leaf], "_hidden", Some("1")).unwrap();
         apply(&mut s, nodes);
         assert_eq!(s.tree().iter().filter(|r| r.hidden).count(), 2);
+    }
+
+    #[test]
+    fn packing_makes_frames_and_unpacking_gives_them_back() {
+        let mut s = scene();
+        let nodes = s.with_instance_duplicated(0, IVec3::new(10, 0, 0)).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(s.instances.len(), 3);
+        let places: Vec<Transform> = s.instances.iter().map(|i| i.transform).collect();
+        let models: Vec<usize> = s.instances.iter().map(|i| i.model_index).collect();
+
+        // Packed with their placements: one instance, a frame each.
+        let nodes = s.with_packed(&[0, 1, 2], true, true).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(s.instances.len(), 1);
+        assert_depth_first(&s.nodes);
+        for (f, (&model, place)) in models.iter().zip(&places).enumerate() {
+            s.frame = f as u32;
+            s.rebuild();
+            assert_eq!(s.instances[0].model_index, model, "frame {f}");
+            assert_eq!(s.instances[0].transform, *place, "frame {f}");
+        }
+        let shape = s.nodes.iter().find_map(|n| match n {
+            SceneNode::Shape(sh) => Some(sh),
+            _ => None,
+        });
+        assert_eq!(shape.unwrap().attributes.get("_loop"), Some("1"));
+
+        // Unpacked: back to three, each where its frame had it.
+        s.frame = 0;
+        s.rebuild();
+        let nodes = s.with_unpacked(0).unwrap();
+        apply(&mut s, nodes);
+        assert_eq!(s.instances.len(), 3);
+        let mut back: Vec<(usize, IVec3)> = s.instances.iter().map(|i| (i.model_index, i.transform.translation)).collect();
+        let mut want: Vec<(usize, IVec3)> = models.iter().zip(&places).map(|(&m, p)| (m, p.translation)).collect();
+        back.sort_by_key(|k| (k.1.x, k.1.y, k.1.z));
+        want.sort_by_key(|k| (k.1.x, k.1.y, k.1.z));
+        assert_eq!(back, want);
+        assert_depth_first(&s.nodes);
+    }
+
+    #[test]
+    fn packing_without_xform_keeps_the_first_place() {
+        let mut s = scene();
+        let first = s.instances[0].transform;
+        let nodes = s.with_packed(&[0, 1], false, false).unwrap();
+        apply(&mut s, nodes);
+        s.frame = 1;
+        s.rebuild();
+        assert_eq!(s.instances[0].transform, first, "no keys: every frame at the first's place");
+        assert!(s.with_unpacked(0).is_ok());
     }
 }
