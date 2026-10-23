@@ -23,6 +23,29 @@
 //! | Tab, Shift+Tab | into and out of a group (in `objects.rs`) |
 //! | Cmd+E F G B M | display switches (in `view_options.rs`); in the render, Cmd+E and G its edges and grid |
 //! | Cmd+minus, Cmd+plus | interface scale, in eighths (in `view_options.rs`) |
+//! | F1 | the console takes the keyboard |
+//! | F2 | between the editor and the render |
+//! | Cmd+P, Cmd+Shift+P | a new project; a copy of this one in its folder |
+//!
+//! In the Move tool, the reference editor's world editor (in `objects.rs`):
+//!
+//! | Keys | Does |
+//! |---|---|
+//! | arrows, Page Up, Page Down | move the objects a voxel along x, y, z |
+//! | - +, 0 9 | a quarter turn about z, about x, either way |
+//! | G | move the objects down to the ground |
+//! | Cmd+R, Cmd+Shift+R | group the objects; dissolve the selected group |
+//! | Cmd+C, Cmd+Shift+C, Cmd+X, Cmd+V | copy, copy as references, cut, paste |
+//! | Cmd+T | a reference made a model of its own |
+//! | Cmd+A, Cmd+I, Cmd+D, Delete | select all, invert, none; delete |
+//!
+//! In the render: Cmd+E and Cmd+G its lines, Cmd+U the ground, Cmd+B the
+//! background colour, Cmd+C and Cmd+V the brush colour's material, Cmd+R
+//! that material back to diffuse (in `view_options.rs`).
+//!
+//! Not taken: Cmd+H and Cmd+W, which hide and close the app on macOS;
+//! Ctrl+5, Ctrl+6 and F12, whose actions the editor's files do not name;
+//! the camera slots on the keypad, which egui cannot tell from the digits.
 //!
 //! Where these took a key this editor had used, the editor's moved: the
 //! fixed views are Alt+1 to Alt+7, the eyedropper Alt+click, and framing
@@ -47,7 +70,23 @@ impl App {
             let (cmd, shift, alt) = (i.modifiers.command, i.modifiers.shift, i.modifiers.alt);
             let plain = !cmd && !alt;
             let pressed = |k: Key| i.key_pressed(k);
-            if plain && !shift {
+            // Global, as the reference editor's: F1 the console, F2 between the
+            // editor and the render, Cmd+P a new project and Cmd+Shift+P a
+            // copy of it.
+            if pressed(Key::F1) {
+                self.focus_console = true;
+            }
+            if pressed(Key::F2) {
+                lines.push(if self.rendering { "mode model" } else { "mode render" }.to_owned());
+            }
+            // (Cmd+P alone, a new project, is with Cmd+N in `file_input`.)
+            if cmd && shift && pressed(Key::P) {
+                lines.push("project dup".to_owned());
+            }
+            // The Move tool is the reference editor's world editor, with keys of its
+            // own (`object_input`): the model editor's letters stay out.
+            let model_keys = !self.moving && !self.rendering;
+            if plain && !shift && model_keys {
                 // In the free camera, W A S D Q E fly; none of these clash.
                 for (key, line) in [
                     (Key::V, "brush voxel"),
@@ -72,6 +111,8 @@ impl App {
                 if pressed(Key::I) {
                     edits.push("fill");
                 }
+            }
+            if plain && !shift {
                 if pressed(Key::Num5) {
                     lines.push("camera frame".to_owned());
                 }
@@ -98,7 +139,7 @@ impl App {
                 }
             }
             for (k, key) in [Key::Num1, Key::Num2, Key::Num3].into_iter().enumerate() {
-                if pressed(key) && !alt && !shift {
+                if pressed(key) && !alt && !shift && model_keys {
                     if cmd {
                         self.axis_lock[k] = !self.axis_lock[k];
                     } else {
@@ -118,7 +159,7 @@ impl App {
                 };
                 lines.push(format!("anim key {which}"));
             }
-            if cmd && !shift && pressed(Key::I) {
+            if cmd && !shift && pressed(Key::I) && model_keys {
                 lines.push("select invert".to_owned());
             }
             // the reference editor clears the whole model here. Not this editor: a
@@ -133,6 +174,11 @@ impl App {
         for line in lines {
             let first = line.split_whitespace().next();
             let message = match first {
+                Some("mode") => {
+                    self.rendering = line.ends_with("render");
+                    self.path_tracer.reset();
+                    if self.rendering { "render" } else { "model editor" }.to_owned()
+                }
                 Some("brush") => self.brush_command(&line),
                 Some("camera") => self.camera_command(&line),
                 Some("select") => self.select_command(&line, ctx),

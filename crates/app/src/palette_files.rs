@@ -101,6 +101,11 @@ impl App {
     /// per-colour form.
     pub fn palette_file_command(&mut self, line: &str, state: &egui_wgpu::RenderState) -> Option<String> {
         let words: Vec<&str> = line.split_whitespace().collect();
+        // Only `palette ...`: `material reset` once reset the whole palette
+        // through here.
+        if words.first() != Some(&"palette") {
+            return None;
+        }
         Some(match words.get(1..).unwrap_or_default() {
             ["open", path @ ..] if !path.is_empty() => {
                 let path = path.join(" ");

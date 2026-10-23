@@ -302,6 +302,8 @@ impl App {
             let message = match word {
                 "edges" if self.rendering => self.lines_command(&["edge"]),
                 "grid" if self.rendering => self.lines_command(&["grid"]),
+                // Its Display Background Color in the render.
+                "bg" if self.rendering => self.render_background_toggle(),
                 _ => self.view_command(&format!("view {word}")),
             };
             self.console_log.push(message);

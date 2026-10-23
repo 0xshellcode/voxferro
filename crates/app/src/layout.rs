@@ -507,6 +507,9 @@ impl App {
                         .font(egui::TextStyle::Monospace)
                         .desired_width(ui.available_width()),
                 );
+                if std::mem::take(&mut self.focus_console) {
+                    response.request_focus();
+                }
                 if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     let line = std::mem::take(&mut self.console_input);
                     let ctx = ui.ctx().clone();

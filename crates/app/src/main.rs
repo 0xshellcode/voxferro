@@ -371,6 +371,10 @@ struct App {
     export_local: bool,
     /// A file dropped on the window, and where, while its menu is open.
     dropped: Option<(String, egui::Pos2)>,
+    /// `material copy`: a colour's material, or none (diffuse), to paste.
+    material_clip: Option<Option<vox_format::Material>>,
+    /// F1: the console takes the keyboard on the next frame.
+    focus_console: bool,
     /// What the viewport mesh was built with: the occlusion switch and the
     /// faded instances (see `App::fade_key`). A change re-meshes.
     meshed_with: (bool, Option<usize>),
@@ -547,6 +551,8 @@ impl App {
             export_selected: false,
             export_local: false,
             dropped: None,
+            material_clip: None,
+            focus_console: false,
             meshed_with: (true, None),
             meshed_for: None,
             pending_snap: None,
@@ -2045,6 +2051,7 @@ impl eframe::App for App {
         self.brush_input(&ctx);
         self.hotkeys(&ctx, &state);
         self.object_input(&ctx);
+        self.render_input(&ctx, &state);
         self.level_input(&ctx);
         if !self.view.background && self.meshed_for != Some(self.selected) {
             self.mesh_dirty = true;

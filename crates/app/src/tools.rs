@@ -537,10 +537,14 @@ impl App {
     /// - and + resize the voxel brush, as in the reference editor.
     pub fn brush_input(&mut self, ctx: &eframe::egui::Context) {
         use eframe::egui::Key;
-        if ctx.egui_wants_keyboard_input() {
+        // In the Move tool - and + turn the objects (`object_input`).
+        if ctx.egui_wants_keyboard_input() || self.moving {
             return;
         }
-        let (down, up) = ctx.input(|i| (i.key_pressed(Key::Minus), i.key_pressed(Key::Equals) || i.key_pressed(Key::Plus)));
+        let (down, up) = ctx.input(|i| {
+            let plain = !i.modifiers.command && !i.modifiers.alt;
+            (plain && i.key_pressed(Key::Minus), plain && (i.key_pressed(Key::Equals) || i.key_pressed(Key::Plus)))
+        });
         let size = &mut self.brush_options.size;
         if down {
             *size = size.saturating_sub(1).max(1);

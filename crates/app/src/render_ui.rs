@@ -20,6 +20,10 @@ enum Sky {
     Image,
 }
 
+/// What a material copy leaves in the system clipboard, so its Paste is
+/// recognised as one.
+const MATERIAL_MARKER: &str = "Voxferro material";
+
 impl App {
     /// Records `env` as the document's render settings. `merge` folds the
     /// frames of one slider drag into a single undo step.
@@ -415,6 +419,15 @@ impl App {
                 return format!("voxels as {}", args[1]);
             }
             Some("grid" | "edge") => return self.lines_command(&args),
+            Some("ground") => {
+                env.ground_enabled = match args.get(1) {
+                    Some(&"on") => true,
+                    Some(&"off") => false,
+                    None => !env.ground_enabled,
+                    _ => return "env ground [on|off]".to_owned(),
+                };
+                format!("ground {}", if env.ground_enabled { "on" } else { "off" })
+            }
             Some("dof") => {
                 self.dof = args.get(1).is_none_or(|v| *v != "off");
                 self.environment.dof = self.dof;
@@ -525,7 +538,7 @@ impl App {
             _ => {
                 return "env uniform | atmosphere [elev] | ibl [map] [i] [rot] | dof [on|off] | background sky|none|<colour> | shape <kind> [size] | grid|edge on|off [width] | \
                         lens [aperture] [blades] [angle] | bloom [mix] [scale] [aspect] [threshold] | vig <v> | fog <density> [g] | \
-                        bounce <diffuse> [specular] [scatter] | energy <n> | aa [on|off] | proj perspective|sg|panorama [fov] | focus <depth>|auto"
+                        bounce <diffuse> [specular] [scatter] | energy <n> | aa [on|off] | proj perspective|sg|panorama [fov] | focus <depth>|auto | ground [on|off]"
                     .to_owned();
             }
         };
@@ -617,6 +630,51 @@ impl App {
             format!("grid {} (width {}, every {})", if l.grid { "on" } else { "off" }, l.grid_width, l.grid_spacing)
         } else {
             format!("edges {} (width {})", if l.edge { "on" } else { "off" }, l.edge_width)
+        }
+    }
+
+    /// The render's background between the sky and its colour (Cmd+B in
+    /// the render, the reference editor's `pt_b_bg_c`).
+    pub fn render_background_toggle(&mut self) -> String {
+        self.look.background = match self.look.background {
+            Background::Colour => Background::Sky,
+            _ => Background::Colour,
+        };
+        self.apply_look();
+        self.path_tracer.reset();
+        format!("background {:?}", self.look.background).to_lowercase()
+    }
+
+    /// The renderer's own keys, the reference editor's: Cmd+U the ground, Cmd+C and
+    /// Cmd+V the brush colour's material, Cmd+R that material back to
+    /// diffuse. (Cmd+E, G and B are with the display switches.)
+    pub fn render_input(&mut self, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
+        if !self.rendering || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let mut lines: Vec<&str> = Vec::new();
+        ctx.input(|i| {
+            let cmd = i.modifiers.command && !i.modifiers.shift;
+            if cmd && i.key_pressed(egui::Key::U) {
+                lines.push("env ground");
+            }
+            if cmd && i.key_pressed(egui::Key::R) {
+                lines.push("material reset");
+            }
+            for event in &i.events {
+                match event {
+                    egui::Event::Copy => lines.push("material copy"),
+                    egui::Event::Paste(text) if text == MATERIAL_MARKER => lines.push("material paste"),
+                    _ => {}
+                }
+            }
+        });
+        for line in lines {
+            let message = if line.starts_with("env") { self.env_command(line, state) } else { self.palette_command(line, state) };
+            if line == "material copy" {
+                ctx.copy_text(MATERIAL_MARKER.to_owned());
+            }
+            self.console_log.push(message);
         }
     }
 

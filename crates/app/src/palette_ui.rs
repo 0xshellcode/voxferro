@@ -157,6 +157,30 @@ impl App {
             return message;
         }
         let words: Vec<&str> = line.split_whitespace().collect();
+        // the reference editor's material clipboard (`mtl_copy`, `mtl_paste`,
+        // `mtl_reset`), on the brush's colour.
+        if let ["material", verb @ ("copy" | "paste" | "reset")] = words.as_slice() {
+            let index = self.brush_color;
+            let Some(loaded) = self.scene.as_mut() else { return "nothing open".to_owned() };
+            let before = loaded.doc.material(index).cloned();
+            let after = match *verb {
+                "copy" => {
+                    self.material_clip = Some(before);
+                    return format!("copied the material of colour {index}");
+                }
+                "paste" => match &self.material_clip {
+                    Some(m) => m.clone().map(|m| vox_format::Material { id: index as i32, ..m }),
+                    None => return "no material copied".to_owned(),
+                },
+                _ => None,
+            };
+            self.history.end_gesture();
+            if self.history.exec_alone(&mut loaded.doc, Command::SetMaterial { index, before, after }) {
+                self.refresh_colors(state);
+                self.upload_trace_volume(state);
+            }
+            return if *verb == "paste" { format!("material pasted on colour {index}") } else { format!("colour {index} is diffuse again") };
+        }
         let index = words.get(1).and_then(|w| w.parse::<u8>().ok()).filter(|&i| i > 0);
         let Some(index) = index else {
             return "palette <1-255> <r> <g> <b> | material <1-255> <kind> [key=value]...".to_owned();

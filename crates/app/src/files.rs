@@ -227,7 +227,8 @@ impl App {
                 cmd && !i.modifiers.shift && i.key_pressed(egui::Key::S),
                 cmd && i.modifiers.shift && i.key_pressed(egui::Key::S),
                 cmd && i.key_pressed(egui::Key::O),
-                cmd && i.key_pressed(egui::Key::N),
+                // Cmd+P too: the reference editor's new project.
+                cmd && !i.modifiers.shift && (i.key_pressed(egui::Key::N) || i.key_pressed(egui::Key::P)),
             )
         });
         if save

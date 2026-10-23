@@ -23,6 +23,10 @@ use eframe::egui;
 use glam::{IVec3, Vec3};
 use voxel_core::Transform;
 
+/// What an object copy leaves in the system clipboard, so its Paste is
+/// recognised as one.
+const OBJECTS_MARKER: &str = "Voxferro objects";
+
 impl App {
     /// The transform nodes the object commands act on: the selection, or
     /// the current model's (or selected group's) node. Never one inside
@@ -133,33 +137,92 @@ impl App {
         format!("{} objects selected: {:?}", self.object_indices().len(), self.object_indices())
     }
 
-    /// Cmd+A, Cmd+I, Cmd+D and Delete for objects, in the Move tool.
+    /// the reference editor's world-editor keys, in the Move tool (see `hotkeys`).
     pub fn object_input(&mut self, ctx: &egui::Context) {
-        if !self.moving || ctx.egui_wants_keyboard_input() {
+        if !self.moving || self.rendering || ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (all, invert, none, delete) = ctx.input(|i| {
-            let cmd = i.modifiers.command && !i.modifiers.shift;
-            (
-                cmd && i.key_pressed(egui::Key::A),
-                cmd && i.key_pressed(egui::Key::I),
-                cmd && i.key_pressed(egui::Key::D),
-                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
-            )
+        use egui::Key;
+        let mut lines: Vec<String> = Vec::new();
+        ctx.input(|i| {
+            let (cmd, shift, alt) = (i.modifiers.command, i.modifiers.shift, i.modifiers.alt);
+            let plain = !cmd && !alt;
+            let pressed = |k: Key| i.key_pressed(k);
+            let mut line = |l: &str| lines.push(l.to_owned());
+            if cmd && !shift && pressed(Key::A) {
+                line("object all");
+            }
+            if cmd && !shift && pressed(Key::I) {
+                line("object invert");
+            }
+            if cmd && !shift && pressed(Key::D) {
+                line("object none");
+            }
+            if !cmd && (pressed(Key::Delete) || pressed(Key::Backspace)) {
+                line("object delete");
+            }
+            if cmd && pressed(Key::R) {
+                line(if shift { "ungroup" } else { "group" });
+            }
+            if cmd && !shift && pressed(Key::T) {
+                line("object own");
+            }
+            if cmd && shift && pressed(Key::C) {
+                line("object copy ref");
+            }
+            for event in &i.events {
+                match event {
+                    egui::Event::Copy if !shift => line("object copy"),
+                    egui::Event::Cut => line("object cut"),
+                    egui::Event::Paste(text) if text == OBJECTS_MARKER => line("object paste"),
+                    _ => {}
+                }
+            }
+            if plain {
+                let mut delta = IVec3::ZERO;
+                for (key, step) in [
+                    (Key::ArrowLeft, -IVec3::X),
+                    (Key::ArrowRight, IVec3::X),
+                    (Key::ArrowDown, -IVec3::Y),
+                    (Key::ArrowUp, IVec3::Y),
+                    (Key::PageDown, -IVec3::Z),
+                    (Key::PageUp, IVec3::Z),
+                ] {
+                    if pressed(key) {
+                        delta += step;
+                    }
+                }
+                if delta != IVec3::ZERO {
+                    line(&format!("object move {} {} {}", delta.x, delta.y, delta.z));
+                }
+                // Its `orot`: minus and zero a turn one way, plus and nine
+                // the other.
+                if pressed(Key::Minus) {
+                    line("object turn z");
+                }
+                if pressed(Key::Plus) || pressed(Key::Equals) {
+                    line("object turn z -");
+                }
+                if pressed(Key::Num0) {
+                    line("object turn x");
+                }
+                if pressed(Key::Num9) {
+                    line("object turn x -");
+                }
+                if !shift && pressed(Key::G) {
+                    line("object ground");
+                }
+            }
         });
-        let line = if all {
-            "object all"
-        } else if invert {
-            "object invert"
-        } else if none {
-            "object none"
-        } else if delete {
-            "object delete"
-        } else {
-            return;
-        };
-        let message = self.object_command(line);
-        self.console_log.push(message);
+        for line in lines {
+            let message = if line == "group" || line == "ungroup" { self.group_command(&line) } else { self.object_command(&line) };
+            // A copy marks the clipboard, so the system's Paste comes back
+            // as one (as the voxel clipboard does).
+            if line.starts_with("object copy") || line == "object cut" {
+                ctx.copy_text(OBJECTS_MARKER.to_owned());
+            }
+            self.console_log.push(message);
+        }
     }
 
     /// The world placements of the object nodes, and the centre of what
@@ -223,10 +286,11 @@ impl App {
                 (Ok(x), Ok(y), Ok(z)) => self.objects_moved(IVec3::new(x, y, z)),
                 _ => return "object move <dx> <dy> <dz>".to_owned(),
             },
-            ["turn", axis] => {
-                let Some(axis) = crate::outline::parse_axis(&[axis]) else { return "object turn x|y|z".to_owned() };
+            ["turn", axis, rest @ ..] if rest.is_empty() || rest == ["-"] => {
+                let Some(axis) = crate::outline::parse_axis(&[axis]) else { return "object turn x|y|z [-]".to_owned() };
                 let Some((_, centre)) = self.object_worlds() else { return "no objects".to_owned() };
-                self.objects_turned(axis, 1, centre)
+                // `-` turns the other way: three quarter turns.
+                self.objects_turned(axis, if rest.is_empty() { 1 } else { 3 }, centre)
             }
             ["delete"] => return self.delete_objects(),
             ["transform", "copy"] => return self.copy_transform(),

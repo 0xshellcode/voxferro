@@ -257,7 +257,15 @@ Alt+1–7 fixed views, O orthographic, - and + brush size, W A S D Q E fly (free
 Cmd+E/F/G/B/M display switches (Shadow has none: Cmd+W closes the window);
 Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z or Cmd+Y; with a selection,
 Cmd+A, Esc or Cmd+D to deselect, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it;
-Enter keeps and Esc drops a pending mouse transform.
+Enter keeps and Esc drops a pending mouse transform. Also the reference editor's:
+F1 the console, F2 between editor and render, Cmd+P a new project and
+Cmd+Shift+P a copy of it. In the Move tool, its world editor's: arrows
+and Page Up/Down move the objects, - + and 0 9 turn them about z and x,
+G drops them to the ground, Cmd+R groups and Cmd+Shift+R ungroups,
+Cmd+C, Cmd+Shift+C (as references), Cmd+X and Cmd+V, Cmd+T makes a
+reference a model of its own. In the render: Cmd+U the ground, Cmd+B the
+background colour, Cmd+C and Cmd+V the brush colour's material, Cmd+R
+that material back to diffuse.
 
 **Console** (along the bottom; `help` lists the commands):
 
@@ -271,15 +279,15 @@ Enter keeps and Esc drops a pending mouse transform.
 | Selection | `select all\|none\|invert\|color [n]`, `delete`, `paint [c]`, `copy`, `cut`, `paste`, `move dx dy dz`, `transform scale <axes> <f>`, `transform rotate <axis> <deg>`, `transform wrap <x\|-x\|y\|-y\|z\|-z> <cells> [two]`, `transform spacing <x> <y> <z>`, `transform drag move\|scale\|turn\|wrap\|off`, `transform keep\|drop` |
 | Model | `rotate x\|y\|z` (or `rot90`), `mirror x\|y\|z` (or `flip`), `crop` (or `shrink`), `resize x y z`, `fill`, `clear`, `box`, `sphere`, `voxels x y z c …`, `gpu …` |
 | Scene | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
-| Objects | `object all\|none\|invert\|add i\|remove i\|list`, `object move dx dy dz\|turn x\|y\|z\|delete`, `object align x\|y\|z -1\|0\|+1`, `object ground`, `object flip <axes>`, `object union\|intersect\|operand\|subtract\|replace`, `object copy [ref]\|cut\|paste\|own`, `object transform copy\|paste [rot\|pos]\|reset`, `object level in\|out` (Tab, Shift+Tab) |
-| Palette | `palette open\|save <file.png>`, `palette reset`, `palette default 0-3`, `palette swap\|gradient\|copy <a> <b>`, `palette paste <i>`, `palette <i> <r> <g> <b>`, `palette select all\|none\|invert\|used\|unused`, `palette sort <keys>`, `palette rand`, `palette set\|fill <colour>`, `palette adjust h\|s\|v\|r\|g\|b <n>`, `palette copy\|paste`, `material <i> <diffuse\|metal\|glass\|emit\|cloud\|blend> [key=value]…` |
+| Objects | `object all\|none\|invert\|add i\|remove i\|list`, `object move dx dy dz\|turn x\|y\|z [-]\|delete`, `object align x\|y\|z -1\|0\|+1`, `object ground`, `object flip <axes>`, `object union\|intersect\|operand\|subtract\|replace`, `object copy [ref]\|cut\|paste\|own`, `object transform copy\|paste [rot\|pos]\|reset`, `object level in\|out` (Tab, Shift+Tab) |
+| Palette | `palette open\|save <file.png>`, `palette reset`, `palette default 0-3`, `palette swap\|gradient\|copy <a> <b>`, `palette paste <i>`, `palette <i> <r> <g> <b>`, `palette select all\|none\|invert\|used\|unused`, `palette sort <keys>`, `palette rand`, `palette set\|fill <colour>`, `palette adjust h\|s\|v\|r\|g\|b <n>`, `palette copy\|paste`, `material <i> <diffuse\|metal\|glass\|emit\|cloud\|blend> [key=value]…`, `material copy\|paste\|reset` |
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `tree sort\|expand [all]\|close [inactive]\|hide [deep\|others]\|show [deep\|all]\|toggle`, `layer list\|new\|hide\|show\|toggle\|name\|assign\|current n\|only [n]\|all\|sort\|select [n]` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]`, `anim step <n>`, `anim key next\|prev\|first\|last`, `anim loop on\|off`, `anim reverse`, `anim global [on\|off]` |
 | Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|free\|frame [all\|selection\|group\|instance]` (`orth`, `pers` also), `camera zoom <f>\|slots\|save <0-9>\|load <0-9>`, `snap [file.png]`, `snap window [file.png]`, `render save <file.png>`, `render image <w> <h> <samples> <file.png>\|cancel`, `render spin <frames> <degrees> <blur %> <w> <h> <samples> <file.png>`, `camera set x\|y\|z\|pitch\|yaw\|roll\|zoom\|fov\|mouse\|keys <v>` |
 | View | `view [edges\|frame\|grid\|bg\|wire\|shadow] [on\|off]`, `view cube [on\|off]`, `view ruler [on\|off]`, `view ao\|flat\|fade [on\|off]`, `view colour bg\|grid\|edge\|select <colour>`, `view spacing <n>`, `view scale <f>\|inc\|dec` |
 | Edit | `full`, `zero`, `rev`, `x2`, `xh`, `loop <axis> <n>`, `scale <axes> <f>`, `shear <axis> <a> <b>`, `rot <axis> <deg>`, `repeat <axes> <n>`, `mir <axis>`, `dia <axis>`, `prim elli\|cyli\|pyra\|cone`, `flood [c]`, `hull`, `dil\|ero [6\|18\|26]`, `mask`, `tex`, `maze [p]`, `noise [seed] [scale] [lo] [hi]`, `fractal` |
 | Scripts | `xs [-n passes] [-c c1,c2,…] <script> [args…]`, `xs list`, `xs use <script> [args…]` |
-| Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>\|background sky\|none\|<colour>\|shape cube\|sphere\|cylinder\|brick\|clay\|mc [size]`, `env grid on\|off [width] [spacing] [ground]`, `env edge on\|off [width]`, `env grid\|edge colour <colour>`, `env bounce <diffuse> [specular] [scatter]`, `env energy <1-5000>`, `env aa [on\|off]`, `env proj perspective\|sg\|panorama [fov]`, `env focus <depth>\|auto` |
+| Render | `env uniform\|atmosphere [elev]\|ibl <map> [i] [rot]\|dof [on\|off]\|lens [aperture] [blades] [angle]\|bloom [mix] [scale] [aspect] [threshold]\|vig <v>\|background sky\|none\|<colour>\|shape cube\|sphere\|cylinder\|brick\|clay\|mc [size]`, `env grid on\|off [width] [spacing] [ground]`, `env edge on\|off [width]`, `env grid\|edge colour <colour>`, `env ground [on\|off]`, `env bounce <diffuse> [specular] [scatter]`, `env energy <1-5000>`, `env aa [on\|off]`, `env proj perspective\|sg\|panorama [fov]`, `env focus <depth>\|auto` |
 
 For testing without a mouse: `--click fx fy` and `--drag fx0 fy0 fx1 fy1`, in
 fractions of the viewport (see the flags above).
