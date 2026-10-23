@@ -108,6 +108,19 @@ struct Params {
 // Marching cubes cases (`mc_table` in pathtrace.rs): two vec4 a case, the
 // triangle count first, then each triangle's corners at six bits apiece.
 @group(0) @binding(10) var<uniform> mc_table: array<vec4<u32>, 512>;
+// Each cell's 3x3x3 neighbourhood as a mask (`neighbours.wgsl`): bit
+// (x + 1) + 3 (y + 1) + 9 (z + 1) for the voxel at that offset. Only bound
+// for marching cubes; a single texel otherwise.
+@group(0) @binding(11) var neighbours: texture_3d<u32>;
+
+// A cell's neighbourhood mask; 0 outside the grid, where a texture read
+// would return anything at all. Walks run on past the grid's edge.
+fn mc_around(cell: vec3<i32>) -> u32 {
+    if (any(cell < vec3<i32>(0)) || any(cell >= vec3<i32>(p.volume_size.xyz))) {
+        return 0u;
+    }
+    return textureLoad(neighbours, cell, 0).x;
+}
 
 const KIND_DIFFUSE: u32 = 0u;
 const KIND_METAL: u32 = 1u;
@@ -495,15 +508,8 @@ fn mc_corner(packed: u32) -> vec3<f32> {
 }
 
 fn mc_in(origin: vec3<f32>, dir: vec3<f32>, cell: vec3<i32>, t_in: f32, t_out: f32) -> ShapeHit {
-    // Which of the voxel and its 26 neighbours are solid: bit
-    // (x + 1) + 3 (y + 1) + 9 (z + 1).
-    var around = 0u;
-    for (var k = 0; k < 27; k = k + 1) {
-        let o = vec3<i32>(k % 3, (k / 3) % 3, k / 9) - vec3<i32>(1);
-        if (voxel_at(cell + o) != 0u) {
-            around = around | (1u << u32(k));
-        }
-    }
+    // Which of the voxel and its 26 neighbours are solid.
+    let around = mc_around(cell);
     var best = no_shape();
     var best_t = t_out;
     var best_base = vec3<i32>(0);
@@ -572,11 +578,10 @@ fn mc_in(origin: vec3<f32>, dir: vec3<f32>, cell: vec3<i32>, t_in: f32, t_out: f
 }
 
 // Whether marching cubes can reach into an empty voxel: only from a solid
-// neighbour across one of its faces.
+// neighbour across one of its faces -- bits 4, 10, 12, 14, 16 and 22 of its
+// neighbourhood.
 fn mc_reaches(cell: vec3<i32>) -> bool {
-    return voxel_at(cell + vec3<i32>(1, 0, 0)) != 0u || voxel_at(cell - vec3<i32>(1, 0, 0)) != 0u
-        || voxel_at(cell + vec3<i32>(0, 1, 0)) != 0u || voxel_at(cell - vec3<i32>(0, 1, 0)) != 0u
-        || voxel_at(cell + vec3<i32>(0, 0, 1)) != 0u || voxel_at(cell - vec3<i32>(0, 0, 1)) != 0u;
+    return (mc_around(cell) & 0x415410u) != 0u;
 }
 
 // The shape in a solid cell, entered through the face `entry` points out of.

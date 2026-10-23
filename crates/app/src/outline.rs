@@ -439,10 +439,10 @@ impl App {
 
         // Name and visibility, for a group or an instance alike.
         if let Some(row) = &row {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Name");
                 let mut name = row.name.clone().unwrap_or_default();
-                let edit = ui.add(egui::TextEdit::singleline(&mut name).desired_width(110.0));
+                let edit = ui.add(egui::TextEdit::singleline(&mut name).desired_width(96.0));
                 if edit.lost_focus() && name != row.name.clone().unwrap_or_default() {
                     let message = self.group_command(&format!("node name {name}"));
                     log(self, message);
@@ -459,7 +459,7 @@ impl App {
             // A group moves through its own node; everything in it follows.
             let world = self.scene.as_ref().and_then(|s| s.doc.scene.node_world(group));
             if let Some(world) = world {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Position");
                     let mut p = world.translation;
                     let mut changed = false;
@@ -479,7 +479,7 @@ impl App {
                     }
                 });
             }
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Turn");
                 for a in ["x", "y", "z"] {
                     if ui.small_button(a).on_hover_text(format!("A quarter turn about {a}, around its middle")).clicked() {
@@ -523,7 +523,7 @@ impl App {
         let log = |app: &mut App, message: String| app.console_log.push(message);
 
         ui.add_enabled_ui(instance.node.is_some(), |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Position");
                 let mut p = instance.transform.translation;
                 let mut changed = false;
@@ -543,7 +543,7 @@ impl App {
                     }
                 }
             });
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Turn");
                 for a in ["x", "y", "z"] {
                     if ui.small_button(a).on_hover_text(format!("A quarter turn about {a}")).clicked() {
@@ -616,7 +616,7 @@ impl App {
                         }
                     });
                     let mut name = layer.name().unwrap_or_default().to_owned();
-                    if ui.add(egui::TextEdit::singleline(&mut name).desired_width(120.0)).changed() {
+                    if ui.add(egui::TextEdit::singleline(&mut name).desired_width(96.0)).changed() {
                         let mut after = layers.clone();
                         if name.is_empty() {
                             after[index].attributes.remove("_name");

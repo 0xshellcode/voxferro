@@ -435,7 +435,7 @@ impl App {
         let Some((first, last)) = self.scene.as_ref().map(|s| s.anim_range()) else { return };
         let mut lines: Vec<String> = Vec::new();
         let mut frame = self.frame();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let play = if self.playing { "Pause" } else { "Play" };
             if ui.small_button(play).clicked() {
                 lines.push(if self.playing { "anim stop" } else { "anim play" }.to_owned());
@@ -456,7 +456,7 @@ impl App {
             self.set_frame(frame);
         }
         self.timeline(ui, first, last);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(format!("frame {}", self.frame()));
             ui.label("range");
             let (mut a, mut b) = (first, last);
@@ -467,7 +467,7 @@ impl App {
                 self.set_anim_range(a, b, true);
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (label, line, tip) in [
                 ("Key", "anim key", "Key the selected model or group's placement at this frame"),
                 ("Unkey", "anim unkey", "Remove its key at this frame"),
@@ -478,7 +478,7 @@ impl App {
                 }
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             match &self.export {
                 Some(job) => {
                     ui.label(format!("exporting frame {} of {}…", job.frame, job.last));

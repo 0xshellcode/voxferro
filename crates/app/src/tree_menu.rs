@@ -35,8 +35,8 @@ impl App {
     /// `hide` and `show` act on the selected objects alone; with `deep`, on
     /// them and everything inside (the reference editor's Hide and Show Sub
     /// Objects). `hide others` hides everything at each level from the
-    /// scene down to the open group but the way down and the selection;
-    /// `show all` shows every object in the scene.
+    /// scene down to the open group, and down to each selected object, but
+    /// the way down and the selection; `show all` shows every object.
     pub fn tree_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().skip(1).collect();
         let usage = "tree sort | expand [all] | close [inactive] | hide [deep|others] | show [deep|all] | toggle";
@@ -92,13 +92,18 @@ impl App {
                 if picked.is_empty() {
                     return "nothing selected".to_owned();
                 }
-                // Every level from the scene down to the open group...
+                // The way down to the open group and to each selected object
+                // -- the outline can pick one deeper than the open group,
+                // which the reference editor's cannot -- stays shown...
+                let mut keep: Vec<i32> = self.open_groups.clone();
+                for &n in &picked {
+                    keep.extend(scene.path_to(n));
+                }
+                // ...and everything else at each level along it is hidden.
                 let mut levels = scene.children_of(None);
-                for &g in &self.open_groups {
+                for &g in &keep {
                     levels.extend(scene.children_of(Some(g)));
                 }
-                // ...but the way down and the selection, shown.
-                let keep: Vec<i32> = self.open_groups.iter().chain(&picked).copied().collect();
                 levels.retain(|n| !keep.contains(n));
                 (scene.with_visibility(&levels, &keep), "others hidden".to_owned())
             }

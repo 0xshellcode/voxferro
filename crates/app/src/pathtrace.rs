@@ -617,6 +617,20 @@ impl Environment {
     }
 }
 
+/// A 3D texture of one 32-bit mask a cell, written by `neighbours.wgsl`.
+fn mask_texture(device: &wgpu::Device, size: [u32; 3]) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("neighbourhood masks"),
+        size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: size[2] },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: wgpu::TextureFormat::R32Uint,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    })
+}
+
 /// The render object of a `_type`, added if the file had none.
 fn object<'a>(objects: &'a mut Vec<vox_format::Dict>, kind: &str) -> &'a mut vox_format::Dict {
     let index = match objects.iter().position(|o| o.get("_type") == Some(kind)) {
@@ -883,6 +897,14 @@ pub struct PathTracer {
     volume: Option<(wgpu::TextureView, [u32; 3])>,
     /// The volume's texture, kept to update parts of it in place.
     volume_texture: Option<wgpu::Texture>,
+    /// Each cell's 3x3x3 neighbourhood as a mask, for marching cubes
+    /// (`neighbours.wgsl`): made when that shape is first drawn, redone on
+    /// the GPU when the volume changes. A one-texel stand-in otherwise.
+    neighbours: Option<(wgpu::Texture, wgpu::TextureView)>,
+    neighbours_stale: bool,
+    no_neighbours: wgpu::TextureView,
+    neighbour_pipeline: wgpu::ComputePipeline,
+    neighbour_layout: wgpu::BindGroupLayout,
     target: Option<Target>,
     /// Frames accumulated since the last reset.
     pub samples: u32,
@@ -939,8 +961,62 @@ impl PathTracer {
                 storage(8, true),
                 storage(9, false),
                 uniform(10),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
+
+        // The neighbourhood masks for marching cubes.
+        let neighbour_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("neighbourhood masks"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/neighbours.wgsl").into()),
+        });
+        let neighbour_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("neighbourhood masks layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::R32Uint,
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let neighbour_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("neighbourhood masks pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("neighbourhood masks pipeline layout"),
+                bind_group_layouts: &[Some(&neighbour_layout)],
+                immediate_size: 0,
+            })),
+            module: &neighbour_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let no_neighbours = mask_texture(device, [1, 1, 1]).create_view(&Default::default());
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("path tracer pipeline layout"),
@@ -1059,6 +1135,11 @@ impl PathTracer {
             env_map: None,
             volume: None,
             volume_texture: None,
+            neighbours: None,
+            neighbours_stale: true,
+            no_neighbours,
+            neighbour_pipeline,
+            neighbour_layout,
             target: None,
             samples: 0,
             reset_pending: true,
@@ -1103,12 +1184,14 @@ impl PathTracer {
             },
             wgpu::Extent3d { width: extent[0], height: extent[1], depth_or_array_layers: extent[2] },
         );
+        self.neighbours_stale = true;
         self.reset();
     }
 
     pub fn clear_volume(&mut self) {
         self.volume = None;
         self.volume_texture = None;
+        self.neighbours = None;
         self.reset();
     }
 
@@ -1154,6 +1237,9 @@ impl PathTracer {
 
         self.volume = Some((texture.create_view(&Default::default()), [sx, sy, sz]));
         self.volume_texture = Some(texture);
+        // A new grid, maybe of another size: the masks are made again.
+        self.neighbours = None;
+        self.neighbours_stale = true;
         self.reset();
     }
 
@@ -1415,6 +1501,35 @@ impl PathTracer {
         self.volume.as_ref()?;
         self.ensure_target(device, renderer, size);
 
+        // Marching cubes reads each cell's neighbourhood from its own
+        // texture, made now if the volume changed.
+        let marching = environment.voxel_shape == VoxelShape::Marching;
+        let mut encoder = device.create_command_encoder(&Default::default());
+        if marching {
+            let size = self.volume.as_ref()?.1;
+            if self.neighbours.is_none() {
+                let texture = mask_texture(device, size);
+                let view = texture.create_view(&Default::default());
+                self.neighbours = Some((texture, view));
+                self.neighbours_stale = true;
+            }
+            if self.neighbours_stale {
+                self.neighbours_stale = false;
+                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("neighbourhood masks bind group"),
+                    layout: &self.neighbour_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.volume.as_ref()?.0) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.neighbours.as_ref()?.1) },
+                    ],
+                });
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&self.neighbour_pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups(size[0].div_ceil(4), size[1].div_ceil(4), size[2].div_ceil(4));
+            }
+        }
+
         let (volume_view, volume_size) = self.volume.as_ref()?;
         let volume_size = *volume_size;
         let target = self.target.as_ref()?;
@@ -1607,10 +1722,16 @@ impl PathTracer {
                     binding: 10,
                     resource: self.mc_table.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::TextureView(match (&self.neighbours, marching) {
+                        (Some((_, view)), true) => view,
+                        _ => &self.no_neighbours,
+                    }),
+                },
             ],
         });
 
-        let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(match (&self.shaped_pipeline, environment.voxel_shape) {
