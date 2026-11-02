@@ -91,8 +91,9 @@ jobs:
           $run ./target/debug/voxferro --script assets/showcase/shapes.cmds --screenshot view.bmp 2>&1 | tee view.log
           $py scripts/ci/check_image.py view.bmp
 
-      # Windows renders through DirectX 12 with DXC (src/windows_graphics.rs);
-      # the runner's Windows SDK has the DLLs.
+      # Windows prefers Vulkan, but the runners have no GPU and so no Vulkan
+      # adapter: they render through DirectX 12 (WARP) with DXC
+      # (src/windows_graphics.rs); the runner's Windows SDK has the DLLs.
       - name: DXC next to the binary (Windows)
         if: runner.os == 'Windows'
         shell: bash
