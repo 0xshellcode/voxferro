@@ -412,15 +412,15 @@ impl Environment {
                     if let Some(i) = object.get("_i").and_then(|v| v.parse::<f32>().ok()) {
                         env.ibl_intensity = i.max(0.0);
                     }
-                    // `_rot` is stored as-is into the editor's ibl_rot.
-                    if let Some(r) = object.get("_rot").and_then(|v| v.parse::<f32>().ok()) {
+                    // The map's turn. Checked in the reference editor a recent version: it
+                    // reads `_angle`'s second value, in degrees, before
+                    // `_rot` (in turns; "0.25" shows as 90, "0 90" too,
+                    // "90 0" as 0, and with both keys `_angle` wins), and
+                    // writes `_angle` alone. a recent version reads only `_rot`.
+                    if let Some([_, degrees]) = object.get_parsed::<f32, 2>("_angle") {
+                        env.ibl_rotation = degrees / 360.0;
+                    } else if let Some(r) = object.get("_rot").and_then(|v| v.parse::<f32>().ok()) {
                         env.ibl_rotation = r;
-                    } else if let Some([_, azimuth]) = object.get_parsed::<f32, 2>("_angle") {
-                        // Version 200 writes `_angle`, which the a recent version
-                        // binary does not read for the sky. Taken as degrees
-                        // of azimuth -- unverified; both corpus files using
-                        // it ("0 0", "0 360") mean no rotation either way.
-                        env.ibl_rotation = azimuth / 360.0;
                     }
                     if let Some(path) = object.get("_path") {
                         env.ibl_path = path.to_owned();
@@ -552,11 +552,12 @@ impl Environment {
 
         let ibl = object(&mut out, "_ibl");
         ibl.set("_i", num(self.ibl_intensity));
+        // Both keys, agreeing: a recent version reads `_angle` first (and writes only
+        // it, its first value 0), a recent version reads only `_rot`. A first value
+        // already in the file is kept: what it means is not known.
         ibl.set("_rot", num(self.ibl_rotation));
-        if ibl.get("_angle").is_some() {
-            // Version 200 also stores the turn here; keep the two agreeing.
-            ibl.set("_angle", format!("0 {}", num(self.ibl_rotation * 360.0)));
-        }
+        let first = ibl.get_parsed::<f32, 2>("_angle").map_or(0.0, |[a, _]| a);
+        ibl.set("_angle", format!("{} {}", num(first), num(self.ibl_rotation * 360.0)));
         ibl.set("_path", self.ibl_path.clone());
 
         let a = &self.atmosphere;
@@ -867,6 +868,13 @@ pub struct Lines {
     pub edge_width: f32,
     pub edge_color: Vec3,
 }
+
+/// Added to the map's turn before it reaches the shader. Measured against
+/// the reference editor a recent version on Windows (ROADMAP, "Checked on Windows"): with
+/// the same camera and sun, its sky at a turn of 0, 90 and 135 degrees
+/// matched this renderer's at 180, 270 and 315 -- the same direction, half a
+/// turn apart.
+const IBL_TURN_OFFSET: f32 = 0.5;
 
 /// The widest edge line, in voxels: the reference editor's range for `pt_edge_w`
 /// (the grid's `pt_grid_w` stops at 1).
@@ -1655,7 +1663,7 @@ impl PathTracer {
                 Some(map) if environment.ibl_enabled && map.normalized => [
                     1.0,
                     map.sampling.scale(environment.ibl_intensity),
-                    environment.ibl_rotation,
+                    environment.ibl_rotation + IBL_TURN_OFFSET,
                     map.sampling.total,
                 ],
                 // The computed sky is baked in world orientation: no
@@ -2167,6 +2175,30 @@ mod tests {
     fn roughness_is_scaled_like_the_editor() {
         assert!((effective_roughness(1.0) - 0.15).abs() < 1e-6);
         assert_eq!(effective_roughness(0.0), 0.0);
+    }
+
+    #[test]
+    fn the_map_turn_reads_and_writes_as_reference_editor_0_99_7() {
+        // What the reference editor a recent version's Rotation field showed for each file.
+        let turn = |pairs: &[(&str, &str)]| {
+            let mut all = vec![("_type", "_ibl")];
+            all.extend_from_slice(pairs);
+            Environment::from_render_objects(&[dict(&all)]).ibl_rotation * 360.0
+        };
+        assert!((turn(&[("_rot", "0.25")]) - 90.0).abs() < 1e-3);
+        assert!((turn(&[("_angle", "0 90")]) - 90.0).abs() < 1e-3);
+        assert!(turn(&[("_angle", "90 0")]).abs() < 1e-3, "the first value is not the turn");
+        assert!((turn(&[("_rot", "0.25"), ("_angle", "0 180")]) - 180.0).abs() < 1e-3, "_angle wins");
+
+        // Written: both keys, agreeing, a first value kept.
+        let env = Environment { ibl_rotation: 0.125, ..Default::default() };
+        let written = env.write_render_objects(&[dict(&[("_type", "_ibl"), ("_angle", "7 0")])]);
+        let ibl = written.iter().find(|o| o.get("_type") == Some("_ibl")).unwrap();
+        assert_eq!(ibl.get("_rot"), Some("0.125"));
+        assert_eq!(ibl.get("_angle"), Some("7 45"));
+        let fresh = env.write_render_objects(&[]);
+        let ibl = fresh.iter().find(|o| o.get("_type") == Some("_ibl")).unwrap();
+        assert_eq!(ibl.get("_angle"), Some("0 45"));
     }
 
     #[test]
