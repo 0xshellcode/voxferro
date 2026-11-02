@@ -270,7 +270,9 @@ impl App {
                 changed |= egui::color_picker::color_edit_button_srgb(ui, &mut self.look.edge_rgb).changed();
             });
             if lines.edge {
-                changed |= ui.add(egui::Slider::new(&mut lines.edge_width, 0.01..=1.0).text("width")).changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut lines.edge_width, 0.01..=crate::pathtrace::EDGE_WIDTH_MAX).text("width"))
+                    .changed();
             }
             if changed {
                 self.apply_look();
@@ -610,7 +612,8 @@ impl App {
                 None => !(if grid { lines.grid } else { lines.edge }),
                 _ => return usage.to_owned(),
             };
-            let width = rest.first().and_then(|v| v.parse::<f32>().ok()).map(|w| w.clamp(0.01, 1.0));
+            let max = if grid { 1.0 } else { crate::pathtrace::EDGE_WIDTH_MAX };
+            let width = rest.first().and_then(|v| v.parse::<f32>().ok()).map(|w| w.clamp(0.01, max));
             if grid {
                 lines.grid = on;
                 lines.grid_width = width.unwrap_or(lines.grid_width);

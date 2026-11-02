@@ -191,7 +191,8 @@ impl App {
     fn import_component(&mut self, what: &str, path: &str) -> String {
         // A component file (the reference editor's text format) rather than a project.
         if path.to_ascii_lowercase().ends_with(".txt") && what != "palette" {
-            let command = match std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|t| self.component_command(what, &t)) {
+            let text = crate::read_text(std::path::Path::new(path)).map_err(|e| e.to_string());
+            let command = match text.and_then(|t| self.component_command(what, &t)) {
                 Ok(c) => c,
                 Err(e) => return format!("error: {path}: {e}"),
             };

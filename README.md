@@ -48,7 +48,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **297 tests
+Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **299 tests
 passing**; 41 and 42 (Windows and Linux) are prepared and built in CI, not
 yet tried on real machines. Working today:
 

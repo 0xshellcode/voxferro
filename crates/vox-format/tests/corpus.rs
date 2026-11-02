@@ -211,20 +211,28 @@ fn parses_the_smallest_sample_exactly() {
 
     let file = vox_format::VoxFile::parse(&bytes).unwrap();
 
-    assert_eq!(file.version, vox_format::VERSION_150);
     assert_eq!(file.models.len(), 1);
     assert_eq!(file.models[0].size, [3, 3, 3]);
     assert_eq!(file.models[0].voxels.len(), 20);
-    assert_eq!(file.layers.len(), 8, "the editor always writes 8 layers");
     assert_eq!(
         file.materials.len(),
         256,
         "one material per palette index"
     );
-    assert!(
-        file.cameras.is_empty(),
-        "rCAM arrived in version 200"
-    );
+    // The two installs ship this sample saved by different editors.
+    match file.version {
+        vox_format::VERSION_150 => {
+            // a recent version's copy.
+            assert_eq!(file.layers.len(), 8, "a recent version always writes 8 layers");
+            assert!(file.cameras.is_empty(), "rCAM arrived in version 200");
+        }
+        vox_format::VERSION_200 => {
+            // a recent version's copy, saved again by that editor.
+            assert_eq!(file.layers.len(), 32, "a recent version always writes 32 layers");
+            assert_eq!(file.cameras.len(), 10, "and its 10 camera slots");
+        }
+        v => panic!("unexpected version {v}"),
+    }
     // IMAP is optional even in version 150: the editor only writes it once
     // the palette has been reordered. Across the corpus exactly one file has
     // one, so asserting its presence here would be wrong.
@@ -297,12 +305,11 @@ fn every_sample_survives_a_round_trip() {
             "{}: model count",
             path.display()
         );
-        assert_eq!(
-            reparsed.nodes.len(),
-            original.nodes.len(),
-            "{}: scene node count",
-            path.display()
-        );
+        // Some samples in a recent version's install are bare version-150 files with
+        // no scene graph; the writer gives them the default one: a root
+        // transform and group, then a transform and a shape per model.
+        let nodes = if original.nodes.is_empty() { 2 + 2 * original.models.len() } else { original.nodes.len() };
+        assert_eq!(reparsed.nodes.len(), nodes, "{}: scene node count", path.display());
         assert_eq!(
             reparsed.layers.len(),
             original.layers.len(),

@@ -264,33 +264,53 @@ fn edge_toward(cell: vec3<i32>, toward: vec3<i32>, out: vec3<i32>) -> bool {
     return voxel_at(cell + toward) == 0u || voxel_at(cell + toward + out) != 0u;
 }
 
+// Whether a point `t` from its voxel's border toward `dir` is on an edge
+// line. the reference editor's rule, measured in a recent version at widths 0.2 to 4: the
+// surface turns `k` voxels away that way and (k - 1) + t is under the width.
+// Up to a width of 1 that is a band min(width, 0.5) deep beside the edge on
+// each face; wider, the band repeats in the next voxels in (5 at most).
+fn edge_along(cell: vec3<i32>, dir: vec3<i32>, out: vec3<i32>, t: f32) -> bool {
+    for (var k = 1; k <= 5; k = k + 1) {
+        if (f32(k - 1) + t >= p.lines.w) {
+            return false;
+        }
+        if (edge_toward(cell + dir * (k - 1), dir, out)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // The colour a surface point shows with the render's lines drawn over it.
 // `point` is in voxel space; `cell` is the voxel hit, unused on the ground.
-// Each face draws its own half of a line, so a line is `width` across.
+// As in the reference editor (measured): a grid line is twice its width across,
+// along world coordinates that are multiples of the spacing; edges follow
+// `edge_along`.
 fn lined(base: vec3<f32>, point: vec3<f32>, normal: vec3<f32>, cell: vec3<i32>, ground: bool) -> vec3<f32> {
     // The face's own axis, left out: lines run along the other two.
     let across = vec3<f32>(abs(normal) > vec3<f32>(0.5));
     var colour = base;
     if (p.lines.x > 0.0 && (ground || p.lines.z < 0.5)) {
-        let q = point / p.lines.y;
+        let q = (point - p.volume_offset.xyz) / p.lines.y;
         let d = abs(q - round(q)) * p.lines.y + across * 1e3;
-        if (min(d.x, min(d.y, d.z)) < p.lines.x * 0.5) {
+        if (min(d.x, min(d.y, d.z)) < p.lines.x) {
             colour = p.grid_color.rgb;
         }
     }
     if (!ground && p.lines.w > 0.0) {
         let local = point - vec3<f32>(cell);
-        let w = p.lines.w * 0.5;
-        // Per tangent axis, the neighbour whose border the point is within
-        // `w` of: -1, +1, or 0.
-        let near = (select(vec3<i32>(0), vec3<i32>(-1), local < vec3<f32>(w))
-            + select(vec3<i32>(0), vec3<i32>(1), local > vec3<f32>(1.0 - w)))
-            * vec3<i32>(1.0 - across);
+        // Per tangent axis, the border the point's half of the voxel faces
+        // (-1 or +1, 0 on the face's own axis) and the distance to it.
+        let side = select(vec3<i32>(1), vec3<i32>(-1), local < vec3<f32>(0.5)) * vec3<i32>(1.0 - across);
+        let t = min(local, vec3<f32>(1.0) - local);
         let out = vec3<i32>(round(normal));
-        if (edge_toward(cell, near * vec3<i32>(1, 0, 0), out)
-            || edge_toward(cell, near * vec3<i32>(0, 1, 0), out)
-            || edge_toward(cell, near * vec3<i32>(0, 0, 1), out)
-            || (dot(abs(near), vec3<i32>(1)) == 2 && edge_toward(cell, near, out))) {
+        // A corner where both borders are near and only the diagonal
+        // neighbour is missing.
+        let close = select(vec3<i32>(0), side, t < vec3<f32>(p.lines.w));
+        if (edge_along(cell, side * vec3<i32>(1, 0, 0), out, t.x)
+            || edge_along(cell, side * vec3<i32>(0, 1, 0), out, t.y)
+            || edge_along(cell, side * vec3<i32>(0, 0, 1), out, t.z)
+            || (dot(abs(close), vec3<i32>(1)) == 2 && edge_toward(cell, close, out))) {
             colour = p.edge_color.rgb;
         }
     }

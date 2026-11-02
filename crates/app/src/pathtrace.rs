@@ -781,7 +781,9 @@ struct Params {
     sample: [f32; 4],
 }
 
-/// The grid and edge lines of the render. Widths are a share of a voxel.
+/// The grid and edge lines of the render, widths in voxels as the reference editor
+/// measures them: a grid line is twice `grid_width` across, an edge line
+/// `edge_width` deep on each face (see `lined` in the shader).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Lines {
     /// A line along every voxel border on the faces (`pt_grid_*`), every
@@ -799,16 +801,21 @@ pub struct Lines {
     pub edge_color: Vec3,
 }
 
+/// The widest edge line, in voxels: the reference editor's range for `pt_edge_w`
+/// (the grid's `pt_grid_w` stops at 1).
+pub const EDGE_WIDTH_MAX: f32 = 5.0;
+
 impl Default for Lines {
+    /// the reference editor a recent version's defaults, read from its render panel.
     fn default() -> Self {
         Self {
             grid: false,
             grid_spacing: 1,
-            grid_width: 0.05,
+            grid_width: 0.02,
             grid_ground_only: false,
             grid_color: Vec3::ZERO,
             edge: false,
-            edge_width: 0.1,
+            edge_width: 0.2,
             edge_color: Vec3::ZERO,
         }
     }
@@ -1618,7 +1625,7 @@ impl PathTracer {
                     if l.grid { l.grid_width.clamp(0.01, 1.0) } else { 0.0 },
                     l.grid_spacing.max(1) as f32,
                     if l.grid_ground_only { 1.0 } else { 0.0 },
-                    if l.edge { l.edge_width.clamp(0.01, 1.0) } else { 0.0 },
+                    if l.edge { l.edge_width.clamp(0.01, EDGE_WIDTH_MAX) } else { 0.0 },
                 ]
             },
             grid_color: environment.lines.grid_color.extend(0.0).to_array(),

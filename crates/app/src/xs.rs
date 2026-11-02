@@ -71,7 +71,7 @@ impl Script {
             Some("txt" | "glsl") => Lang::Glsl,
             _ => return Err(format!("{}: a script is a .wgsl or .txt file", path.display())),
         };
-        let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let source = crate::read_text(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let args = parse_header(&source)?;
         Ok(Self {

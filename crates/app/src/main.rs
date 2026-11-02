@@ -610,13 +610,8 @@ impl App {
             let Some(value) = args.get(i + 1) else { continue };
             match a.as_str() {
                 "--run" => startup_commands.push(value.clone()),
-                "--script" => match std::fs::read_to_string(value) {
-                    Ok(text) => startup_commands.extend(
-                        text.lines()
-                            .map(str::trim)
-                            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-                            .map(str::to_owned),
-                    ),
+                "--script" => match read_text(std::path::Path::new(value)) {
+                    Ok(text) => startup_commands.extend(script_lines(&text)),
                     Err(e) => eprintln!("[voxferro] could not read {value}: {e}"),
                 },
                 _ => {}
@@ -861,7 +856,8 @@ impl App {
         let baked = loaded
             .doc
             .scene
-            .bake(|i| visible.shows(i), 256 * 1024 * 1024)
+            // One spare layer on top: a brick's stud lives in the cell above it.
+            .bake_with_headroom(|i| visible.shows(i), 256 * 1024 * 1024, 1)
             .or_else(|e| match e {
                 // Nothing to trace still has a sky and a ground to render:
                 // an empty one-cell grid at the origin. Without it the
@@ -1938,6 +1934,28 @@ fn positional_args(args: &[String]) -> Vec<String> {
     out
 }
 
+/// A text file the user may have written by hand, without the UTF-8 byte
+/// order mark that Windows tools (Notepad, PowerShell 5's `Set-Content
+/// -Encoding utf8`) put first: left in, it glued itself to the first word.
+pub(crate) fn read_text(path: &std::path::Path) -> std::io::Result<String> {
+    let text = std::fs::read_to_string(path)?;
+    Ok(match text.strip_prefix('\u{feff}') {
+        Some(rest) => rest.to_owned(),
+        None => text,
+    })
+}
+
+/// A `--script` file's commands: one a line, trimmed, without blank lines
+/// and `#` comments.
+fn script_lines(text: &str) -> Vec<String> {
+    text.trim_start_matches('\u{feff}')
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The 12 edges of a box whose corners are numbered by bits x, y, z.
 const CUBE_EDGES: [(usize, usize); 12] =
     [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)];
@@ -2145,7 +2163,20 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::positional_args;
+    use super::{positional_args, read_text, script_lines};
+
+    #[test]
+    fn a_byte_order_mark_does_not_reach_the_first_command() {
+        let text = "\u{feff}# a comment\nnew 4 4 4\n\n  box 0 0 0 3 3 0 1  \n# another\n";
+        assert_eq!(script_lines(text), vec!["new 4 4 4".to_owned(), "box 0 0 0 3 3 0 1".to_owned()]);
+        assert_eq!(script_lines("\u{feff}new 4 4 4"), vec!["new 4 4 4".to_owned()]);
+
+        let path = std::env::temp_dir().join(format!("voxferro-bom-{}.txt", std::process::id()));
+        std::fs::write(&path, b"\xEF\xBB\xBFname : {\n}\n").unwrap();
+        let read = read_text(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(read, "name : {\n}\n");
+    }
 
     #[test]
     fn a_path_inside_a_command_is_not_the_model_path() {

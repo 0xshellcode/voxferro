@@ -104,6 +104,18 @@ impl Scene {
     /// `None` when nothing is visible or the grid would exceed `max_cells`
     /// (instances placed far apart make a mostly empty, very large box).
     pub fn bake(&self, keep: impl Fn(&Instance) -> bool, max_cells: u64) -> Result<Baked, BakeError> {
+        self.bake_with_headroom(keep, max_cells, 0)
+    }
+
+    /// [`Scene::bake`] with `headroom` empty layers kept above the highest
+    /// voxel. The path tracer draws a brick's stud in the empty cell on top
+    /// of it, so the topmost bricks need a cell above them inside the grid.
+    pub fn bake_with_headroom(
+        &self,
+        keep: impl Fn(&Instance) -> bool,
+        max_cells: u64,
+        headroom: u32,
+    ) -> Result<Baked, BakeError> {
         let visible: Vec<&Instance> = self
             .instances
             .iter()
@@ -128,7 +140,7 @@ impl Scene {
             return Err(BakeError::Empty);
         };
 
-        let size = (max - min + IVec3::ONE).as_uvec3();
+        let size = (max - min + IVec3::ONE).as_uvec3() + glam::UVec3::new(0, 0, headroom);
         let cells = size.x as u64 * size.y as u64 * size.z as u64;
         if cells > max_cells {
             return Err(BakeError::TooLarge(size.to_array()));
@@ -566,6 +578,18 @@ mod tests {
         let first = scene.bake(|i| i.transform.translation.x == 0, 1_000).unwrap();
         assert_eq!(first.volume.filled_count(), 2);
         assert_eq!(scene.bake(|_| false, 1_000).unwrap_err(), BakeError::Empty);
+    }
+
+    #[test]
+    fn headroom_adds_empty_layers_on_top_only() {
+        let scene = scene_of(&[([0, 0, 1], 0b0000_0100)]);
+        let tight = scene.bake(|_| true, u64::MAX).unwrap();
+        let roomy = scene.bake_with_headroom(|_| true, u64::MAX, 1).unwrap();
+        let [x, y, z] = tight.volume.size();
+        assert_eq!(roomy.volume.size(), [x, y, z + 1], "one more layer, on z");
+        assert_eq!(roomy.origin, tight.origin, "the grid does not move");
+        assert_eq!(roomy.volume.filled_count(), tight.volume.filled_count());
+        assert!((0..x).all(|i| (0..y).all(|j| roomy.volume.get(i, j, z) == 0)), "the new layer is empty");
     }
 
     #[test]
