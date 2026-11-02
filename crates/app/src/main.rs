@@ -68,11 +68,20 @@ use voxel_core::{History, Mesh};
 /// from one (`voxferro --run ... --screenshot out.bmp` in a terminal),
 /// attach to it so `eprintln!` reaches the user; from Explorer there is no
 /// parent console and this does nothing.
+///
+/// Not when the output already goes somewhere: attaching took over a file
+/// it was redirected to (`voxferro ... > log.txt` in cmd.exe), which was
+/// left empty.
 #[cfg(windows)]
 fn attach_parent_console() {
-    use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
-    // SAFETY: a plain Win32 call with a constant argument.
+    use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_UNKNOWN, GetFileType};
+    use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE};
+    // SAFETY: plain Win32 calls; GetFileType takes any handle value,
+    // null or invalid included, and answers FILE_TYPE_UNKNOWN for those.
     unsafe {
+        if GetFileType(GetStdHandle(STD_ERROR_HANDLE)) != FILE_TYPE_UNKNOWN {
+            return;
+        }
         AttachConsole(ATTACH_PARENT_PROCESS);
     }
 }
@@ -458,6 +467,16 @@ impl App {
         let info = state.adapter.get_info();
         let backend = format!("{:?} on {}", info.backend, info.name);
         eprintln!("[voxferro] graphics backend: {backend}");
+        // Nothing works after this, and what fails next (egui's buffers)
+        // says nothing of why: say it first.
+        state.device.set_device_lost_callback(|reason, message| {
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                eprintln!(
+                    "[voxferro] the graphics device was lost ({reason:?}: {message}). The GPU was reset or \
+                     its driver failed; on Windows, setting WGPU_BACKEND=vulkan may avoid it."
+                );
+            }
+        });
 
         let mut app = Self {
             backend,

@@ -61,4 +61,4 @@ winresource = "0.1"
 
 # Attaching to the console that launched the app (src/main.rs), on Windows.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Storage_FileSystem"] }

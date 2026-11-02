@@ -779,6 +779,73 @@ struct Params {
     /// x: specular depth, y: energy limit per sample (0 none), z:
     /// anti-aliasing on.
     sample: [f32; 4],
+    /// x: the first row this dispatch traces, y: how many (see `Bands`).
+    tile: [u32; 4],
+}
+
+/// How many pixels go into one submission of the trace. A sample is traced
+/// in bands of rows, each submitted on its own: Windows resets a GPU whose
+/// work runs past 2 s (TDR), and one sample of a large image with voxel
+/// shapes took 4 s on an integrated AMD GPU under DirectX 12, which lost the
+/// device. The band size follows the measured cost, aiming at `TARGET`
+/// seconds a submission, so a fast GPU soon traces the whole image at once.
+struct Bands {
+    pixels: u32,
+    measure: std::sync::Arc<std::sync::Mutex<Measure>>,
+}
+
+/// The last measurement of a sample: whether one is in flight, and its
+/// result (the time from the first submission to the GPU being done, and
+/// the pixels traced).
+type Measure = (bool, Option<(std::time::Duration, u32)>);
+
+impl Bands {
+    /// Small enough on the slowest GPU measured (16 µs a pixel, an
+    /// integrated AMD under DirectX 12 with marching cubes): half a second.
+    const START: u32 = 1 << 15;
+    const MIN: u32 = 1 << 12;
+    const TARGET: f32 = 0.1;
+
+    fn new() -> Self {
+        Self { pixels: Self::START, measure: Default::default() }
+    }
+
+    /// Rows a band, for an image `width` wide: a multiple of the 8-row
+    /// workgroup.
+    fn rows(&self, width: u32) -> u32 {
+        ((self.pixels / width.max(1)) / 8 * 8).max(8)
+    }
+
+    /// Takes in the last measurement, if one came back.
+    fn update(&mut self) {
+        let Some((elapsed, pixels)) = self.measure.lock().ok().and_then(|mut m| m.1.take()) else { return };
+        self.pixels = next_band_pixels(self.pixels, elapsed.as_secs_f32(), pixels);
+    }
+
+    /// Times the work submitted since `started`, unless a measurement is
+    /// still in flight.
+    fn time(&self, queue: &wgpu::Queue, started: std::time::Instant, pixels: u32) {
+        let Ok(mut m) = self.measure.lock() else { return };
+        if m.0 {
+            return;
+        }
+        m.0 = true;
+        let slot = self.measure.clone();
+        queue.on_submitted_work_done(move || {
+            if let Ok(mut m) = slot.lock() {
+                *m = (false, Some((started.elapsed(), pixels)));
+            }
+        });
+    }
+}
+
+/// The band size after `pixels` took `seconds` to trace, from bands of
+/// `current`. The measurement runs until a poll sees the work done, so it
+/// errs long and the bands err small; they grow at most fourfold at a time.
+fn next_band_pixels(current: u32, seconds: f32, pixels: u32) -> u32 {
+    let per_pixel = (seconds / pixels.max(1) as f32).max(1e-12);
+    let wanted = (Bands::TARGET / per_pixel).min(u32::MAX as f32) as u32;
+    wanted.clamp(Bands::MIN, current.saturating_mul(4).max(Bands::MIN))
 }
 
 /// The grid and edge lines of the render, widths in voxels as the reference editor
@@ -883,6 +950,8 @@ struct Target {
 pub struct PathTracer {
     /// [`mc_table`], for voxels drawn by marching cubes.
     mc_table: wgpu::Buffer,
+    /// How a sample is split into submissions.
+    bands: Bands,
     pipeline: wgpu::ComputePipeline,
     /// The same shader built with `SHAPES`, for voxels drawn as spheres,
     /// bricks... -- made the first time it is wanted.
@@ -1122,6 +1191,7 @@ impl PathTracer {
 
         Self {
             mc_table,
+            bands: Bands::new(),
             pipeline,
             shaped_pipeline: None,
             shader,
@@ -1503,6 +1573,7 @@ impl PathTracer {
                 cache: None,
             }));
         }
+        self.bands.update();
         // Size the target before borrowing the volume: ensure_target needs
         // &mut self, which cannot coexist with a live borrow of self.volume.
         self.volume.as_ref()?;
@@ -1638,8 +1709,8 @@ impl PathTracer {
                 // ending in the sky's light (the editor's `OPT_LE`).
                 (environment.bounces == 0 && !environment.ibl_enabled && !environment.atmosphere_enabled) as u32 as f32,
             ],
+            tile: [0, size[1], 0, 0],
         };
-        queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
 
         let (iterations, angle, step) = environment.bloom_star();
         let post = PostParams {
@@ -1739,14 +1810,31 @@ impl PathTracer {
             ],
         });
 
-        {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(match (&self.shaped_pipeline, environment.voxel_shape) {
-                (Some(shaped), shape) if shape != VoxelShape::Cube => shaped,
-                _ => &self.pipeline,
-            });
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+        // The sample in bands of rows, each its own submission (see `Bands`).
+        // Each band's row range goes in with the parameters: a buffer write
+        // takes effect at the next submission, so each band sees its own.
+        let pipeline = match (&self.shaped_pipeline, environment.voxel_shape) {
+            (Some(shaped), shape) if shape != VoxelShape::Cube => shaped,
+            _ => &self.pipeline,
+        };
+        let band = self.bands.rows(size[0]);
+        let started = std::time::Instant::now();
+        let mut first_row = 0;
+        while first_row < size[1] {
+            let rows = band.min(size[1] - first_row);
+            let params = Params { tile: [first_row, rows, 0, 0], ..params };
+            queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(size[0].div_ceil(8), rows.div_ceil(8), 1);
+            }
+            first_row += rows;
+            if first_row < size[1] {
+                queue.submit(Some(encoder.finish()));
+                encoder = device.create_command_encoder(&Default::default());
+            }
         }
         {
             // A second pass, so every pixel it reads is already traced.
@@ -1756,6 +1844,7 @@ impl PathTracer {
             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
         }
         queue.submit(Some(encoder.finish()));
+        self.bands.time(queue, started, size[0] * size[1]);
 
         self.samples += 1;
         Some(target.texture_id)
@@ -1908,6 +1997,30 @@ fn trace_debug_mode() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bands_follow_the_measured_cost() {
+        // The integrated AMD under DirectX 12: 4 s for 790x730 pixels. The
+        // band shrinks to about TARGET's worth, far from Windows' 2 s.
+        let slow = next_band_pixels(Bands::START, 4.0, 790 * 730);
+        let seconds = slow as f32 * 4.0 / (790.0 * 730.0);
+        assert!(seconds <= Bands::TARGET * 1.01 && slow >= Bands::MIN, "{slow} pixels, {seconds} s");
+        // A fast GPU grows the band, at most fourfold a step, up to a
+        // whole image in one submission.
+        assert_eq!(next_band_pixels(Bands::START, 0.003, 790 * 730), Bands::START * 4);
+        let mut pixels = Bands::START;
+        for _ in 0..4 {
+            pixels = next_band_pixels(pixels, 0.003, 790 * 730);
+        }
+        assert!(pixels >= 790 * 730);
+        // Never below the floor, however slow; nothing divides by zero.
+        assert_eq!(next_band_pixels(Bands::START, 1000.0, 1), Bands::MIN);
+        assert!(next_band_pixels(Bands::START, 0.0, 0) >= Bands::MIN);
+        // Rows come in whole workgroups, at least one.
+        let bands = Bands { pixels: 100_000, measure: Default::default() };
+        assert_eq!(bands.rows(790) % 8, 0);
+        assert_eq!(Bands { pixels: 10, measure: Default::default() }.rows(4000), 8);
+    }
 
     fn emit_material(id: i32) -> vox_format::Material {
         vox_format::Material {

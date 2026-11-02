@@ -95,6 +95,11 @@ struct Params {
     // pixel (anti-aliasing) or 0 for its centre; w 1 when a diffuse depth
     // of 0 ends paths in the uniform sky's light.
     sample: vec4<f32>,
+    // The band of rows this dispatch traces: x its first row, y how many.
+    // A sample is split into bands, each submitted on its own, so that no
+    // single piece of GPU work runs long enough for Windows to reset the
+    // GPU (TDR, 2 s by default).
+    tile: vec4<u32>,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -1241,8 +1246,10 @@ fn energy(light: vec3<f32>, deep: bool) -> vec3<f32> {
 }
 
 @compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= p.resolution.x || gid.y >= p.resolution.y) {
+fn main(@builtin(global_invocation_id) local_id: vec3<u32>) {
+    // The pixel: the dispatch covers one band of rows (`p.tile`).
+    let gid = vec2<u32>(local_id.x, local_id.y + p.tile.x);
+    if (gid.x >= p.resolution.x || local_id.y >= p.tile.y || gid.y >= p.resolution.y) {
         return;
     }
     let index = gid.y * p.resolution.x + gid.x;
