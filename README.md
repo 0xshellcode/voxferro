@@ -48,7 +48,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **300 tests
+Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **302 tests
 passing**; 41 and 42 (Windows and Linux) are prepared and built in CI, not
 yet tried on real machines. Working today:
 
@@ -212,19 +212,21 @@ open target/Voxferro.app
 ./scripts/make-icon.sh             # re-renders the icon
 ```
 
-On Windows (built and smoke-tested in CI on a software GPU; not yet tried on
-a Windows machine):
+On Windows (built and smoke-tested in CI on a software GPU, and checked on a
+Windows machine with an NVIDIA and an AMD GPU):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 -WithDxc   # target\dist\Voxferro-<version>-windows-x64.zip
 ```
 
-Render mode on DirectX 12 needs Microsoft's DXC shader compiler
+Voxferro uses Vulkan when the GPU's driver offers it: with voxel shapes the
+path tracer ran 6 to 12 times faster there than under DirectX 12. Without a
+Vulkan driver (or when only DirectX 12 reaches the discrete GPU) it uses
+DirectX 12, whose Render mode needs Microsoft's DXC shader compiler
 (`dxcompiler.dll` and `dxil.dll` next to `voxferro.exe`; `-WithDxc` downloads
-a pinned release). Without it Voxferro uses Vulkan if the GPU driver offers
-it, and otherwise says that Render mode needs DXC. `dxil.dll` comes under a
-Microsoft licence with distribution requirements: read `LICENSE-MS.txt`
-before sharing a package that includes it.
+a pinned release). `WGPU_BACKEND=dx12` or `vulkan` forces one. `dxil.dll`
+comes under a Microsoft licence with distribution requirements: read
+`LICENSE-MS.txt` before sharing a package that includes it.
 
 On Linux:
 

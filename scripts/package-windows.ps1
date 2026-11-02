@@ -7,8 +7,9 @@
 # -WithReferenceEditorAssets, for a package you keep for yourself: do not
 # redistribute them.
 #
-# Render mode on DirectX 12 needs DXC (src/windows_graphics.rs): without it
-# the app uses Vulkan if there is a driver. -WithDxc downloads Microsoft's
+# The app prefers Vulkan; on machines without a Vulkan driver it uses
+# DirectX 12, whose Render mode needs DXC (src/windows_graphics.rs), so the
+# package carries it as the fallback. -WithDxc downloads Microsoft's
 # DirectXShaderCompiler release (pinned, SHA-256 checked) and puts
 # dxcompiler.dll and dxil.dll, with their licences, next to voxferro.exe.
 # dxil.dll is under a Microsoft licence with distribution requirements
