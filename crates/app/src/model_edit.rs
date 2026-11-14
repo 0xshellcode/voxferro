@@ -1,4 +1,4 @@
-//! The Edit panel's model operations, under the reference editor's command names
+//! The Edit panel's model operations, under their command names
 //! (see `voxel_core::kernels` for what each does):
 //!
 //! | Command | |
@@ -34,7 +34,7 @@ pub const WORDS: [&str; 22] = [
     "hull", "dil", "ero", "mask", "tex", "maze", "noise", "fractal",
 ];
 
-/// The panel's text fields, which start with the reference editor's examples.
+/// The panel's text fields, which start with examples.
 pub struct Fields {
     loop_: String,
     scale: String,
@@ -142,8 +142,7 @@ impl App {
         format!("{what}: {count} voxels changed")
     }
 
-    /// the reference editor's Edit panel (`m_edit.ui`), in its order: Tool and
-    /// Select open, the rest folded.
+    /// The Edit panel: Tool and Select open, the rest folded.
     pub fn edit_panel(&mut self, ui: &mut egui::Ui) {
         crate::layout::title(ui, "Edit");
         let mut lines: Vec<String> = Vec::new();
@@ -154,7 +153,7 @@ impl App {
                 lines.push(buttons[i].1.to_owned());
             }
         }
-        /// A text field and Apply, as the reference editor's numeric sections.
+        /// A text field and Apply, for the numeric sections.
         fn field(ui: &mut egui::Ui, verb: &str, text: &mut String, hint: &str, lines: &mut Vec<String>) {
             ui.horizontal(|ui| {
                 let response = ui.add(egui::TextEdit::singleline(text).desired_width(100.0)).on_hover_text(hint);
@@ -173,7 +172,7 @@ impl App {
             egui::CollapsingHeader::new(egui::RichText::new(name).size(10.5)).id_salt(("edit", name)).default_open(open)
         };
 
-        // In the Move tool, the reference editor's World-mode object panel first.
+        // In the Move tool, the World-mode object panel first.
         if self.moving {
             section("OBJECT", true).show(ui, |ui| {
                 let n = self.object_indices().len();
@@ -307,7 +306,7 @@ fn edit_for(verb: &str, args: &[&str], volume: &Volume, colour: u8) -> Result<Ed
             },
             None => InPlace(kernels::flood(volume, colour)),
         },
-        // the reference editor's Maze and Perlin: a new model in the box's size.
+        // Maze and Perlin: a new model in the box's size.
         "maze" => {
             let p = match args.first() {
                 Some(n) => n.parse::<u32>().map_err(|_| "maze [corridor gap, 1 or more]".to_owned())?,

@@ -1,5 +1,4 @@
-//! The final render at a size of its own: the reference editor's Render › Image
-//! (`r_image.ui`: `pt_photo_w`, `pt_photo_h`, `pt_spp`, `task photo`).
+//! The final render at a size of its own: Render › Image.
 //!
 //! The path tracer usually renders at the viewport's size, which is
 //! whatever the window happens to be. A photo renders at the size asked
@@ -14,14 +13,13 @@
 //! `voxferro scene.vox --run "render image 3840 2160 512 out.png"` renders
 //! without anyone at the window.
 //!
-//! **Turntable** (the reference editor's `task spin`, `pt_spin_frames`,
-//! `pt_spin_angle`, `pt_spin_blur`): `render spin <frames> <degrees>
+//! **Turntable**: `render spin <frames> <degrees>
 //! <blur %> <width> <height> <samples> <file.png>` renders a photo a frame,
 //! the camera turned about the point it orbits by degrees / frames each
 //! time, from where it is -- 360 makes a loop. With blur, each sample of a
 //! frame turns a random amount within that share of its step, centred on
 //! the frame: motion blur. The frames are written as `file (0001).png`,
-//! `file (0002).png`..., as the reference editor names them, and the camera goes
+//! `file (0002).png`..., and the camera goes
 //! back where it was.
 
 use crate::App;
@@ -272,7 +270,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn turntable_frames_are_numbered_as_reference_editor_names_them() {
+    fn turntable_frames_are_numbered_from_one() {
         assert_eq!(frame_path("/tmp/spin.png", 0), "/tmp/spin (0001).png");
         assert_eq!(frame_path("out", 41), "out (0042).png");
     }

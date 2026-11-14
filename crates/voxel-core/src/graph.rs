@@ -544,7 +544,7 @@ impl Scene {
     }
 
     /// The nodes with the children of a group (`None`: the scene) sorted by
-    /// name, as the reference editor's `sort` does: only the `picked` ones when two
+    /// name, as `sort` does: only the `picked` ones when two
     /// or more are picked, each into one of their own places, the others
     /// staying where they are; all of them otherwise. Names compare byte
     /// by byte, so capitals come first and unnamed nodes before any name.
@@ -587,8 +587,7 @@ impl Scene {
         Ok(compact(nodes))
     }
 
-    /// The nodes with instances packed into one animated object, as
-    /// the reference editor's `opack` (Pack Models to Animation) does.
+    /// The nodes with instances packed into one animated object.
     ///
     /// `indices` are taken in outline order. The new object takes the first
     /// one's place in its group, its name, layer and placement; its shape
@@ -676,8 +675,7 @@ impl Scene {
         Ok(compact(nodes))
     }
 
-    /// The nodes with an animated instance unpacked, as the reference editor's
-    /// `ounpack`: each model of its shape becomes an instance of its own, in
+    /// The nodes with an animated instance unpacked: each model of its shape becomes an instance of its own, in
     /// its place, placed as the key at that model's frame (stepping between
     /// keys, not interpolating) and named as the original.
     pub fn with_unpacked(&self, index: usize) -> Result<Vec<SceneNode>, GraphError> {
@@ -915,10 +913,10 @@ impl Scene {
 /// Puts the nodes in depth-first pre-order from the root and renumbers them
 /// 0, 1, 2... in that order, rewriting every reference.
 ///
-/// That is exactly how the editor writes a graph: each transform followed by
-/// its child, each group's children in increasing order. Readers may rely on
-/// it -- `dot_vox` indexes its node list by id -- so an edited graph keeps
-/// the shape of one the editor wrote. Unreachable nodes, if any, follow in
+/// That is exactly how saved files lay out a graph: each transform followed
+/// by its child, each group's children in increasing order. Readers may rely
+/// on it -- `dot_vox` indexes its node list by id -- so an edited graph keeps
+/// the shape of a saved one. Unreachable nodes, if any, follow in
 /// their old order.
 fn compact(nodes: Vec<SceneNode>) -> Vec<SceneNode> {
     let mut order: Vec<usize> = Vec::with_capacity(nodes.len());
@@ -1030,7 +1028,7 @@ fn parent_group(nodes: &[SceneNode], child: i32) -> Option<i32> {
     })
 }
 
-/// The group under the root transform, where the editor puts new models.
+/// The group under the root transform, where new models go.
 fn root_group(nodes: &[SceneNode]) -> Option<i32> {
     match nodes.first()? {
         SceneNode::Group(g) => Some(g.id),
@@ -1171,7 +1169,7 @@ mod tests {
         apply(&mut s, nodes);
         assert_eq!(s.instances.len(), 3);
         assert_eq!(s.instances[2].model_index, 2);
-        // The root transform still applies: placed under it, as the editor does.
+        // The root transform still applies: placed under it.
         assert_eq!(s.instances[2].transform.translation, IVec3::new(100, 0, 1));
     }
 
@@ -1274,7 +1272,7 @@ mod tests {
 
     /// Ids equal positions, and the list is in depth-first pre-order: each
     /// transform is followed by its child, each group's children come in
-    /// increasing order after it -- the order the editor writes.
+    /// increasing order after it -- the order saved files use.
     fn assert_depth_first(nodes: &[SceneNode]) {
         for (i, n) in nodes.iter().enumerate() {
             assert_eq!(n.id(), i as i32, "ids equal positions");
@@ -1291,7 +1289,7 @@ mod tests {
 
     #[test]
     fn a_group_made_after_a_sibling_is_written_in_editor_order() {
-        // The case the reference editor misread: group the first two of three.
+        // The tricky case: group the first two of three.
         let mut s = scene();
         s.models.push(Volume::new([3, 3, 3]));
         let nodes = s.with_new_instance(2, Transform::default()).unwrap();

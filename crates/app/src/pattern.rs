@@ -2,14 +2,14 @@
 //! Mask and Texture tile.
 //!
 //! `pattern` reports it; `pattern selection` makes it from the selected
-//! voxels (the reference editor's "Create Pattern from Selection"); `pattern open
+//! voxels ("Create Pattern from Selection"); `pattern open
 //! <file.vox>` takes the first model of a file; `pattern turn x|y|z` gives it
 //! a quarter turn; `pattern colours own|brush` chooses between its own
 //! colours and the current one ("Use Voxel Color" / "Use Palette Color");
 //! `pattern clear` drops it. A pattern's colours are palette indices; one
 //! opened from another file has each index moved to the nearest colour of
-//! this palette, unless `pattern match off` (the reference editor's "Match Palette
-//! Color", on by default there too) keeps the indices as they are.
+//! this palette, unless `pattern match off` ("Match Palette Color", on by
+//! default) keeps the indices as they are.
 
 use crate::App;
 use eframe::egui;
@@ -127,7 +127,7 @@ impl App {
                 lines.push("pattern selection".to_owned());
             }
             if ui.small_button("Open…").on_hover_text("The first model of a .vox file").clicked()
-                && let Some(path) = rfd::FileDialog::new().add_filter("the reference editor", &["vox"]).pick_file()
+                && let Some(path) = rfd::FileDialog::new().add_filter("Voxel model", &["vox"]).pick_file()
             {
                 lines.push(format!("pattern open {}", path.display()));
             }

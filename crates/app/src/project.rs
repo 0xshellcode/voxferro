@@ -1,13 +1,12 @@
 //! The Project panel: a folder of `.vox` files, opened with a click, and
-//! the top bar's file actions the reference editor has (`config/ui/top.ui`): rename,
-//! duplicate, and remove to the trash.
+//! the top bar's file actions: rename, duplicate, and remove to the trash.
 //!
 //! - `project` reports the folder; `project list` names its files;
 //! - `project dir <path>` changes it (remembered between sessions);
 //! - `project open <name>` opens one, asking first about unsaved changes;
 //! - `project rename <name>` renames the open file on disk;
 //! - `project dup` saves the document as the next free `<name>-<n>.vox`
-//!   beside it (the reference editor's `rename_prefix` is `-`) and goes on there;
+//!   beside it and goes on there;
 //! - `project delete` moves the open file to the system's trash, after a
 //!   confirmation, and starts a new model.
 //!
@@ -60,7 +59,7 @@ pub fn renamed(path: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(path.parent().unwrap_or(Path::new(".")).join(name))
 }
 
-/// The Project panel's tabs, as the reference editor's (`file.ui`): project files,
+/// The Project panel's tabs: project files,
 /// patterns, voxel scripts ("shader"), and the scene outline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
@@ -252,7 +251,7 @@ impl App {
             self.project.tab = tabs[i].0;
         }
         ui.separator();
-        // Export at the bottom, as there; the tab's content fills the rest.
+        // Export at the bottom; the tab's content fills the rest.
         egui::Panel::bottom("project export").show(ui, |ui| {
             egui::CollapsingHeader::new("EXPORT").id_salt("project export").show(ui, |ui| {
                 ui.add_enabled_ui(self.scene.is_some(), |ui| {

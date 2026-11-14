@@ -1,18 +1,15 @@
-//! the reference editor's *iso* and *2d* exports: the model as pixel-art sprites.
+//! The *iso* and *2d* exports: the model as pixel-art sprites.
 //!
-//! From `the reference renderer` and the `io_iso` and `io_2d` options of its
-//! `config.txt`: each voxel is a small isometric cube placed at
-//! `x = (vx - vy) · A`, `y = (vx + vy) · B - vz · H` (A the half width of a
+//! Each voxel is a small isometric cube placed at `x = (vx - vy) · A`,
+//! `y = (vx + vy) · B - vz · H` (A the half width of a
 //! cube's top, B its half height, H its side height -- `size` and `height`
 //! in the options), its top and two sides lit by the `top`, `left` and
 //! `right` factors, clamped; up to four views, a quarter turn apart, side by
-//! side; and an outline. The pixel rules within a cube and the 2D sprite's
-//! shadow are this editor's reading of the options, not a transcription:
-//! each cube is rasterised from its exact outline, drawn back to front.
+//! side; and an outline. Each cube is rasterised from its exact outline,
+//! drawn back to front.
 //!
-//! The outline and bevel are the reference editor's (`the reference renderer`, read
-//! from a recent version): with `outline` on, each cube's outer edges are drawn in
-//! opaque black where they show -- the edge of a visible face is drawn when
+//! With `outline` on, each cube's outer edges are drawn in opaque black
+//! where they show -- the edge of a visible face is drawn when
 //! the cell beside it across that edge is empty, or the cell diagonally
 //! past it is filled (a step down or back) -- and the three edges meeting
 //! at the cube's near top corner are lit: the palette colour plus `bevel`
@@ -21,7 +18,7 @@
 use crate::{Volume, ops};
 use vox_format::Palette;
 
-/// `io_iso` in the reference editor's `config.txt`, with its defaults.
+/// The *iso* export's options, with their defaults.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IsoOptions {
     /// Pixels: a cube's top is `4 · size` wide (1 to 8).
@@ -53,7 +50,7 @@ impl Default for IsoOptions {
     }
 }
 
-/// `io_2d`, with its defaults.
+/// The *2d* export's options, with their defaults.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlatOptions {
     /// Pixels per voxel (1 to 32).
@@ -131,7 +128,7 @@ fn lit(c: vox_format::Color, k: [f32; 3]) -> [u8; 4] {
     [f(c.r, k[0]), f(c.g, k[1]), f(c.b, k[2]), 255]
 }
 
-/// The colour plus `add`, as the reference editor's bevel: `(c + bevel) · 255`.
+/// The colour plus `add`, as the bevel: `(c + bevel) · 255`.
 fn raised(c: vox_format::Color, add: [f32; 3]) -> [u8; 4] {
     let f = |v: u8, k: f32| ((v as f32 / 255.0 + k) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
     [f(c.r, add[0]), f(c.g, add[1]), f(c.b, add[2]), 255]
@@ -269,7 +266,7 @@ fn iso_view_with(volume: &Volume, palette: &Palette, o: &IsoOptions, cull: bool)
     img
 }
 
-/// the reference editor's *iso* export: `views` isometric views side by side, each a
+/// The *iso* export: `views` isometric views side by side, each a
 /// quarter turn on from the last.
 pub fn iso(volume: &Volume, palette: &Palette, o: &IsoOptions) -> Image {
     let mut turned = volume.clone();
@@ -281,7 +278,7 @@ pub fn iso(volume: &Volume, palette: &Palette, o: &IsoOptions) -> Image {
     out
 }
 
-/// the reference editor's *2d* export: the model from the front (looking along +y),
+/// The *2d* export: the model from the front (looking along +y),
 /// `size` pixels a voxel, the nearest voxel of each column; with a shadow,
 /// a darker copy of the silhouette one voxel down and to the right behind
 /// it; with an outline, the silhouette's edge darkened.

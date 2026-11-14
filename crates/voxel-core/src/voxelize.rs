@@ -1,15 +1,14 @@
-//! Importing a mesh: a Wavefront OBJ turned into voxels, as the reference editor's
-//! `the reference renderer` does.
+//! Importing a mesh: a Wavefront OBJ turned into voxels.
 //!
 //! Read: `v` (with the common `v x y z r g b` vertex colours), `vt`, `f`
 //! (polygons, fanned; negative indices count from the end), `usemtl`, and
 //! from the `.mtl` the file names each material's `Kd` colour and `map_Kd`
-//! texture -- which a palette-textured OBJ, the reference editor's or this editor's,
-//! is coloured by: a corner with a texture coordinate takes the texel there. OBJ is usually Y up, so a
-//! point comes in as `(x, -z, y)` -- the inverse of the editor's own OBJ
-//! export. The mesh is scaled so its longest side spans `size` voxels, and
-//! each triangle is sampled finely enough that no cell it crosses is
-//! missed; with `fill`, the space the surface encloses is filled too.
+//! texture -- which a palette-textured OBJ, this editor's or another's, is
+//! coloured by: a corner with a texture coordinate takes the texel there.
+//! OBJ is usually Y up, so a point comes in as `(x, -z, y)` -- the inverse
+//! of the editor's own OBJ export. The mesh is scaled so its longest side
+//! spans `size` voxels, and each triangle is sampled finely enough that no
+//! cell it crosses is missed; with `fill`, the space the surface encloses is filled too.
 //! Colours go to the nearest of the palette.
 
 use crate::{Volume, kernels};

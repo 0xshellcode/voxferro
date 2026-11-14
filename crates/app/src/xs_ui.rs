@@ -2,7 +2,7 @@
 //! themselves).
 //!
 //! `xs [-n passes] [-c colours] <script> [arg...]` runs a script over the
-//! selected model, like the reference editor's command of the same name:
+//! selected model:
 //!
 //! - `<script>` is a name from the script folders, or a path to a file;
 //! - the args fill the script's header arguments in order, the rest keeping

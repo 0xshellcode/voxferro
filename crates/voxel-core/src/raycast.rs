@@ -29,8 +29,8 @@ impl Hit {
 /// sampling at fixed intervals cannot guarantee, since it can tunnel through
 /// a thin wall.
 ///
-/// the reference editor picks on the GPU instead, encoding the face into a framebuffer.
-/// That scales better; this needs no GPU round trip and is exact.
+/// Picking on the GPU, encoding the face into a framebuffer, would scale
+/// better; this needs no GPU round trip and is exact.
 pub fn raycast(volume: &Volume, origin: Vec3, direction: Vec3, max_distance: f32) -> Option<Hit> {
     let dir = direction.normalize_or_zero();
     if dir == Vec3::ZERO {

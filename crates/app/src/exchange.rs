@@ -1,4 +1,4 @@
-//! Exporting to the reference editor's other formats, and importing models from
+//! Exporting to other formats, and importing models from
 //! files (see `voxel_core::formats`).
 //!
 //! `export [format] <path>`, the format being one of [`FORMATS`]; without
@@ -8,17 +8,16 @@
 //! formats (xraw, qb, slab, slice) take the selected model, since each holds
 //! one grid.
 //!
-//! Two switches, the reference editor's (`export_sel`, `export_local`, read from its
-//! a recent version executable), shape what the mesh formats take: `export
+//! Two switches shape what the mesh formats take: `export
 //! selected on` only the selected objects, `export local on` each model in
 //! its own coordinates -- its placement and its groups' left out, centred
 //! on the origin. Both are off by default and kept for the session.
 //!
 //! `import <path>` adds the models of another file to this scene, each a new
-//! model and instance, all one undo step: a the reference editor `.vox` (each model
+//! model and instance, all one undo step: a `.vox` (each model
 //! where that file puts it, unturned), XRAW, Qubicle QB or SLAB6 -- told apart by their content,
 //! not their extension, since SLAB6's is `.vox` too. Their colours move to
-//! the nearest colours of this palette (the reference editor's "Match Color").
+//! the nearest colours of this palette ("Match Color").
 //! `import <file.obj> [size] [fill]` voxelises a mesh (see
 //! `voxel_core::voxelize`): its longest side `size` voxels (64 by default),
 //! hollow unless `fill`.
@@ -26,7 +25,7 @@
 use crate::App;
 use voxel_core::formats::{self, Imported};
 
-/// The export formats, as the reference editor's Export buttons name them.
+/// The export formats, as the Export buttons name them.
 pub const FORMATS: [(&str, &str, &str); 11] = [
     ("obj", "obj", "Merged faces, Y up, with a palette texture"),
     ("ply", "ply", "A quad per visible face, coloured, scale 0.1"),
@@ -41,7 +40,7 @@ pub const FORMATS: [(&str, &str, &str); 11] = [
     ("2d", "png", "The selected model as a front-view pixel sprite"),
 ];
 
-/// `io_ply`, `io_cube` and `io_point` in the reference editor's `config.txt`.
+/// The scale of the mesh formats and the cube margin.
 const MESH_SCALE: f32 = 0.1;
 const CUBE_MARGIN: f32 = 0.1;
 
@@ -185,11 +184,10 @@ impl App {
     }
 
     /// `import materials|render|cameras|palette <file.vox>`: one part of
-    /// another project, as one undo step (the reference editor's File tab imports
-    /// these from its own component files; here from a `.vox`, which holds
-    /// them all).
+    /// another project, as one undo step (from a component file, or from a
+    /// `.vox`, which holds them all).
     fn import_component(&mut self, what: &str, path: &str) -> String {
-        // A component file (the reference editor's text format) rather than a project.
+        // A component file (text) rather than a project.
         if path.to_ascii_lowercase().ends_with(".txt") && what != "palette" {
             let text = crate::read_text(std::path::Path::new(path)).map_err(|e| e.to_string());
             let command = match text.and_then(|t| self.component_command(what, &t)) {
@@ -239,7 +237,7 @@ impl App {
 
     pub fn import_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().collect();
-        // the reference editor's Import Sprites: the file's models imported, then
+        // Import Sprites: the file's models imported, then
         // packed into one looping animation, a frame each.
         if words.get(1) == Some(&"sprites") {
             let path = words[2..].join(" ");

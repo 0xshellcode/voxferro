@@ -2,8 +2,8 @@
 //!
 //! The sample corpus barely uses materials -- one file has emitters, none has
 //! glass -- so the path tracer needs a scene built to cover them. It is
-//! written as a real `.vox`, which doubles as a check that the reference editor itself
-//! reads materials we write.
+//! written as a real `.vox`, which doubles as a check that other `.vox`
+//! readers take the materials we write.
 //!
 //!     cargo run -p voxel-core --example materials_demo -- out.vox
 

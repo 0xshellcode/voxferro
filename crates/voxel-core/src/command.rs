@@ -1,9 +1,8 @@
 //! Edits as values, so undo is a property of the type.
 //!
-//! the reference editor does this with ~130 C++ classes deriving from `the reference writer`,
-//! each implementing `DoIt`/`Undo`/`Redo`. An enum gives the same structure
-//! with one advantage: `match` is exhaustive, so adding a command the compiler
-//! cannot undo is a build error rather than a bug found later.
+//! Every command is a variant of one enum rather than a class hierarchy
+//! implementing do, undo and redo: `match` is exhaustive, so adding a command
+//! the compiler cannot undo is a build error rather than a bug found later.
 
 use crate::{Document, Volume};
 use glam::IVec3;
@@ -236,8 +235,7 @@ impl Command {
     ///
     /// A brush drag fires one command per frame, and a colour slider one per
     /// frame it moves; without this the undo stack fills with tiny steps and
-    /// one Cmd+Z barely undoes anything. the reference editor calls the same idea
-    /// `CombinePrevCmd`.
+    /// one Cmd+Z barely undoes anything.
     pub fn absorb(&mut self, next: &Command) -> bool {
         match (self, next) {
             (

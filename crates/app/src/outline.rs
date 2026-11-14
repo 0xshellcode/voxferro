@@ -140,9 +140,8 @@ impl App {
     ///
     /// `assign` moves the selected instance there. `only` shows one layer
     /// (the current one by default) and hides the rest, `all` shows every
-    /// layer, `sort` orders the list by name (the reference editor's `lay_vis` and
-    /// `lay_sort`), and `select` picks the visible objects of the open group
-    /// on that layer (`osel_layer`).
+    /// layer, `sort` orders the list by name, and `select` picks the
+    /// visible objects of the open group on that layer.
     pub fn layer_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().skip(1).collect();
         let Some(loaded) = self.scene.as_ref() else { return "nothing open".to_owned() };
@@ -644,7 +643,7 @@ impl App {
     }
 }
 
-/// The outline's menu, the reference editor's items: the console line of the one
+/// The outline's menu: the console line of the one
 /// chosen. On a row's right-click, acting on the selection.
 fn tree_menu_ui(ui: &mut egui::Ui) -> Option<&'static str> {
     let items: [(&str, &str, &'static str); 9] = [
@@ -671,8 +670,7 @@ fn tree_menu_ui(ui: &mut egui::Ui) -> Option<&'static str> {
     chosen
 }
 
-/// The layer list's menu (`lay_vis`, `lay_sort`, `osel_layer`): the
-/// console line of the item chosen, for layer `id`.
+/// The layer list's menu: the console line of the item chosen, for layer `id`.
 fn layer_menu_ui(ui: &mut egui::Ui, id: i32) -> Option<String> {
     let items: [(&str, &str, String); 5] = [
         ("Select objects", "Select the visible objects of the open group on this layer", format!("layer select {id}")),

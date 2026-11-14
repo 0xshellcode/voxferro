@@ -1,7 +1,6 @@
 //! Exporting a scene as Wavefront OBJ.
 //!
-//! The same three files the editor's own `io_obj` writes: the geometry, a
-//! material library, and the palette as a 256x1 texture that every face
+//! Three files: the geometry, a material library, and the palette as a 256x1 texture that every face
 //! samples by its palette index. Faces are merged greedily, so a flat wall is
 //! two triangles however many voxels it spans.
 //!

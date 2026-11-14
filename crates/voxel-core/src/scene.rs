@@ -44,7 +44,7 @@ pub struct Scene {
     pub nodes: Vec<SceneNode>,
     /// The animation frame `instances` show, and that edits key.
     pub frame: u32,
-    /// the reference editor's Global Time off (`aset global 0`) inside an open
+    /// Global Time off (`anim global off`) inside an open
     /// group: `(transform node, frame)`, the node's subtree showing `frame`
     /// above while everything else -- the node's own placement included --
     /// stays at this frame. `None` animates the whole scene.

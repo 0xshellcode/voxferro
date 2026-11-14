@@ -1,11 +1,10 @@
-//! the reference editor a recent version's palette tools (`palette.ui`, `the reference renderer`,
-//! `the reference renderer`, `pal_add`, `rgb`, `rand`), read from its code:
+//! The palette tools:
 //!
 //! - **Selecting several colours**: Shift+click in the palette adds a
 //!   colour or takes it out; `palette select all | none | invert | used |
 //!   unused`. *Used* takes the colours of the selected voxels (or the whole
-//!   model's), *unused* the colours no voxel in the scene has -- the reference editor's
-//!   `pal mask`. With nothing selected, the tools act on the brush colour.
+//!   model's), *unused* the colours no voxel in the scene has. With nothing
+//!   selected, the tools act on the brush colour.
 //! - **Sort** (`palette sort <keys>`): keys `r g b h s v`, each ascending,
 //!   or descending after a `-`; one stable pass a key in the order written,
 //!   so the last is the main one -- `-v-sh` orders by hue, then saturation
@@ -33,7 +32,7 @@ use eframe::{egui, egui_wgpu};
 use vox_format::Color;
 use voxel_core::Command;
 
-/// Integer HSV as the reference editor sorts by it: hue 0-359 (359 for greys),
+/// Integer HSV as the sort uses it: hue 0-359 (359 for greys),
 /// saturation and value 0-255.
 pub fn sort_hsv(c: Color) -> [i32; 3] {
     let (r, g, b) = (c.r as i32, c.g as i32, c.b as i32);
@@ -56,7 +55,7 @@ pub fn sort_hsv(c: Color) -> [i32; 3] {
     [h, 255 * d / max, max]
 }
 
-/// `slots` (display slots) reordered by `keys`, as the reference editor's sort:
+/// `slots` (display slots) reordered by `keys`:
 /// one stable pass a key, in order, so the last key leads.
 pub fn sorted_slots(order: &[u8; 256], slots: &[usize], colour: impl Fn(u8) -> Color, keys: &str) -> [u8; 256] {
     let mut out = *order;
@@ -80,7 +79,7 @@ pub fn sorted_slots(order: &[u8; 256], slots: &[usize], colour: impl Fn(u8) -> C
             'v' => |c: Color| sort_hsv(c)[2],
             _ => continue,
         };
-        // Stable, as the reference editor's bubble sort.
+        // Stable, so earlier keys order the ties.
         if descending {
             values.sort_by_key(|&i| std::cmp::Reverse(key(colour(i))));
         } else {
@@ -144,7 +143,7 @@ pub fn from_hsv([h, s, v]: [f32; 3]) -> Color {
     Color { r: f(r), g: f(g), b: f(b), a: 255 }
 }
 
-/// `c` shifted on one channel, as `pal_add`.
+/// `c` shifted on one channel.
 pub fn adjusted(c: Color, channel: char, amount: f32) -> Color {
     let clamp = |v: f32| v.round().clamp(0.0, 255.0) as u8;
     match channel {
@@ -203,7 +202,7 @@ impl App {
         if message.ends_with("nothing changed") { message } else { format!("{what}: {n} colours") }
     }
 
-    /// The palette commands added for the reference editor a recent version's tools; `None`
+    /// The palette tools' commands; `None`
     /// for the ones `palette_command` keeps.
     pub fn palette_tool_command(&mut self, words: &[&str], state: &egui_wgpu::RenderState) -> Option<String> {
         let Some(loaded) = &self.scene else { return Some("nothing open".to_owned()) };

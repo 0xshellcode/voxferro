@@ -57,7 +57,7 @@ pub struct OrbitCamera {
     /// Elevation, radians, clamped short of the poles.
     pub pitch: f32,
     pub fov_y: f32,
-    /// the reference editor's four modes. In the parallel ones the visible height is
+    /// Four modes. In the parallel ones the visible height is
     /// what the perspective view shows at the target, so switching keeps
     /// the subject the same size. Free turns about the eye instead of the
     /// target and flies with the keys; isometric keeps its pitch and turns
@@ -65,7 +65,7 @@ pub struct OrbitCamera {
     pub projection: Projection,
     /// Drag gathered toward the next isometric quarter turn.
     iso_turn: f32,
-    /// Turn about the line of sight, radians: the reference editor's roll (the
+    /// Turn about the line of sight, radians: the roll (the
     /// camera panel's third angle). 0 keeps the horizon level.
     pub roll: f32,
 }

@@ -1,8 +1,7 @@
 // Voxel surface shading.
 //
 // The mesh carries a palette index per vertex rather than a colour, so the
-// palette can be recoloured without rebuilding any geometry. the reference editor does
-// the same, smuggling the index through the vertex W coordinate.
+// palette can be recoloured without rebuilding any geometry.
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
@@ -11,9 +10,9 @@ struct Uniforms {
     // x: draw voxel edges; y: shadows.
     options: vec4<f32>,
     light_view_proj: mat4x4<f32>,
-    // the reference editor's editor options: x 1 for constant shading (the palette
-    // colour alone), y how much of a faded object's colour stays (its
-    // `bg_fade`, 0.5), z the frame lines' spacing in voxels (0: none).
+    // The editor options: x 1 for constant shading (the palette colour
+    // alone), y how much of a faded object's colour stays (0.5), z the frame
+    // lines' spacing in voxels (0: none).
     view: vec4<f32>,
     // The background colour, what faded objects fade toward.
     background: vec4<f32>,
@@ -89,10 +88,9 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    // Wrap lighting, matching the editor's own viewport shader: back faces are
-    // lit at 80% instead of going black, then the whole thing is scaled up.
-    // It keeps unlit sides readable while editing, which a physically correct
-    // term would not.
+    // Wrap lighting: back faces are lit at 80% instead of going black, then
+    // the whole thing is scaled up. It keeps unlit sides readable while
+    // editing, which a physically correct term would not.
     let d = dot(u.light_dir.xyz, in.normal);
     // In shadow, a face keeps a third of the light that reaches it.
     var front = max(d, 0.0);

@@ -114,7 +114,7 @@ impl Palette {
 }
 
 impl Default for Palette {
-    /// the reference editor's default ramp is not reproduced here; a file without an
+    /// The default ramp is not reproduced here; a file without an
     /// `RGBA` chunk gets a visible grey so missing palettes are obvious rather
     /// than invisible.
     fn default() -> Self {
@@ -309,7 +309,7 @@ impl Material {
             Some("_metal") => MaterialKind::Metal,
             Some("_glass") => MaterialKind::Glass,
             Some("_emit") => MaterialKind::Emissive,
-            // Cloud in the editor's panel: a participating medium.
+            // A participating medium: cloud, smoke, fog.
             Some("_media") => MaterialKind::Media,
             // `_blend` mixes metal, glass and emission by their own keys.
             Some("_blend") => MaterialKind::Blend,
@@ -343,8 +343,8 @@ impl Material {
                 MaterialKind::Blend => self.float("_metal").unwrap_or(0.0).clamp(0.0, 1.0),
                 _ => 0.0,
             },
-            // Files from a recent version use `_trans`; the editor's own key table
-            // (next to `_metal`, `_rough`, `_emit`...) names it `_alpha`.
+            // Version-200 files use `_trans`; `_alpha` is read as another
+            // name for the same value.
             transparency: if kind == MaterialKind::Blend {
                 self.float("_trans").or_else(|| self.float("_alpha")).unwrap_or(0.0).clamp(0.0, 1.0)
             } else if kind == MaterialKind::Glass {
@@ -450,13 +450,11 @@ pub enum MaterialKind {
     Emissive = 3,
     /// A participating medium: cloud, smoke, fog in a volume.
     Media = 4,
-    /// the reference editor's Blend: shares of metal, glass and emission at once.
+    /// A blend: shares of metal, glass and emission at once.
     Blend = 5,
 }
 
-/// How a medium interacts with light, as the editor's `_media` numbers it
-/// (`the reference renderer` puts the density in a different slot
-/// for each).
+/// How a medium interacts with light, as `_media` numbers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum MediaKind {

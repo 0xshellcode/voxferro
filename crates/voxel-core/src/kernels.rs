@@ -1,14 +1,12 @@
-//! The Edit panel's operations, as the reference editor defines them.
+//! The Edit panel's operations.
 //!
-//! the reference editor runs most of these as small GLSL kernels: a `map(dst_p)`
-//! evaluated at the centre of every cell of the result (`dst_p` is
-//! `(x + 0.5, y + 0.5, z + 0.5)`), reading the model through `voxel(p)`,
-//! which floors `p` and returns 0 outside the box. The kernels' text is in
-//! its executable; each function here names the one it follows, and keeps
-//! its arithmetic, so results match cell for cell.
+//! Most of these are small kernels: a `map(dst_p)` evaluated at the centre
+//! of every cell of the result (`dst_p` is `(x + 0.5, y + 0.5, z + 0.5)`),
+//! reading the model through `voxel(p)`, which floors `p` and returns 0
+//! outside the box.
 //!
-//! Hull and flood are not kernels there and are written from what their
-//! buttons promise.
+//! Hull and flood are not kernels and are written from what their buttons
+//! promise.
 
 use crate::Volume;
 use glam::{IVec3, Mat3, Vec3};
@@ -34,13 +32,12 @@ fn map_volume(size: [u32; 3], map: impl Fn(Vec3) -> u8 + Sync) -> Volume {
     Volume::from_cells(size, cells)
 }
 
-/// the reference editor's Transform *wrap* (`the reference renderer`): `source` repeated to
+/// The Transform *wrap*: `source` repeated to
 /// fill a box `size` cells big whose corner is `offset` cells from the
 /// source's. The copies start at the source's own place and repeat every
 /// `size + spacing` cells along each axis, both ways; the gap between them
 /// is empty, and a box smaller than the source crops it. With `mirror` on
-/// an axis, every other copy along it is reflected, as the reference editor's
-/// Mirror toggles do.
+/// an axis, every other copy along it is reflected.
 pub fn wrap(source: &Volume, offset: IVec3, size: [u32; 3], spacing: [u32; 3], mirror: [bool; 3]) -> Volume {
     let src = source.size().map(|s| s as i32);
     map_volume(size, |c| {
@@ -87,10 +84,10 @@ impl Rand {
     }
 }
 
-/// the reference editor's *Maze* (`grid_edit::maze`): a three-dimensional maze of
+/// The *Maze*: a three-dimensional maze of
 /// one-voxel corridors in `colour`, filling a box the size of `size`; what
 /// was there is replaced. Cells sit every `step = max(p, 1) + 2` voxels
-/// (3 by default) and corridors join them, grown as the reference editor grows them:
+/// (3 by default) and corridors join them, grown like this:
 /// a list of open cells, half the time the newest taken and half the time
 /// one at random; from it a step into an unvisited neighbour, toward -x,
 /// -y or -z first and toward + only when those are used up or one time in
@@ -136,7 +133,7 @@ pub fn maze(size: [u32; 3], colour: u8, p: u32, rand: &mut Rand) -> Volume {
     out
 }
 
-/// Ken Perlin's improved noise, as the reference editor's `the reference writer`: the
+/// Ken Perlin's improved noise: the
 /// reference permutation, the quintic fade and the twelve edge gradients.
 pub fn perlin(p: Vec3) -> f32 {
     const PERM: [u8; 256] = [
@@ -173,11 +170,11 @@ pub fn perlin(p: Vec3) -> f32 {
     )
 }
 
-/// the reference editor's *Perlin* (`grid_edit::noise`): the box filled in `colour`
+/// The *Perlin*: the box filled in `colour`
 /// where `sin(noise · π)` falls strictly between `lo` and `hi`, the noise
 /// sampled at `(cell + seed) · scale` -- a band of the noise, which reads as
-/// winding caves and sheets. What was there is replaced. the reference editor's
-/// defaults: seed 0, scale 0.04, band 0.2 to 0.5.
+/// winding caves and sheets. What was there is replaced. The defaults:
+/// seed 0, scale 0.04, band 0.2 to 0.5.
 pub fn noise(size: [u32; 3], colour: u8, seed: u32, scale: f32, lo: f32, hi: f32) -> Volume {
     let seed = seed as f32;
     map_volume(size, |c| {
@@ -186,7 +183,7 @@ pub fn noise(size: [u32; 3], colour: u8, seed: u32, scale: f32, lo: f32, hi: f32
     })
 }
 
-/// the reference editor's *Fractal* (`grid_edit::fractal`): each voxel becomes the
+/// The *Fractal*: each voxel becomes the
 /// pattern's shape in the voxel's colour, so the model grows by the
 /// pattern's size on each axis (up to 256). The pattern's own colours are
 /// not used.

@@ -3,9 +3,6 @@
 //! Only faces with an empty neighbour are emitted. For a solid 64³ block that
 //! is 24 576 faces instead of 1.5 million — the difference between a viewer
 //! that runs and one that does not.
-//!
-//! the reference editor does the same thing with six template instantiations of
-//! `the reference renderer<>`, one per face direction.
 
 use crate::{Transform, Volume};
 use glam::Vec3;
@@ -97,8 +94,7 @@ impl Face {
 ///
 /// The palette index rides along as a float attribute rather than a resolved
 /// colour: the shader looks it up, so recolouring the palette does not require
-/// rebuilding the mesh. the reference editor smuggles the same value in the vertex's W
-/// coordinate.
+/// rebuilding the mesh.
 /// `Pod` + `Zeroable` let the vertex buffer be handed to the GPU as raw bytes
 /// with no per-vertex conversion. It requires a fixed `repr(C)` layout and no
 /// padding, which this struct satisfies: seven consecutive f32s.

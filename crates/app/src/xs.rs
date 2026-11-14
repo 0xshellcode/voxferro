@@ -1,26 +1,25 @@
 //! Voxel scripts: user kernels loaded from files, run over a model on the
 //! GPU.
 //!
-//! This is the reference editor's `xs` command. A script defines one function,
+//! This is the `xs` command. A script defines one function,
 //! `map`, which is evaluated once per voxel -- at the voxel's centre, so
 //! `v` is `(1.5, 2.5, 4.5)` and so on -- and returns the palette index to
 //! put there (0 for empty). A header names the script's arguments:
 //!
 //! ```text
 //! // xs_begin
-//! // arg : { var = 'm_teeth' name = 'Teeth' value = '6' range = '3 64' step = '1' precision = '0' }
+//! // arg : { var = 'm_count' name = 'Count' value = '6' range = '3 64' step = '1' precision = '0' }
 //! // xs_end
 //! ```
 //!
 //! Two languages are accepted:
 //!
-//! - **GLSL**, `.txt`: the reference editor's own scripts, unchanged. The original
-//!   evaluates them in a fragment shader over a 2D-packed volume; here naga's
-//!   GLSL front end compiles them into a compute kernel, and the result is
-//!   handed to wgpu as WGSL.
+//! - **GLSL**, `.txt`: existing scripts, unchanged. naga's GLSL front end
+//!   compiles them into a compute kernel, and the result is handed to wgpu
+//!   as WGSL.
 //! - **WGSL**, `.wgsl`: `fn map(v: vec3<f32>) -> f32`, with the same names.
 //!
-//! Built-ins, in both (taken from the declarations in the reference editor's binary):
+//! Built-ins, in both:
 //! `i_volume_size`, `i_color_index`, `i_num_color_sels`, `i_mirror`,
 //! `i_axis`, `i_args[16]`, `i_frame`, `i_num_frames`, `i_rand`, `i_iter`,
 //! and the functions `voxel(v)`, `color_sel(k)` and `palette(index)`. Each
@@ -38,7 +37,7 @@ use wgpu::util::DeviceExt;
 /// One argument from a script's header.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Arg {
-    /// The variable the script reads, such as `m_teeth`.
+    /// The variable the script reads, such as `m_count`.
     pub var: String,
     /// The label for it.
     pub name: String,
@@ -148,15 +147,13 @@ fn parse_arg(body: &str) -> Result<Arg, String> {
     })
 }
 
-/// Where scripts are looked for, in order. Like environment maps, the
-/// search ends in any local the reference editor install, whose `shader/` folder
-/// holds its samples.
-pub fn dirs(assets: &Path, reference_editor: &[PathBuf]) -> Vec<PathBuf> {
+/// Where scripts are looked for, in order: the bundled ones, then the
+/// user's own folder.
+pub fn dirs(assets: &Path) -> Vec<PathBuf> {
     let mut out = vec![assets.join("scripts")];
     if let Some(user) = crate::recent::settings_dir() {
         out.push(user.join("scripts"));
     }
-    out.extend(reference_editor.iter().map(|d| d.join("shader")));
     out
 }
 
@@ -633,13 +630,13 @@ mod tests {
     #[test]
     fn header_arguments() {
         let args = parse_header(
-            "// xs_begin\n// author : 'x'\n// arg : { var = 'm_teeth' name = 'Teeth' value = '6'   range = '3 64'    step = '1'\tprecision = '0' }\n\
+            "// xs_begin\n// author : 'x'\n// arg : { var = 'm_count' name = 'Count' value = '6'   range = '3 64'    step = '1'\tprecision = '0' }\n\
              // arg : { var = 'm_inner' name = 'Inner' value = '0.5' range = '0.0 1.0' step = '0.05' precision = '2' }\n// xs_end\n// arg : { var = 'm_late' }\n",
         )
         .unwrap();
         assert_eq!(args.len(), 2);
-        assert_eq!(args[0].var, "m_teeth");
-        assert_eq!(args[0].name, "Teeth");
+        assert_eq!(args[0].var, "m_count");
+        assert_eq!(args[0].name, "Count");
         assert_eq!(args[0].value, 6.0);
         assert_eq!(args[0].range, (3.0, 64.0));
         assert_eq!(args[1].step, 0.05);
@@ -695,25 +692,21 @@ mod tests {
         }
     }
 
-    /// the reference editor's own samples compile unchanged, when an install is
-    /// around to take them from.
+    /// Scripts from elsewhere compile unchanged, when `VOXFERRO_XS_SAMPLES`
+    /// names a folder of them.
     #[test]
-    fn reference_editor_scripts_compile() {
-        let Some(home) = std::env::var_os("HOME") else { return };
-        let apps = Path::new(&home).join("Applications/the reference editor");
-        let Ok(entries) = std::fs::read_dir(apps) else { return };
-        for install in entries.flatten() {
-            for (_, path) in list(&[install.path().join("shader")]) {
-                let s = Script::load(&path).unwrap();
-                // a recent version's gear.txt stores a vec3 in a float, which Apple's
-                // old GLSL compiler let through; a recent version fixed the script.
-                // Refusing it, with a message, is the right answer.
-                if s.source.contains("float col = d * vec3(") {
-                    assert!(compile(&s).is_err());
-                    continue;
-                }
-                compile(&s).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    fn sample_scripts_compile() {
+        let Some(dir) = std::env::var_os("VOXFERRO_XS_SAMPLES") else { return };
+        for (_, path) in list(&[PathBuf::from(dir)]) {
+            let s = Script::load(&path).unwrap();
+            // A script that stores a vec3 in a float, which an old GLSL
+            // compiler let through: refusing it, with a message, is the
+            // right answer.
+            if s.source.contains("float col = d * vec3(") {
+                assert!(compile(&s).is_err());
+                continue;
             }
+            compile(&s).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         }
     }
 }

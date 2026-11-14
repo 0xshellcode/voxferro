@@ -1,4 +1,4 @@
-//! Checks the parser against the real the reference editor sample models.
+//! Checks the parser against a corpus of sample `.vox` files.
 //!
 //! The corpus is not committed (see `assets/README.md`), so these tests skip
 //! themselves when it is missing rather than failing a clean checkout.
@@ -47,9 +47,9 @@ fn every_sample_has_a_supported_version() {
     let files = corpus_files();
     skip_if_no_corpus!(files);
 
-    // The corpus spans both format versions on purpose: the macOS a recent version
-    // build writes 150, the win64 a recent version build writes 200. Keeping both in
-    // the corpus is what stops a 150-only assumption from creeping back in.
+    // The corpus spans both format versions, 150 and 200, on purpose.
+    // Keeping both in the corpus is what stops a 150-only assumption from
+    // creeping back in.
     let mut by_version: std::collections::BTreeMap<u32, usize> = Default::default();
 
     for path in &files {
@@ -219,16 +219,14 @@ fn parses_the_smallest_sample_exactly() {
         256,
         "one material per palette index"
     );
-    // The two installs ship this sample saved by different editors.
+    // The corpus holds this sample in both format versions.
     match file.version {
         vox_format::VERSION_150 => {
-            // a recent version's copy.
-            assert_eq!(file.layers.len(), 8, "a recent version always writes 8 layers");
+            assert_eq!(file.layers.len(), 8, "version 150 always has 8 layers");
             assert!(file.cameras.is_empty(), "rCAM arrived in version 200");
         }
         vox_format::VERSION_200 => {
-            // a recent version's copy, saved again by that editor.
-            assert_eq!(file.layers.len(), 32, "a recent version always writes 32 layers");
+            assert_eq!(file.layers.len(), 32, "version 200 always has 32 layers");
             assert_eq!(file.cameras.len(), 10, "and its 10 camera slots");
         }
         v => panic!("unexpected version {v}"),
@@ -305,8 +303,7 @@ fn every_sample_survives_a_round_trip() {
             "{}: model count",
             path.display()
         );
-        // Some samples in a recent version's install are bare version-150 files with
-        // no scene graph; the writer gives them the default one: a root
+        // Some samples are bare version-150 files with no scene graph; the writer gives them the default one: a root
         // transform and group, then a transform and a shape per model.
         let nodes = if original.nodes.is_empty() { 2 + 2 * original.models.len() } else { original.nodes.len() };
         assert_eq!(reparsed.nodes.len(), nodes, "{}: scene node count", path.display());

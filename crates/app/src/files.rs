@@ -15,7 +15,7 @@ pub enum Discarding {
     Open(Option<String>),
     /// Start a new empty model of this size.
     New([u32; 3]),
-    /// the reference editor's *Recover*: the models and palette of a damaged file.
+    /// *Recover*: the models and palette of a damaged file.
     Recover(String),
     Quit,
 }
@@ -181,7 +181,7 @@ impl App {
     }
 
     fn open_panel(&self) -> Option<String> {
-        let mut dialog = rfd::FileDialog::new().add_filter("the reference editor model", &["vox"]);
+        let mut dialog = rfd::FileDialog::new().add_filter("Voxel model", &["vox"]);
         if let Some(dir) = self.current_dir() {
             dialog = dialog.set_directory(dir);
         }
@@ -191,7 +191,7 @@ impl App {
     fn save_panel(&self) -> Option<String> {
         let name = self.scene.as_ref().map_or("untitled.vox".to_owned(), |s| s.name.clone());
         let mut dialog = rfd::FileDialog::new()
-            .add_filter("the reference editor model", &["vox"])
+            .add_filter("Voxel model", &["vox"])
             .set_file_name(name);
         if let Some(dir) = self.current_dir() {
             dialog = dialog.set_directory(dir);
@@ -227,7 +227,7 @@ impl App {
                 cmd && !i.modifiers.shift && i.key_pressed(egui::Key::S),
                 cmd && i.modifiers.shift && i.key_pressed(egui::Key::S),
                 cmd && i.key_pressed(egui::Key::O),
-                // Cmd+P too: the reference editor's new project.
+                // Cmd+P too: a new project.
                 cmd && !i.modifiers.shift && (i.key_pressed(egui::Key::N) || i.key_pressed(egui::Key::P)),
             )
         });
@@ -249,7 +249,7 @@ impl App {
         }
 
         // A file dropped on the window asks what to do with it, where it
-        // landed, as the reference editor's drop menu does.
+        // landed.
         let dropped = ctx.input(|i| {
             let at = i.pointer.latest_pos().unwrap_or_default();
             i.raw.dropped_files.first().map(|f| (f.path().to_string_lossy().into_owned(), at))
@@ -310,7 +310,7 @@ impl App {
                 return;
             }
             Some("import") => self.import_command(&format!("import {path}")),
-            // the reference editor's Import Sprites: import, then pack what came in.
+            // Import Sprites: import, then pack what came in.
             Some("sprites") => self.import_command(&format!("import sprites {path}")),
             Some("palette") => self.palette_file_command(&format!("palette open {path}"), state).unwrap_or_default(),
             _ => return,

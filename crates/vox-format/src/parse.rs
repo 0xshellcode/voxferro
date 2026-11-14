@@ -82,7 +82,7 @@ impl VoxFile {
     }
 
     /// Parses a whole `.vox` file.
-    /// the reference editor's *Recover*: the models and palette of a damaged file,
+    /// *Recover*: the models and palette of a damaged file,
     /// and nothing else. The chunk tree isn't trusted: every `SIZE` chunk
     /// followed by an `XYZI` is taken wherever it sits, a truncated `XYZI`
     /// keeps the voxels that are there, voxels outside their box are

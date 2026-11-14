@@ -121,7 +121,7 @@ impl App {
                     Err(e) => format!("error: {e}"),
                 }
             }
-            // the reference editor's `asel`: keys picked on the timeline, for F6.
+            // Keys picked on the timeline, for F6.
             ["select", which @ ("all" | "invert" | "none")] => {
                 let Some(node) = self.target_node() else { return "nothing selected".to_owned() };
                 let keys: Vec<u32> = self
@@ -152,7 +152,7 @@ impl App {
                 }
                 format!("{} keys picked", picked.len())
             }
-            // With keys picked, all of them, as the reference editor's `adel`.
+            // With keys picked, all of them.
             ["unkey"] if self.key_selection.0.is_some() && self.key_selection.0 == self.target_node() && !self.key_selection.1.is_empty() => {
                 let node = self.key_selection.0.unwrap_or_default();
                 let frames: Vec<u32> = std::mem::take(&mut self.key_selection.1).into_iter().collect();
@@ -186,8 +186,7 @@ impl App {
                 }
             }
             ["newframe"] => self.new_shape_frame(),
-            // the reference editor a recent version's stepping, loop and reverse (`astep`,
-            // `aset loop`, `arev`), on the selected objects' keys.
+            // Stepping, loop and reverse, on the selected objects' keys.
             ["step", n] => match n.trim_start_matches('+').parse::<i64>() {
                 Ok(n) => {
                     // Wraps within the range, as `astep time` does.

@@ -1,4 +1,4 @@
-//! The window's layout and look, after the reference editor's:
+//! The window's layout and look:
 //!
 //! - along the top, Model and Render on the left, the project's name in the
 //!   middle, undo, redo and the file actions on the right;
@@ -12,13 +12,13 @@
 //! - on the right, the Edit panel and the Project panel (`model_edit`,
 //!   `project`).
 //!
-//! The look: the reference editor's greys, flat buttons that fill their column, panel
+//! The look: greys, flat buttons that fill their column, panel
 //! titles centred, sections in small capitals.
 
 use crate::App;
 use eframe::{egui, egui_wgpu};
 
-/// the reference editor's palette of greys, and its blue for what is on.
+/// The palette of greys, and a blue for what is on.
 pub const PANEL: egui::Color32 = egui::Color32::from_rgb(43, 43, 45);
 const FIELD: egui::Color32 = egui::Color32::from_rgb(30, 30, 31);
 const BUTTON: egui::Color32 = egui::Color32::from_rgb(78, 78, 82);
@@ -79,7 +79,7 @@ pub fn apply_theme(ctx: &egui::Context) {
     ctx.set_global_style(style);
 }
 
-/// A panel's title, centred and dim, as the reference editor's.
+/// A panel's title, centred and dim.
 pub fn title(ui: &mut egui::Ui, text: &str) {
     ui.vertical_centered(|ui| ui.label(egui::RichText::new(text).size(13.5).color(TEXT_DIM)));
     ui.add_space(2.0);
@@ -173,7 +173,7 @@ pub fn toggle_row(ui: &mut egui::Ui, items: &[(bool, &str, &str)]) -> Option<usi
 }
 
 impl App {
-    /// Every panel, in the reference editor's places.
+    /// Every panel, in its place.
     pub fn layout(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
         egui::Panel::top("top bar").show(ui, |ui| self.top_bar(ui, state));
         egui::Panel::bottom("console bar").show(ui, |ui| self.console_bar(ui, state));
@@ -192,7 +192,7 @@ impl App {
                 egui::ScrollArea::vertical().id_salt("edit scroll").show(ui, |ui| self.edit_panel(ui));
             });
         }
-        // The viewport runs to the panels' edges, as the reference editor's.
+        // The viewport runs to the panels' edges.
         let frame = egui::Frame::NONE.fill(egui::Color32::from_rgb(38, 38, 40));
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             if !self.rendering {
@@ -216,7 +216,7 @@ impl App {
                 }
                 ui.add_space(8.0);
             }
-            // The file actions on the right, as the reference editor's top bar.
+            // The file actions on the right of the top bar.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let has_doc = self.scene.is_some();
                 let mut line = None;
@@ -284,16 +284,7 @@ impl App {
 
     fn palette_column(&mut self, ui: &mut egui::Ui, state: &egui_wgpu::RenderState) {
         title(ui, "Palette");
-        // the reference editor's four default palettes, when an install has them.
         let mut line = None;
-        let defaults: Vec<u8> = (0..4u8).filter(|n| crate::palette_files::reference_editor_palette(*n).is_some()).collect();
-        if !defaults.is_empty() {
-            let labels: Vec<(String, String)> = defaults.iter().map(|n| (n.to_string(), format!("the reference editor's default palette {n}"))).collect();
-            let refs: Vec<(&str, &str)> = labels.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
-            if let Some(i) = button_row(ui, &refs) {
-                line = Some(format!("palette default {}", defaults[i]));
-            }
-        }
         self.palette_grid(ui);
         if let Some(i) = button_row(
             ui,
@@ -330,7 +321,7 @@ impl App {
     fn brush_column(&mut self, ui: &mut egui::Ui) {
         use voxel_core::{BrushMode, BrushShape};
         title(ui, "Brush");
-        // The display switches at the column's foot, as the reference editor's.
+        // The display switches at the column's foot.
         egui::Panel::bottom("display switches").show(ui, |ui| {
             ui.add_space(3.0);
             let v = self.view;
@@ -370,7 +361,7 @@ impl App {
                 }
             }
             ui.add_space(4.0);
-            // Attach, Erase, Paint: the reference editor's big stacked buttons.
+            // Attach, Erase, Paint: big stacked buttons.
             for (mode, name) in BrushMode::ALL {
                 let on = !self.selecting && !self.moving && self.brush_mode == mode;
                 if toggle(ui, on, &crate::capitalised(name), ui.available_width()).clicked() {
@@ -415,7 +406,7 @@ impl App {
         });
     }
 
-    /// Over the viewport: the model's size, crop and fit, as the reference editor's.
+    /// Over the viewport: the model's size, crop and fit.
     fn viewport_bar(&mut self, ui: &mut egui::Ui) {
         let current = self.selected_model().and_then(|m| Some((m, self.scene.as_ref()?.doc.scene.models.get(m)?.size())));
         if current.is_some() && current != self.resize_for {
@@ -520,7 +511,7 @@ impl App {
         });
     }
 
-    /// the reference editor's Option menu: how the editor's view draws the models.
+    /// The Option menu: how the editor's view draws the models.
     fn editor_view_ui(&mut self, ui: &mut egui::Ui) {
         caption(ui, "EDITOR VIEW");
         let mut lines: Vec<String> = Vec::new();
@@ -580,7 +571,7 @@ impl App {
                 "Drag on the model to edit, elsewhere (or right-drag) to orbit.",
                 "Shift+drag or middle-drag pans; scroll zooms.",
                 "Option+Shift+click selects a group (again: one level in).",
-                "the reference editor's keys: V F B L C P shapes, T R G modes, M N select, 1 2 3 mirror, Cmd+1 2 3 axis, U full, I fill, 5 frame, Alt+click eyedropper; Alt+1-7 views, O ortho, - + brush size.",
+                "Keys: V F B L C P shapes, T R G modes, M N select, 1 2 3 mirror, Cmd+1 2 3 axis, U full, I fill, 5 frame, Alt+click eyedropper; Alt+1-7 views, O ortho, - + brush size.",
                 "Cmd+E/F/G/B/M display switches; Cmd+minus and Cmd+plus scale the interface; Cmd+Z undo.",
                 "Free camera: W A S D Q E fly.",
             ] {

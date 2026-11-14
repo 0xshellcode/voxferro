@@ -69,7 +69,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       # Builds the app too (on Windows, build.rs embeds the icon). The
-      # the reference editor sample corpus is not in git; tests that need it skip.
+      # third-party sample corpus is not in git; tests that need it skip.
       - name: Tests
         run: cargo test --workspace
 

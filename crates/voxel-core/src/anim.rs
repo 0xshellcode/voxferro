@@ -9,13 +9,12 @@
 //!
 //! A frame without `_f` is frame 0, which is how every static file reads.
 //!
-//! Between keys, translation is interpolated linearly. The a recent version binary has
-//! no symbols to find its evaluator by, but a file it saved pins this down:
-//! `T-Rex-m.vox` keys x = 44 at frame 11 and x = 148 at frame 19, and caches
+//! Between keys, translation is interpolated linearly. A saved sample file
+//! pins this down: `T-Rex-m.vox` keys x = 44 at frame 11 and x = 148 at frame 19, and caches
 //! the current placement as `_frm_t "122 0 13"` -- exactly linear at frame
 //! 17 (44 + 6/8 * 104); stepped keys could only give 44 or 148, and an
 //! ease curve no whole frame at all. `_loop` exists on transform nodes too
-//! (the a recent version writer emits it for both).
+//! (files carry it on both).
 
 use crate::Transform;
 use vox_format::{Dict, ShapeModel, ShapeNode, TransformNode};
@@ -50,8 +49,8 @@ pub fn is_keyed(node: &TransformNode) -> bool {
 
 /// A transform node's placement at `frame`, stepping from key to key
 /// without interpolating: the key on that frame, else the one before, else
-/// the first; `_loop` wraps the frame first. How the reference editor's unpack places
-/// each frame.
+/// the first; `_loop` wraps the frame first. This is how unpacking an
+/// animation places each frame.
 pub fn key_at(node: &TransformNode, frame: u32) -> Transform {
     let keys = keyframes(node);
     let Some(&(_, first)) = keys.first() else { return Transform::default() };

@@ -50,7 +50,7 @@ impl EnvMap {
     /// Parses a Radiance `.hdr` file.
     ///
     /// Supports the run-length encoded scanlines every modern writer emits
-    /// (and the files the reference editor ships) plus flat RGBE. The pre-1991 "old"
+    /// plus flat RGBE. The pre-1991 "old"
     /// RLE variant is rejected rather than misread.
     pub fn parse_hdr(data: &[u8]) -> Result<Self, HdrError> {
         if !(data.starts_with(b"#?RADIANCE") || data.starts_with(b"#?RGBE")) {
@@ -165,8 +165,7 @@ impl EnvMap {
     }
 }
 
-/// Importance-sampling tables for an environment map, built the way
-/// the reference editor's `the reference renderer` builds them.
+/// Importance-sampling tables for an environment map.
 #[derive(Debug, Clone)]
 pub struct EnvSampling {
     /// Running sum of per-texel weights over the whole image, row-major.
@@ -217,7 +216,7 @@ impl EnvSampling {
     }
 
     /// The radiance multiplier that makes the map's mean weight equal
-    /// `intensity`: `intensity · 4π / ∫ w dω`, the editor's `ibl_I`. So a
+    /// `intensity`: `intensity · 4π / ∫ w dω`. So a
     /// file's `_i` means the same whatever the HDR's absolute exposure.
     pub fn scale(&self, intensity: f32) -> f32 {
         if self.integral <= 0.0 {

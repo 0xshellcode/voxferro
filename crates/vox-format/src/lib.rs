@@ -1,4 +1,4 @@
-//! Reader for the reference editor `.vox` files.
+//! Reader for `.vox` files.
 //!
 //! The format is a RIFF-like container: a `VOX ` magic, a `u32` version, then
 //! a tree of chunks. Every chunk header is three fields — a four-byte id, the
@@ -13,8 +13,8 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! Layouts were verified byte by byte against the sample models shipped with
-//! the reference editor a recent version and a recent version.
+//! Layouts were verified byte by byte against a corpus of sample `.vox`
+//! files in both format versions.
 
 mod dict;
 mod parse;
@@ -35,10 +35,10 @@ use thiserror::Error;
 /// Magic bytes that open every `.vox` file.
 pub const MAGIC: &[u8; 4] = b"VOX ";
 
-/// Version written by the reference editor up to a recent version.x.
+/// The older format version.
 pub const VERSION_150: u32 = 150;
 
-/// Version written by the reference editor a recent version.x.
+/// The newer format version.
 ///
 /// Adds the `rCAM` (saved cameras), `NOTE` (palette row names) and `META`
 /// chunks, and stops writing `IMAP`. The chunk-skipping rule means a reader
@@ -69,7 +69,7 @@ pub mod limits {
     pub const MAX_SHAPE_MODELS: u32 = 65536;
     pub const MAX_COLOR_NAMES: u32 = 1024;
     pub const MAX_CHUNK_DEPTH: u32 = 32;
-    /// A model's side: the reference editor's limit, and the editor's. A larger
+    /// A model's side: the format's limit, and the editor's. A larger
     /// `SIZE` would ask for gigabytes before a single voxel is read.
     pub const MAX_MODEL_SIDE: u32 = 256;
 }

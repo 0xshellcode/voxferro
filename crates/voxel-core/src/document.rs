@@ -28,7 +28,7 @@ pub struct Document {
     /// Sorting reorders this, never the colours, so voxels keep theirs.
     pub palette_order: Box<[u8; 256]>,
     /// The palette's notes (`NOTE`): one line of text for each row of eight
-    /// colours, 32 in all in the files the reference editor writes.
+    /// colours, 32 in all in the files of the format.
     pub notes: Vec<String>,
 }
 

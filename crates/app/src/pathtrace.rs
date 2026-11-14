@@ -6,7 +6,7 @@ use vox_format::Palette;
 use voxel_core::Volume;
 use wgpu::util::DeviceExt;
 
-/// What a camera ray that meets nothing shows (the reference editor's background).
+/// What a camera ray that meets nothing shows (the background).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Background {
     #[default]
@@ -15,8 +15,7 @@ pub enum Background {
     Transparent = 2,
 }
 
-/// How camera rays leave the eye (the reference editor's `pt_proj`, saved as
-/// `_lens._proj`).
+/// How camera rays leave the eye (saved as `_lens._proj`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LensProjection {
     #[default]
@@ -37,7 +36,7 @@ impl LensProjection {
     }
 
     /// The scale from the screen to the projection, for a field of view in
-    /// degrees, as the editor uploads it (`view_fov`): the tangent of half
+    /// degrees: the tangent of half
     /// the angle in perspective, of a quarter in stereographic, both kept
     /// within 1 to 89 degrees; the panorama ignores the field of view.
     pub fn view_factor(self, fov_degrees: f32) -> f32 {
@@ -69,7 +68,7 @@ impl LensProjection {
     }
 }
 
-/// How the path tracer draws a voxel (the reference editor's `pt_prim`).
+/// How the path tracer draws a voxel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VoxelShape {
     #[default]
@@ -139,11 +138,11 @@ pub struct Environment {
     /// `_bounce._specular`: mirror, glass reflection and refraction events
     /// a path may take, counted apart from diffuse ones.
     pub specular_bounces: u32,
-    /// `_bounce._energy` (Render › Sample › Energy, `pt_clamp`): the most
+    /// `_bounce._energy` (Render › Sample › Energy): the most
     /// light one sample may carry, which keeps rare bright paths from
     /// showing as fireflies.
     pub energy: f32,
-    /// Anti-aliasing (`pt_b_aa`): each sample at a random point of its
+    /// Anti-aliasing: each sample at a random point of its
     /// pixel. Off, every sample goes through the pixel's centre. A setting
     /// of the session.
     pub antialias: bool,
@@ -169,10 +168,10 @@ pub struct Environment {
 
     /// `_lens._fov`: the render camera's vertical field of view, degrees.
     pub lens_fov: f32,
-    /// `_lens._proj` (`pt_proj`): how camera rays leave the eye.
+    /// `_lens._proj`: how camera rays leave the eye.
     pub projection: LensProjection,
-    /// `_lens._aperture`: lens size; the editor uploads `_aperture * 0.03`
-    /// as the lens radius over the focus distance.
+    /// `_lens._aperture`: lens size; `_aperture * 0.03` is the lens radius
+    /// over the focus distance.
     pub aperture: f32,
     /// `_lens._blade_n`: aperture blades; below 3 the lens is round.
     pub blades: u32,
@@ -189,8 +188,8 @@ pub struct Environment {
     /// a radius of 0.25 to 0.5).
     pub voxel_shape: VoxelShape,
     pub voxel_size: f32,
-    /// Lines drawn on the voxels in the render, the reference editor's Display
-    /// Grids and Display Edges (`pt_b_grid`, `pt_b_edge`). Session settings.
+    /// Lines drawn on the voxels in the render, Display Grids and Display
+    /// Edges. Session settings.
     pub lines: Lines,
 
     /// `_film._vig`: vignette strength.
@@ -412,11 +411,9 @@ impl Environment {
                     if let Some(i) = object.get("_i").and_then(|v| v.parse::<f32>().ok()) {
                         env.ibl_intensity = i.max(0.0);
                     }
-                    // The map's turn. Checked in the reference editor a recent version: it
-                    // reads `_angle`'s second value, in degrees, before
-                    // `_rot` (in turns; "0.25" shows as 90, "0 90" too,
-                    // "90 0" as 0, and with both keys `_angle` wins), and
-                    // writes `_angle` alone. a recent version reads only `_rot`.
+                    // The map's turn: `_angle`'s second value, in degrees,
+                    // before `_rot` (in turns; "0.25" is 90, "0 90" too,
+                    // "90 0" is 0, and with both keys `_angle` wins).
                     if let Some([_, degrees]) = object.get_parsed::<f32, 2>("_angle") {
                         env.ibl_rotation = degrees / 360.0;
                     } else if let Some(r) = object.get("_rot").and_then(|v| v.parse::<f32>().ok()) {
@@ -552,9 +549,9 @@ impl Environment {
 
         let ibl = object(&mut out, "_ibl");
         ibl.set("_i", num(self.ibl_intensity));
-        // Both keys, agreeing: a recent version reads `_angle` first (and writes only
-        // it, its first value 0), a recent version reads only `_rot`. A first value
-        // already in the file is kept: what it means is not known.
+        // Both keys, agreeing, since files may carry either. A first value
+        // of `_angle` already in the file is kept: what it means is not
+        // known.
         ibl.set("_rot", num(self.ibl_rotation));
         let first = ibl.get_parsed::<f32, 2>("_angle").map_or(0.0, |[a, _]| a);
         ibl.set("_angle", format!("{} {}", num(first), num(self.ibl_rotation * 360.0)));
@@ -668,9 +665,7 @@ struct GpuMaterial {
 
 /// Converts an emitter's `_emit` and `_flux` into a radiance multiplier.
 ///
-/// Taken from the editor itself, not guessed: `the reference renderer`
-/// computes `1 + 3 * emit * powf(10, flux)` (the constants 3.0, 10.0 and 1.0
-/// read straight out of the binary). So `_flux` counts powers of ten, and the
+/// `1 + 3 * emit * powf(10, flux)`: `_flux` counts powers of ten, and the
 /// `+ 1` means an emitter at `_emit = 0` still glows with its own colour.
 pub fn emission_strength(emission: f32, flux: f32) -> f32 {
     1.0 + 3.0 * emission * 10f32.powf(flux)
@@ -678,12 +673,10 @@ pub fn emission_strength(emission: f32, flux: f32) -> f32 {
 
 /// `_film._expo` to the multiplier applied before the tone curve.
 ///
-/// The editor uploads `_expo` unchanged (`the reference renderer`, uniform
-/// `expo`); how its shader applies it is not in the binary, and this
-/// tracer's light units are its own. Measured instead: a white box on the
-/// default ground under the default sun and sky, rendered in the editor and
-/// here, read in linear light (tone curve and gamma undone) -- the editor
-/// was 1.55 times brighter than the earlier `_expo / 3`.
+/// This tracer's light units are its own, so the scale was measured: a white
+/// box on the default ground under the default sun and sky, rendered in the
+/// editor and here, read in linear light (tone curve and gamma undone) -- the
+/// editor was 1.55 times brighter than the earlier `_expo / 3`.
 pub const EXPOSURE_SCALE: f32 = 0.54;
 
 /// `_uni._i` to the uniform sky's radiance. From the same measurement: with
@@ -694,16 +687,15 @@ pub const SKY_SCALE_UNIFORM: f32 = 1.12;
 
 /// A medium's `_d` as extinction per voxel.
 ///
-/// Calibrated, not read: `CalcMaterialProp` passes `_d` on unchanged and the
-/// scaling happens in the runtime shader. A 40-voxel cloud sphere with
-/// `_d 0.4`, rendered in the editor beside this tracer at several scales,
-/// matched at 0.1 per voxel -- grey with the floor showing through its lower
-/// half -- where 0.4 was opaque and 0.04 too clear.
+/// Calibrated: a 40-voxel cloud sphere with `_d 0.4`, rendered in the editor
+/// beside this tracer at several scales, matched at 0.1 per voxel -- grey
+/// with the floor showing through its lower half -- where 0.4 was opaque and
+/// 0.04 too clear.
 pub const MEDIA_DENSITY_SCALE: f32 = 0.25;
 
-/// The editor's roughness slider is far gentler than a raw GGX alpha:
-/// `CalcMaterialProp` scales it by 0.15 before use. Without this, every
-/// "slightly rough" metal from a real file renders visibly blurred.
+/// The roughness slider is far gentler than a raw GGX alpha: it is scaled
+/// by 0.15 before use. Without this, every "slightly rough" metal from a
+/// real file renders visibly blurred.
 pub fn effective_roughness(slider: f32) -> f32 {
     slider * 0.15
 }
@@ -849,13 +841,13 @@ fn next_band_pixels(current: u32, seconds: f32, pixels: u32) -> u32 {
     wanted.clamp(Bands::MIN, current.saturating_mul(4).max(Bands::MIN))
 }
 
-/// The grid and edge lines of the render, widths in voxels as the reference editor
-/// measures them: a grid line is twice `grid_width` across, an edge line
-/// `edge_width` deep on each face (see `lined` in the shader).
+/// The grid and edge lines of the render, widths in voxels: a grid line is
+/// twice `grid_width` across, an edge line `edge_width` deep on each face
+/// (see `lined` in the shader).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Lines {
-    /// A line along every voxel border on the faces (`pt_grid_*`), every
-    /// `grid_spacing` voxels, or only on the ground.
+    /// A line along every voxel border on the faces, every `grid_spacing`
+    /// voxels, or only on the ground.
     pub grid: bool,
     pub grid_spacing: u32,
     pub grid_width: f32,
@@ -863,25 +855,21 @@ pub struct Lines {
     /// Linear colour.
     pub grid_color: Vec3,
     /// A line where a face meets another at an angle: the model's outline
-    /// and creases (`pt_edge_*`).
+    /// and creases.
     pub edge: bool,
     pub edge_width: f32,
     pub edge_color: Vec3,
 }
 
-/// Added to the map's turn before it reaches the shader. Measured against
-/// the reference editor a recent version on Windows (ROADMAP, "Checked on Windows"): with
-/// the same camera and sun, its sky at a turn of 0, 90 and 135 degrees
-/// matched this renderer's at 180, 270 and 315 -- the same direction, half a
-/// turn apart.
+/// Added to the map's turn before it reaches the shader: the map's turn of
+/// 0 faces half a turn away from this renderer's own 0.
 const IBL_TURN_OFFSET: f32 = 0.5;
 
-/// The widest edge line, in voxels: the reference editor's range for `pt_edge_w`
-/// (the grid's `pt_grid_w` stops at 1).
+/// The widest edge line, in voxels (the grid's width stops at 1).
 pub const EDGE_WIDTH_MAX: f32 = 5.0;
 
 impl Default for Lines {
-    /// the reference editor a recent version's defaults, read from its render panel.
+    /// The render panel's defaults.
     fn default() -> Self {
         Self {
             grid: false,
@@ -914,7 +902,7 @@ struct PostParams {
 }
 
 impl Environment {
-    /// The bloom kernel, as `the reference renderer` sets it up:
+    /// The bloom kernel:
     /// `(iterations, base angle, angle step)`. With n > 2 blades the glow
     /// turns by pi / n' each iteration, n' being n / 2 for even n (opposite
     /// blades share a direction) and n for odd n; iterations are 24 rounded
@@ -1714,7 +1702,7 @@ impl PathTracer {
                 environment.energy,
                 environment.antialias as u32 as f32,
                 // A diffuse depth of 0 under the uniform sky: one bounce,
-                // ending in the sky's light (the editor's `OPT_LE`).
+                // ending in the sky's light.
                 (environment.bounces == 0 && !environment.ibl_enabled && !environment.atmosphere_enabled) as u32 as f32,
             ],
             tile: [0, size[1], 0, 0],
@@ -1727,8 +1715,7 @@ impl PathTracer {
             reset: reset as u32,
             film: [
                 environment.exposure,
-                // As the reference renderer uploads them: `vig` is
-                // `_vig^2 * 5`, `bloom` is `_mix * 0.7`.
+                // `vig` is `_vig^2 * 5`, `bloom` is `_mix * 0.7`.
                 environment.vignette * environment.vignette * 5.0,
                 environment.gamma,
                 environment.aces as u32 as f32,
@@ -2178,8 +2165,8 @@ mod tests {
     }
 
     #[test]
-    fn the_map_turn_reads_and_writes_as_reference_editor_0_99_7() {
-        // What the reference editor a recent version's Rotation field showed for each file.
+    fn the_map_turn_reads_and_writes_both_keys() {
+        // The turn each file's keys give.
         let turn = |pairs: &[(&str, &str)]| {
             let mut all = vec![("_type", "_ibl")];
             all.extend_from_slice(pairs);

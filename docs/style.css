@@ -125,7 +125,7 @@ img { max-width: 100%; height: auto; display: block; }
 .hero figure img { border-radius: 4px; border: 1px solid var(--rule); }
 .hero figcaption { font-size: var(--step--1); color: var(--muted); margin-top: 0.6rem; }
 
-/* The palette strip under the hero: a the reference editor-style row of swatches. */
+/* The palette strip under the hero: a row of palette swatches. */
 .strip { display: grid; grid-template-columns: repeat(32, 1fr); height: 6px; }
 .strip span { display: block; }
 

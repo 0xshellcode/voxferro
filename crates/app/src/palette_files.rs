@@ -1,18 +1,15 @@
-//! Palette files: the reference editor's are PNG images, 256 × 1, whose pixel `k`
+//! Palette files: PNG images, 256 × 1, whose pixel `k`
 //! is palette index `k + 1` -- the order of the `RGBA` chunk -- so the last
 //! pixel is the unused index 0. Any image is accepted on reading: its first
 //! 256 pixels, row by row.
 //!
 //! - `palette open <file.png>`, `palette save <file.png>`;
-//! - `palette reset`: the format specification's default palette;
-//! - `palette default <0-3>`: the reference editor's four default palettes
-//!   (`palette/pal0.png`...), from a local install -- they are its files,
-//!   not shipped here, like its sample models.
+//! - `palette reset`: the format specification's default palette.
 //!
-//! And the palette's own editing, as the reference editor's palette offers it:
+//! And the palette's own editing:
 //!
 //! - `palette swap <a> <b>`: two colours change places, with their
-//!   materials (the reference editor's Ctrl+drag);
+//!   materials (Ctrl+drag);
 //! - `palette gradient <a> <b>`: the colours between two indices blend from
 //!   one to the other (Ctrl+Alt+drag);
 //! - `palette copy <a> <b>`, `palette paste <i>`: a run of colours copied
@@ -73,7 +70,7 @@ pub fn read_rgba(bytes: &[u8]) -> Option<voxel_core::voxelize::Texture> {
     (info.width > 0 && info.height > 0).then_some(voxel_core::voxelize::Texture { width: info.width, height: info.height, rgba })
 }
 
-/// Encodes a palette as the reference editor does.
+/// Encodes a palette as a 256 × 1 PNG.
 pub fn write_png(colours: &[Color; 256]) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(256 * 4);
     for k in 0..256 {
@@ -86,14 +83,6 @@ pub fn write_png(colours: &[Color; 256]) -> Vec<u8> {
 /// A palette index for editing: 1 to 255.
 fn index(word: &str) -> Option<u8> {
     word.parse::<u8>().ok().filter(|&i| i > 0)
-}
-
-/// the reference editor's default palette `n`, from the first install that has it.
-pub(crate) fn reference_editor_palette(n: u8) -> Option<std::path::PathBuf> {
-    crate::reference_editor_dirs()
-        .into_iter()
-        .map(|d| d.join("palette").join(format!("pal{n}.png")))
-        .find(|p| p.is_file())
 }
 
 impl App {
@@ -126,15 +115,6 @@ impl App {
                 let colours = *vox_format::Palette::specification_default().as_slice();
                 self.replace_palette(&colours, "palette reset to the format's default", state)
             }
-            ["default", n] => match n.parse::<u8>().ok().filter(|n| *n <= 3) {
-                Some(n) => match reference_editor_palette(n) {
-                    Some(path) => {
-                        return self.palette_file_command(&format!("palette open {}", path.display()), state);
-                    }
-                    None => format!("palette {n}: no the reference editor install with palette/pal{n}.png found"),
-                },
-                None => "palette default 0|1|2|3".to_owned(),
-            },
             ["swap", a, b] => match (index(a), index(b)) {
                 (Some(a), Some(b)) => {
                     let Some(loaded) = self.scene.as_ref() else { return Some("no document".to_owned()) };
@@ -235,7 +215,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_palette_survives_the_round_trip_in_reference_editor_order() {
+    fn a_palette_survives_the_round_trip_in_rgba_order() {
         let mut colours = *vox_format::Palette::specification_default().as_slice();
         colours[255] = Color { r: 1, g: 2, b: 3, a: 255 };
         let png = write_png(&colours);
@@ -244,15 +224,5 @@ mod tests {
         // Pixel 0 is index 1.
         let first = read_png(&voxel_core::export::png_rgba(1, 1, &[9, 8, 7, 255])).unwrap();
         assert_eq!(first[1], Color { r: 9, g: 8, b: 7, a: 255 });
-    }
-
-    /// the reference editor's own palettes read, when an install is around.
-    #[test]
-    fn reference_editor_palettes_read() {
-        if let Some(path) = reference_editor_palette(0) {
-            let colours = read_png(&std::fs::read(path).unwrap()).unwrap();
-            // pal0 starts with white.
-            assert_eq!(colours[1], Color { r: 255, g: 255, b: 255, a: 255 });
-        }
     }
 }

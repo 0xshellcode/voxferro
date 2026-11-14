@@ -157,8 +157,8 @@ impl App {
             return message;
         }
         let words: Vec<&str> = line.split_whitespace().collect();
-        // the reference editor's material clipboard (`mtl_copy`, `mtl_paste`,
-        // `mtl_reset`), on the brush's colour.
+        // The material clipboard (copy, paste, reset), on the brush's
+        // colour.
         if let ["material", verb @ ("copy" | "paste" | "reset")] = words.as_slice() {
             let index = self.brush_color;
             let Some(loaded) = self.scene.as_mut() else { return "nothing open".to_owned() };

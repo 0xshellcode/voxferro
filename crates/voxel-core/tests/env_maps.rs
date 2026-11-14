@@ -1,11 +1,11 @@
-//! Parses the HDR maps the reference editor ships. Skips when they are not present
+//! Parses the HDR maps in `assets/ibl`. Skips when they are not present
 //! (see assets/README.md).
 
 use std::path::Path;
 use voxel_core::{EnvMap, EnvSampling};
 
 #[test]
-fn every_shipped_map_parses() {
+fn every_map_in_the_assets_parses() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/ibl");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         eprintln!("skipping: no maps at {}", dir.display());

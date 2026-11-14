@@ -325,8 +325,8 @@ fn grow(bounds: Option<(Vec3, Vec3)>, (lo, hi): (Vec3, Vec3)) -> Option<(Vec3, V
 }
 
 impl App {
-    /// the reference editor's camera panel (`cam.ui`): the point it turns about, its
-    /// angles in that editor's convention (pitch, yaw from the front, roll),
+    /// The camera panel: the point it turns about, its angles (pitch, yaw
+    /// from the front, roll),
     /// zoom, field of view, and how fast the mouse and keys move it.
     fn camera_fields_ui(&mut self, ui: &mut egui::Ui) {
         let mut moved = false;

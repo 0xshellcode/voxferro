@@ -1,5 +1,5 @@
-//! What the viewport draws besides the voxels: the reference editor's display
-//! switches (`config/ui/editor.ui`), with its shortcuts.
+//! What the viewport draws besides the voxels: the display switches, with
+//! their shortcuts.
 //!
 //! | Switch | `view` word | Shortcut |
 //! |---|---|---|
@@ -12,28 +12,27 @@
 //!
 //! `view <word> [on|off]` sets one, toggling without an argument; `view`
 //! lists them. With background objects off, only the selected model is
-//! drawn. The model's box is always drawn, as there; the frame is lines
-//! every `spacing` voxels (`rm_space`, 10) on its floor and on the voxels.
+//! drawn. The model's box is always drawn; the frame is lines every
+//! `spacing` voxels (10) on its floor and on the voxels.
 //!
-//! The options of the reference editor's Option menu (`m_opt.ui`), read from its
-//! a recent version executable, none of them saved there either:
+//! The options of the Option menu, none of them saved:
 //!
 //! | Option | `view` word | Default |
 //! |---|---|---|
-//! | Ambient occlusion (`rm_b_ao`) | `ao` | on |
-//! | Constant shading (`rm_b_const`) | `flat` | off |
-//! | Fade background objects (`rm_b_fade`) | `fade` | on |
-//! | Colours (`rm_bg_col`, `rm_grid_col`, `rm_edge_col`, `rm_sel_col`) | `colour bg\|grid\|edge\|select <c>` | 38 38 38, 17 17 17, 17 17 17, white |
-//! | Frame spacing (`rm_space`) | `spacing <n>` | 10 |
-//! | Interface scale (`ui inc`, `ui dec`) | `scale <f>\|inc\|dec` | 1, steps of 1/8 |
+//! | Ambient occlusion | `ao` | on |
+//! | Constant shading | `flat` | off |
+//! | Fade background objects | `fade` | on |
+//! | Colours | `colour bg\|grid\|edge\|select <c>` | 38 38 38, 17 17 17, 17 17 17, white |
+//! | Frame spacing | `spacing <n>` | 10 |
+//! | Interface scale | `scale <f>\|inc\|dec` | 1, steps of 1/8 |
 //!
 //! Ambient occlusion counts the solid cells around each face corner (see
 //! `voxel_core::greedy`) and darkens the ambient light a fifth for each.
 //! Constant shading shows the palette colours unlit. Faded objects -- every
 //! model but the one being edited, outside the Move tool -- are drawn half
 //! way to the background colour. Shadows come from a depth map seen from the light (see the voxel
-//! shader); the reference editor's Cmd+W for them is left to the system, which closes
-//! the window with it on macOS.
+//! shader); Cmd+W is left to the system, which closes the window with it on
+//! macOS.
 
 use crate::App;
 use eframe::egui;
@@ -79,7 +78,7 @@ impl ViewOptions {
     }
 }
 
-/// the reference editor's editor options (see the module notes). For the session.
+/// The editor options (see the module notes). For the session.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EditorView {
     pub ao: bool,
@@ -109,7 +108,7 @@ impl Default for EditorView {
     }
 }
 
-/// The interface scale's limits and step, as the reference editor has them.
+/// The interface scale's limits and step.
 pub const SCALE_RANGE: (f32, f32) = (0.5, 4.0);
 pub const SCALE_STEP: f32 = 0.125;
 
@@ -182,7 +181,6 @@ impl App {
                 format!("{which} colour {} {} {}", c.r, c.g, c.b)
             }
             ["spacing", n] => match n.parse::<u32>() {
-                // The executable clamps it to 1-128 though its panel says 1024.
                 Ok(n) => {
                     e.spacing = n.clamp(1, 128);
                     format!("frame lines every {} voxels", e.spacing)
@@ -268,9 +266,9 @@ impl App {
         message
     }
 
-    /// Cmd+E, F, G, B and M, as in the reference editor; in the render, Cmd+E and
+    /// Cmd+E, F, G, B and M; in the render, Cmd+E and
     /// Cmd+G switch its edges and grid instead. Cmd+minus and Cmd+plus
-    /// scale the interface by eighths (its Ctrl -/+).
+    /// scale the interface by eighths.
     pub fn view_input(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() {
             return;
@@ -298,7 +296,7 @@ impl App {
                 .collect()
         });
         for word in pressed {
-            // In the render, Cmd+E and Cmd+G are its own lines, as there.
+            // In the render, Cmd+E and Cmd+G are its own lines.
             let message = match word {
                 "edges" if self.rendering => self.lines_command(&["edge"]),
                 "grid" if self.rendering => self.lines_command(&["grid"]),

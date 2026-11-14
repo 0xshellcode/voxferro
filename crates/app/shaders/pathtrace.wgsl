@@ -2,11 +2,10 @@
 //
 // One sample per pixel per frame, accumulated into a float buffer and
 // averaged. The image refines while the camera holds still and resets when it
-// moves — the same progressive behaviour the editor's renderer has.
+// moves.
 //
 // The volume is a 3D texture addressed directly, so marching a ray is a plain
-// DDA walk. the reference editor reaches the same place through a 2D packing because
-// OpenGL 2.x gave it no other option.
+// DDA walk.
 
 struct Params {
     // Camera basis, as three columns plus the eye position.
@@ -51,31 +50,30 @@ struct Params {
     ground: vec4<f32>,
     ground_color: vec4<f32>,
 
-    // Image-based lighting. x: enabled, y: radiance scale (the editor's
-    // ibl_I = _i * 4pi / integral), z: rotation in turns, w: CDF total.
+    // Image-based lighting. x: enabled, y: radiance scale
+    // (`_i * 4pi / integral`), z: rotation in turns, w: CDF total.
     ibl: vec4<f32>,
     // x, y: map width and height.
     ibl_size: vec4<u32>,
 
     // x: orthographic half-height in world units; 0 means a lens. y: the
     // lens (`_lens._proj`): 0 perspective, 1 stereographic, 2 panorama;
-    // z: its scale from the screen (`view_fov`).
+    // z: its scale from the screen.
     projection: vec4<f32>,
 
-    // Depth of field. x: lens radius over focus distance (the editor's
-    // `_aperture * 0.03`; 0 is a pinhole), y: focus distance, z: number of
+    // Depth of field. x: lens radius over focus distance
+    // (`_aperture * 0.03`; 0 is a pinhole), y: focus distance, z: number of
     // aperture blades (below 3, a round lens), w: blade rotation, radians.
     lens: vec4<f32>,
 
-    // Fog (`_fog_uni`): x: extinction per voxel (`_d * 0.001`, as the editor
-    // uploads air_et), y: anisotropy g (`_g`); 0 extinction is no fog.
-    // z: scattering events allowed in media and fog (`_bounce._scatter`),
-    // counted apart from surface bounces.
+    // Fog (`_fog_uni`): x: extinction per voxel (`_d * 0.001`), y: anisotropy
+    // g (`_g`); 0 extinction is no fog. z: scattering events allowed in media
+    // and fog (`_bounce._scatter`), counted apart from surface bounces.
     fog: vec4<f32>,
     // The fog's colour (`_k`): what fraction of light a scattering keeps.
     fog_color: vec4<f32>,
-    // What a camera ray that meets nothing shows (the reference editor's background
-    // option): x 0 the sky, 1 a flat colour, 2 nothing -- transparent; the
+    // What a camera ray that meets nothing shows (the background option):
+    // x 0 the sky, 1 a flat colour, 2 nothing -- transparent; the
     // colour itself is put in by the post pass. Bounces see the sky always.
     look: vec4<f32>,
     // How a voxel is drawn: x 0 a cube, 1 a sphere, 2 a cylinder standing
@@ -83,7 +81,7 @@ struct Params {
     // the voxels), 5 marching cubes; y the sphere's and cylinder's radius,
     // 0.25 to 0.5.
     shape: vec4<f32>,
-    // Lines on the surfaces (the reference editor's Display Grids and Edges): x the
+    // Lines on the surfaces (Display Grids and Edges): x the
     // grid's width in voxels (0 off), y its spacing, z 1 for the ground
     // only; w the edges' width (0 off). Colours linear.
     lines: vec4<f32>,
@@ -135,7 +133,7 @@ const KIND_EMIT: u32 = 3u;
 // it interacts (0 absorb, 1 scatter, 2 emit, 3 subsurface), `roughness` its
 // phase g, `emission.w` its density per voxel.
 const KIND_MEDIA: u32 = 4u;
-// the reference editor's Blend: metal, glass and diffuse at once, a share each
+// Blend: metal, glass and diffuse at once, a share each
 // (`amount` the metal, `extra.x` the glass), plus emission.
 const KIND_BLEND: u32 = 5u;
 
@@ -270,10 +268,10 @@ fn edge_toward(cell: vec3<i32>, toward: vec3<i32>, out: vec3<i32>) -> bool {
 }
 
 // Whether a point `t` from its voxel's border toward `dir` is on an edge
-// line. the reference editor's rule, measured in a recent version at widths 0.2 to 4: the
-// surface turns `k` voxels away that way and (k - 1) + t is under the width.
-// Up to a width of 1 that is a band min(width, 0.5) deep beside the edge on
-// each face; wider, the band repeats in the next voxels in (5 at most).
+// line: the surface turns `k` voxels away that way and (k - 1) + t is under
+// the width. Up to a width of 1 that is a band min(width, 0.5) deep beside
+// the edge on each face; wider, the band repeats in the next voxels in (5 at
+// most).
 fn edge_along(cell: vec3<i32>, dir: vec3<i32>, out: vec3<i32>, t: f32) -> bool {
     for (var k = 1; k <= 5; k = k + 1) {
         if (f32(k - 1) + t >= p.lines.w) {
@@ -288,7 +286,7 @@ fn edge_along(cell: vec3<i32>, dir: vec3<i32>, out: vec3<i32>, t: f32) -> bool {
 
 // The colour a surface point shows with the render's lines drawn over it.
 // `point` is in voxel space; `cell` is the voxel hit, unused on the ground.
-// As in the reference editor (measured): a grid line is twice its width across,
+// A grid line is twice its width across,
 // along world coordinates that are multiples of the spacing; edges follow
 // `edge_along`.
 fn lined(base: vec3<f32>, point: vec3<f32>, normal: vec3<f32>, cell: vec3<i32>, ground: bool) -> vec3<f32> {
@@ -900,10 +898,8 @@ fn ground_distance(origin: vec3<f32>, direction: vec3<f32>) -> f32 {
 
 // How much of the ground at `distance` has dissolved into the sky.
 //
-// The editor uploads `hor_et = _hor * 0.0005` (the reference renderer::
-// EnvLightParameters): an extinction per voxel, so the fade is Beer-Lambert
-// over the distance. (Before that constant was read out of the binary this
-// used an estimate six times stronger.)
+// `_hor * 0.0005` is an extinction per voxel, so the fade is Beer-Lambert
+// over the distance.
 fn horizon_fade(distance: f32) -> f32 {
     return 1.0 - exp(-p.ground.z * 0.0005 * distance);
 }

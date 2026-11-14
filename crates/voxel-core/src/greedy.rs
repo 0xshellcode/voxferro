@@ -2,7 +2,7 @@
 //!
 //! The face-culling mesher emits one quad per exposed voxel face. A flat wall
 //! of one colour is a single rectangle, though, and merging such runs is what
-//! the editor's OBJ exporter does (its `merge` option). For each face
+//! the OBJ export does. For each face
 //! direction and each slice along it, the exposed faces form a 2D grid of
 //! palette indices; rectangles of equal value are grown greedily, first
 //! along one axis and then the other.
@@ -12,7 +12,7 @@
 //! enough for a rasteriser not to show cracks in practice.
 //!
 //! With ambient occlusion, each face corner also counts the solid cells
-//! around it in front of the face, as the reference editor's editor shades them:
+//! around it in front of the face:
 //! the two beside the corner and the one diagonal to it, 0 to 3. Faces
 //! merge only when all four corners agree and match their neighbours', so
 //! a merged rectangle is evenly lit and a shaded face keeps its gradient.

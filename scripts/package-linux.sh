@@ -8,14 +8,15 @@
 #   ~/.local/share/applications; update-mime-database ~/.local/share/mime).
 # - Voxferro-<version>-<arch>.AppImage, when appimagetool is on the PATH.
 #
-# The the reference editor samples and maps (assets/vox, assets/ibl) are third-party
-# and not in git; they go in only with --with-the reference editor-assets, for a
-# package you keep for yourself.
+# The sample models and environment maps (assets/vox, assets/ibl), when
+# present, are third-party and not in git; they go in only with
+# --with-sample-assets, for a package you keep for yourself: do not
+# redistribute them.
 set -eu
 cd "$(dirname "$0")/.."
 
-with_mv=0
-[ "${1:-}" = "--with-the reference editor-assets" ] && with_mv=1
+with_samples=0
+[ "${1:-}" = "--with-sample-assets" ] && with_samples=1
 
 cargo build --release -p voxferro
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
@@ -31,7 +32,7 @@ cp packaging/linux/voxferro.desktop "$root/share/applications/"
 cp packaging/linux/voxferro-mime.xml "$root/share/mime/packages/voxferro.xml"
 target/release/voxferro --make-icon-set assets/icon/icon.png "$root/share/icons/hicolor"
 cp -R assets/showcase assets/scripts assets/materials_demo.vox "$root/share/voxferro/assets/"
-if [ "$with_mv" = 1 ]; then
+if [ "$with_samples" = 1 ]; then
     for dir in vox ibl; do
         [ -d "assets/$dir" ] && cp -R "assets/$dir" "$root/share/voxferro/assets/"
     done

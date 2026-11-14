@@ -534,7 +534,7 @@ impl App {
         }
     }
 
-    /// - and + resize the voxel brush, as in the reference editor.
+    /// - and + resize the voxel brush.
     pub fn brush_input(&mut self, ctx: &eframe::egui::Context) {
         use eframe::egui::Key;
         // In the Move tool - and + turn the objects (`object_input`).

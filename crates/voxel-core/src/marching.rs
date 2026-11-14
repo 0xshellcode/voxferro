@@ -1,23 +1,17 @@
-//! the reference editor's *mc* export: a smooth surface over the voxels, by marching
-//! cubes without interpolation.
+//! The *mc* export: a smooth surface over the voxels, by marching cubes
+//! without interpolation.
 //!
-//! What the reference editor's `the reference renderer` does, read from its executable: each
-//! cell of eight voxel centres becomes an 8-bit case; a table gives the case
-//! polygons (3 to 6 sides) whose corners are the midpoints of the cell's
+//! Each cell of eight voxel centres becomes an 8-bit case; a table gives the
+//! case polygons (3 to 6 sides) whose corners are the midpoints of the cell's
 //! crossed edges; each corner takes the colour of the solid voxel of its
 //! edge; polygons whose corners differ in colour are split so each colour
-//! keeps its own part (`SplitTri`, `SplitQuad`, `SplitPen`, `SplitHex`,
-//! `OutputTrapezoid`); triangles go to an ASCII PLY.
+//! keeps its own part; triangles go to an ASCII PLY.
 //!
-//! The table here is built, not copied: on each face of the cell the crossed
-//! edges are joined so that solid corners are separated from empty ones,
-//! and the face segments are linked into loops, wound counter-clockwise seen
-//! from the empty side. It gives the reference editor's polygons in most cases; where
-//! they differ, the reference editor has split a non-planar loop differently, so the
-//! surface bends along another diagonal (the test below counts them against
-//! the editor's table when an install is present). Mixed colours are split
-//! the simplest way that keeps colours apart and the surface closed (see
-//! `split`).
+//! The table is built: on each face of the cell the crossed edges are joined
+//! so that solid corners are separated from empty ones, and the face
+//! segments are linked into loops, wound counter-clockwise seen from the
+//! empty side. Mixed colours are split the simplest way that keeps colours
+//! apart and the surface closed (see `split`).
 
 use crate::{Instance, Scene};
 use glam::Vec3;
@@ -26,7 +20,7 @@ use std::sync::OnceLock;
 use vox_format::Palette;
 
 /// Corner `i` of a cell is `(i & 1, i >> 1 & 1, i >> 2 & 1)`; the edges
-/// are pairs of corners, numbered as the reference editor's `the reference writer::edge_vertex`.
+/// are pairs of corners, numbered in this order by the case table.
 pub const EDGES: [[usize; 2]; 12] =
     [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [4, 6], [1, 3], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
 
@@ -175,11 +169,11 @@ pub fn triangles(scene: &Scene, keep: impl Fn(&Instance) -> bool) -> Vec<Tri> {
     out
 }
 
-/// The ASCII PLY the reference editor's *mc* export writes: a coloured vertex per
-/// triangle corner, `3 a b c` per triangle; `io_mc` scales by 0.1, Z up.
+/// The ASCII PLY of the *mc* export: a coloured vertex per triangle corner,
+/// `3 a b c` per triangle; positions are multiplied by `scale`, Z up.
 pub fn ply(scene: &Scene, palette: &Palette, keep: impl Fn(&Instance) -> bool, scale: f32) -> String {
     let tris = triangles(scene, keep);
-    let mut out = String::from("ply\nformat ascii 1.0\ncomment : the reference editor @ its author\n");
+    let mut out = String::from("ply\nformat ascii 1.0\ncomment : Voxferro\n");
     let _ = writeln!(out, "element vertex {}", tris.len() * 3);
     out.push_str("property float x\nproperty float y\nproperty float z\n");
     out.push_str("property uchar red\nproperty uchar green\nproperty uchar blue\n");
@@ -267,43 +261,5 @@ mod tests {
         let ply = ply(&scene_of(v), &Palette::specification_default(), |_| true, 0.1);
         assert!(ply.contains("element vertex 24\n") && ply.contains("element face 8\n"));
         assert!(ply.trim_end().ends_with("3 21 22 23"));
-    }
-
-    /// How many cases give the reference editor's own polygons, when its executable
-    /// is around to read the table from (see the module notes).
-    #[test]
-    fn most_cases_match_reference_editor() {
-        let Some(home) = std::env::var_os("HOME") else { return };
-        let path = std::path::Path::new(&home)
-            .join("Applications/the reference editor/the reference editor-a recent version-macos-10.7/the reference editor.app/Contents/MacOS/the reference editor");
-        let Ok(data) = std::fs::read(path) else { return };
-        let canon = |polys: &[Vec<usize>]| {
-            let mut v: Vec<Vec<usize>> = polys
-                .iter()
-                .map(|p| {
-                    let k = (0..p.len()).min_by_key(|&i| p[i]).unwrap();
-                    p[k..].iter().chain(&p[..k]).copied().collect()
-                })
-                .collect();
-            v.sort();
-            v
-        };
-        let mut same = 0;
-        for case in 0..256usize {
-            let at = 0x219c60 + case * 128;
-            let row: Vec<i32> = data[at..at + 128].chunks(4).map(|b| i32::from_le_bytes(b.try_into().unwrap())).collect();
-            let mut theirs = Vec::new();
-            let mut i = 0;
-            while i < 32 && row[i] != 0 {
-                let n = row[i] as usize;
-                theirs.push(row[i + 1..i + 1 + n].iter().map(|&e| e as usize).collect::<Vec<_>>());
-                i += 1 + n;
-            }
-            if canon(&theirs) == canon(&table()[case]) {
-                same += 1;
-            }
-        }
-        eprintln!("{same} of 256 cases give the reference editor's polygons");
-        assert!(same >= 190, "only {same} of 256 cases match");
     }
 }

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- The .vox file type, so file managers offer Voxferro for it. -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
-  <mime-type type="application/x-the reference editor">
-    <comment>the reference editor model</comment>
+  <mime-type type="application/x-vox">
+    <comment>VOX voxel model</comment>
     <magic priority="50">
       <match type="string" value="VOX " offset="0"/>
     </magic>

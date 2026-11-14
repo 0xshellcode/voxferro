@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use vox_format::VoxFile;
 use voxel_core::{Document, Scene};
 
-/// File › Note's "Save in the File" (`save_note`): whether saving writes the
-/// palette's notes. On by default; a switch of the session, as there.
+/// File › Note's "Save in the File": whether saving writes the palette's
+/// notes. On by default; a switch of the session.
 pub static SAVE_NOTES: AtomicBool = AtomicBool::new(true);
 
 /// A loaded file: its scene graph flattened into placed models, plus the

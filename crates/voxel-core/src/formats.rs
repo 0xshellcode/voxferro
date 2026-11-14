@@ -1,28 +1,25 @@
-//! the reference editor's other export formats, and the volume formats it imports.
+//! The other export formats, and the volume formats the editor imports.
 //!
-//! Each follows its writer in the reference editor's executable (the `the reference renderer*`
-//! classes, read with radare2):
-//!
-//! - **PLY** (`the reference renderer`): ASCII, one quad per visible voxel face, each
-//!   vertex with the face's colour; `io_ply` scales by 0.1, Z up.
-//! - **Cubes** (`the reference renderer`): the same header, every voxel a separate
-//!   cube shrunk by `margin` (0.1).
-//! - **Point cloud** (`the reference renderer`): the same header with vertices only,
-//!   one per voxel at its corner, scale 1.
-//! - **XRAW** (`the reference renderer`): `XRAW`, then the bytes 0 (unsigned), 4
-//!   (RGBA), 8 (bits per channel), 8 (bits per index), the size as three
-//!   `u32`, 256 colours; the indices x fastest, then y, then z, 0 empty; the
-//!   palette as 256 RGBA, entry `i` for index `i`.
-//! - **Qubicle QB** (`the reference renderer`): version 1.1.0.0, RGBA, right-handed,
-//!   uncompressed, no visibility mask, one matrix; Y up, so the matrix is
-//!   `(x, z, y)` in size and cell `(x, y, z)` lands at `(x, z, sy - 1 - y)`;
-//!   each cell the RGBA of its colour.
-//! - **SLAB6** (`the reference renderer`): the size `(x, y, z)` as `u32`s, then one
-//!   byte per cell, x slowest and z fastest with y and z reversed, holding
-//!   the colour index minus one (255 empty); then 256 colours, 6 bits a
-//!   channel, entry `k` for index `k + 1`.
-//! - **Slices** (`the reference renderer`): one image `x` wide and `y · z` tall,
-//!   the z layers stacked, each pixel its voxel's colour, flipped vertically.
+//! - **PLY**: ASCII, one quad per visible voxel face, each vertex with the
+//!   face's colour; scaled by `scale` (0.1 by default), Z up.
+//! - **Cubes**: the same header, every voxel a separate cube shrunk by
+//!   `margin` (0.1).
+//! - **Point cloud**: the same header with vertices only, one per voxel at
+//!   its corner, scale 1.
+//! - **XRAW**: `XRAW`, then the bytes 0 (unsigned), 4 (RGBA), 8 (bits per
+//!   channel), 8 (bits per index), the size as three `u32`, 256 colours; the
+//!   indices x fastest, then y, then z, 0 empty; the palette as 256 RGBA,
+//!   entry `i` for index `i`.
+//! - **Qubicle QB**: version 1.1.0.0, RGBA, right-handed, uncompressed, no
+//!   visibility mask, one matrix; Y up, so the matrix is `(x, z, y)` in size
+//!   and cell `(x, y, z)` lands at `(x, z, sy - 1 - y)`; each cell the RGBA
+//!   of its colour.
+//! - **SLAB6**: the size `(x, y, z)` as `u32`s, then one byte per cell, x
+//!   slowest and z fastest with y and z reversed, holding the colour index
+//!   minus one (255 empty); then 256 colours, 6 bits a channel, entry `k`
+//!   for index `k + 1`.
+//! - **Slices**: one image `x` wide and `y · z` tall, the z layers stacked,
+//!   each pixel its voxel's colour, flipped vertically.
 //!
 //! Importers read XRAW, QB (compressed or not, RGBA or BGRA, either
 //! handedness, every matrix) and SLAB6.
@@ -32,7 +29,7 @@ use glam::{IVec3, Vec3};
 use std::fmt::Write;
 use vox_format::{Color, Palette};
 
-const PLY_HEADER: &str = "ply\nformat ascii 1.0\ncomment : the reference editor @ its author\n";
+const PLY_HEADER: &str = "ply\nformat ascii 1.0\ncomment : Voxferro\n";
 
 fn ply_vertex_props(out: &mut String) {
     out.push_str("property float x\nproperty float y\nproperty float z\n");
@@ -358,7 +355,7 @@ pub fn read_xraw(data: &[u8]) -> Result<Imported, String> {
     Ok(Imported { name: String::new(), size, position: IVec3::ZERO, cells })
 }
 
-/// A Qubicle Binary file of one model, as the reference editor writes it.
+/// A Qubicle Binary file of one model.
 pub fn qb(volume: &Volume, palette: &Palette, name: &str) -> Vec<u8> {
     let [sx, sy, sz] = volume.size();
     let mut out = vec![1, 1, 0, 0];
@@ -433,7 +430,7 @@ pub fn read_qb(data: &[u8]) -> Result<Vec<Imported>, String> {
             }
         }
         // Back to Z up: (X, Y, Z) -> (X, Z', Y), with Z' reversed when the
-        // file is right-handed, as the reference editor writes it.
+        // file is right-handed.
         let size = check_size([qsize[0], qsize[2], qsize[1]])?;
         let [sx, sy, sz] = size;
         let mut cells = vec![[0u8; 4]; (sx * sy * sz) as usize];
@@ -522,7 +519,7 @@ pub fn slices(volume: &Volume, palette: &Palette) -> (u32, u32, Vec<u8>) {
     let mut rgba = vec![0u8; (sx * height * 4) as usize];
     for z in 0..sz {
         for y in 0..sy {
-            // Flipped vertically, as the reference editor writes it.
+            // Flipped vertically.
             let row = height - 1 - (z * sy + y);
             for x in 0..sx {
                 let v = volume.get(x, y, z);

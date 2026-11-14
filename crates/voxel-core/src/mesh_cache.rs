@@ -160,7 +160,7 @@ impl MeshCache {
 /// occlusion (0 to 3).
 fn append_quads(mesh: &mut Mesh, quads: &[Quad], volume: &Volume, transform: &Transform, faded: bool) {
     let half = volume.pivot();
-    // A mirrored placement (the reference editor's Flip, or a file's sign bits)
+    // A mirrored placement (a Flip, or a file's sign bits)
     // turns every quad's winding round: wind them back, or the renderer's
     // back-face culling shows the model inside out.
     let mirrored = transform.rotation.determinant() < 0.0;

@@ -175,42 +175,15 @@ fn sample_dir() -> std::path::PathBuf {
     assets_dir().join("vox")
 }
 
-/// Local the reference editor installs, whose folders (`ibl/`, `shader/`) the
-/// editor falls back to:
-///
-/// - `reference_editor_DIR`, if set: one install's folder, on any system;
-/// - every folder in `~/Applications/the reference editor` -- the home being `HOME`,
-///   or `USERPROFILE` on Windows -- where several versions can sit side by
-///   side.
-fn reference_editor_dirs() -> Vec<std::path::PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(dir) = std::env::var_os("reference_editor_DIR") {
-        dirs.push(std::path::PathBuf::from(dir));
-    }
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        let apps = std::path::Path::new(&home).join("Applications").join("the reference editor");
-        if let Ok(entries) = std::fs::read_dir(apps) {
-            let mut installs: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-            // Newest version first, so its copy of a script wins.
-            installs.sort_by(|a, b| b.cmp(a));
-            dirs.extend(installs);
-        }
-    }
-    dirs
-}
-
-/// Where environment maps are looked for, in order. A file names its map
-/// relative to the editor's own `ibl/` folder, so after the bundled copies
-/// the search falls back to a local the reference editor install.
+/// Where environment maps are looked for: the `ibl/` folder of the assets.
+/// A file names its map by file name alone.
 fn env_map_dirs() -> Vec<std::path::PathBuf> {
-    let mut dirs = vec![assets_dir().join("ibl")];
-    dirs.extend(reference_editor_dirs().into_iter().map(|d| d.join("ibl")));
-    dirs
+    vec![assets_dir().join("ibl")]
 }
 
 /// Where voxel scripts are looked for (see `xs::dirs`).
 fn script_dirs() -> Vec<std::path::PathBuf> {
-    xs::dirs(&assets_dir(), &reference_editor_dirs())
+    xs::dirs(&assets_dir())
 }
 
 fn find_env_map(name: &str) -> Option<std::path::PathBuf> {
@@ -250,9 +223,9 @@ struct App {
     environment: Environment,
     /// Depth of field, for the session: the file format has no key for it.
     dof: bool,
-    /// Render › Camera › DOF's fixed focus (`pt_fix_focus`, `pt_focus`):
+    /// Render › Camera › DOF's fixed focus:
     /// the focus depth kept through camera moves. Unfixed, the render
-    /// focuses on the point the camera orbits. For the session, as there.
+    /// focuses on the point the camera orbits. For the session.
     fix_focus: bool,
     focus: f32,
     /// The render's background and voxel shape, for the session.
@@ -265,9 +238,9 @@ struct App {
     trace_cache: Option<trace_cache::TraceCache>,
     /// Animation playback.
     playing: bool,
-    /// the reference editor's Global Time (`aset global`): moving through time
+    /// Global Time: moving through time
     /// animates the whole scene, or, off, only the open group's (Tab).
-    /// On at start, as there; not saved.
+    /// On at start; not saved.
     global_time: bool,
     fps: f32,
     /// Seconds of playback not yet turned into frames.
@@ -371,11 +344,11 @@ struct App {
     resize_to: [u32; 3],
     /// The viewport's display switches.
     view: view_options::ViewOptions,
-    /// the reference editor's editor options: occlusion, shading, fade, colours,
+    /// The editor options: occlusion, shading, fade, colours,
     /// frame spacing, interface scale.
     editor_view: view_options::EditorView,
     /// File › Export's switches: only the selected objects, and each model
-    /// in its own coordinates (`export_sel`, `export_local`).
+    /// in its own coordinates.
     export_selected: bool,
     export_local: bool,
     /// A file dropped on the window, and where, while its menu is open.
@@ -615,10 +588,8 @@ impl App {
             .position(|a| a == "--render")
             .and_then(|i| args.get(i + 1))
             .and_then(|v| v.parse::<u32>().ok());
-        let path = positional_args(&args)
-            .into_iter()
-            .find(|a| a.ends_with(".vox"))
-            .unwrap_or_else(|| sample_dir().join("monu1.vox").to_string_lossy().into_owned());
+        // No file given: an empty model.
+        let path = positional_args(&args).into_iter().find(|a| a.ends_with(".vox"));
 
         // Several --run flags may be given; they execute in order, which is
         // how a kernel and a save fit into one headless session.
@@ -665,23 +636,24 @@ impl App {
             || std::env::var_os("VOXFERRO_NO_RECENT").is_some();
         app.remember_files = !scripted;
         app.autosave = autosave::Autosave::start(recent::settings_dir().map(|d| d.join("autosave")), !scripted);
-        app.load(state, &path);
-        // No model to start from -- a fresh clone has no the reference editor
-        // samples, or the file named is gone: start with an empty one, so
-        // there is something to draw in. The load error stays in the log.
+        if let Some(path) = &path {
+            app.load(state, path);
+        }
+        // No file, or the file named is gone: an empty model, so there is
+        // something to draw in. A load error stays in the log.
         if app.scene.is_none() {
             app.install(state, scene::LoadedScene::new_empty(files::NEW_MODEL_SIZE));
         }
         // A file named on the command line (or by the Explorer, or a
-        // .desktop file) is one the user opened; the bundled sample is not.
-        if positional_args(&args).iter().any(|a| a == &path) && app.scene.is_some() {
+        // .desktop file) is one the user opened: a recent file.
+        if let Some(path) = path.filter(|_| app.scene.as_ref().is_some_and(|s| s.path.is_some())) {
             app.remember(&path);
         }
         #[cfg(target_os = "macos")]
         macos_open::set_waker(&cc.egui_ctx);
         layout::apply_theme(&cc.egui_ctx);
-        // Cmd+minus and Cmd+plus are the interface scale's, in eighths as
-        // the reference editor steps it (`view_input`), not egui's own tenths.
+        // Cmd+minus and Cmd+plus are the interface scale's, in eighths
+        // (`view_input`), not egui's own tenths.
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
 
         // Run before the first frame, so --screenshot captures the result.
@@ -1035,7 +1007,7 @@ impl App {
     fn palette_grid(&mut self, ui: &mut egui::Ui) {
         let Some(loaded) = &self.scene else { return };
 
-        // Eight wide and filling the column, as the reference editor shows it.
+        // Eight wide and filling the column.
         const COLS: usize = 8;
         let cell_w = (ui.available_width() / COLS as f32).floor().max(8.0);
         let cell_h = (cell_w * 0.72).floor();
@@ -1120,7 +1092,7 @@ impl App {
             return;
         }
 
-        // the reference editor's names for commands the editor already had.
+        // Aliases for commands the editor already has.
         let renamed;
         let line = match line.split_whitespace().next() {
             Some("shrink") => "crop",
@@ -1251,7 +1223,7 @@ impl App {
         }
 
         if line.split_whitespace().next() == Some("snap") && line.split_whitespace().nth(1) == Some("window") {
-            // the reference editor's Capture Window: the whole window, panels and
+            // Capture Window: the whole window, panels and
             // all, as egui draws it; written when the screenshot arrives.
             let path = match line.split_whitespace().nth(2) {
                 Some(p) => p.to_owned(),
@@ -1529,7 +1501,7 @@ impl App {
         self.console_log.push(message);
     }
 
-    /// the reference editor's Capture Image: the viewport as it is -- the editor's
+    /// Capture Image: the viewport as it is -- the editor's
     /// view in Model mode, the render in Render mode -- as a PNG. Without a
     /// path, asks where.
     fn snap(&mut self, path: Option<&str>, state: &egui_wgpu::RenderState) -> String {
@@ -1752,7 +1724,7 @@ impl App {
                         } else if self.selecting {
                             self.begin_select(ray, pos, modifiers)
                         } else if modifiers.alt && !modifiers.shift {
-                            // the reference editor's Alt+click: the voxel's colour.
+                            // Alt+click: the voxel's colour.
                             self.pick_colour(ray)
                         } else if modifiers.alt {
                             // Option+Shift+click picks groups instead of

@@ -63,7 +63,7 @@ impl App {
     }
 
     /// A click on the render: the depth there becomes the focus, fixed, and
-    /// depth of field turns on (the reference editor's "Click Voxel to Set Focus").
+    /// depth of field turns on ("Click Voxel to Set Focus").
     /// The depth is along the view in perspective, along the ray through
     /// the wide lenses, as each focuses; the nearest visible voxel or the
     /// ground.
@@ -232,8 +232,7 @@ impl App {
             });
         });
 
-        // the reference editor's background and voxel shapes (`pt_b_bg_a`,
-        // `pt_bg_col`, `pt_prim`, `pt_cell`): settings of the session.
+        // The background and voxel shapes: settings of the session.
         egui::CollapsingHeader::new("Look").show(ui, |ui| {
             let mut changed = false;
             ui.horizontal(|ui| {
@@ -254,7 +253,7 @@ impl App {
             if matches!(self.look.shape, VoxelShape::Sphere | VoxelShape::Cylinder) {
                 changed |= ui.add(egui::Slider::new(&mut self.look.size, 0.0..=1.0).text("size")).changed();
             }
-            // Lines on the faces (`pt_b_grid`, `pt_b_edge`): cubes only.
+            // Lines on the faces: cubes only.
             let lines = &mut self.look.lines;
             ui.horizontal(|ui| {
                 changed |= ui.checkbox(&mut lines.grid, "Grid").changed();
@@ -327,7 +326,7 @@ impl App {
             clicked |= ui.checkbox(&mut env.aces, "ACES tone curve").changed();
         });
 
-        // Render › Sample, with the reference editor's ranges.
+        // Render › Sample, with its ranges.
         egui::CollapsingHeader::new("Sample").show(ui, |ui| {
             dragged |= ui.add(egui::Slider::new(&mut env.bounces, 0..=15).text("diffuse"))
                 .on_hover_text("Diffuse bounces after the first hit; 0 is direct light only").changed();
@@ -478,7 +477,7 @@ impl App {
                 format!("fog: density {} g {}", env.fog_density, env.fog_g)
             }
             Some("bounce") => {
-                // the reference editor's ranges: diffuse 0-15, specular and scatter 5-15.
+                // The ranges: diffuse 0-15, specular and scatter 5-15.
                 let n = |i: usize, lo: u32| args.get(i).and_then(|v| v.parse::<u32>().ok()).map(|v| v.clamp(lo, 15));
                 let (Some(diffuse), specular, scatter) = (n(1, 0), n(2, 5), n(3, 5)) else {
                     return "env bounce <diffuse 0-15> [specular 5-15] [scatter 5-15]".to_owned();
@@ -575,7 +574,7 @@ pub struct Look {
     pub lines: crate::pathtrace::Lines,
     pub grid_rgb: [u8; 3],
     pub edge_rgb: [u8; 3],
-    /// Render › Sample › Anti-Aliasing (`pt_b_aa`).
+    /// Render › Sample › Anti-Aliasing.
     pub antialias: bool,
 }
 
@@ -637,7 +636,7 @@ impl App {
     }
 
     /// The render's background between the sky and its colour (Cmd+B in
-    /// the render, the reference editor's `pt_b_bg_c`).
+    /// the render).
     pub fn render_background_toggle(&mut self) -> String {
         self.look.background = match self.look.background {
             Background::Colour => Background::Sky,
@@ -648,7 +647,7 @@ impl App {
         format!("background {:?}", self.look.background).to_lowercase()
     }
 
-    /// The renderer's own keys, the reference editor's: Cmd+U the ground, Cmd+C and
+    /// The renderer's own keys: Cmd+U the ground, Cmd+C and
     /// Cmd+V the brush colour's material, Cmd+R that material back to
     /// diffuse. (Cmd+E, G and B are with the display switches.)
     pub fn render_input(&mut self, ctx: &egui::Context, state: &egui_wgpu::RenderState) {

@@ -39,7 +39,7 @@ pub enum BrushShape {
     /// A circle in the face's plane, dragged out from its centre.
     Circle,
     /// A click runs the chosen voxel script over the model, and its result
-    /// is attached, erased or painted (the reference editor's shader mode).
+    /// is attached, erased or painted.
     Shader,
     /// A click stamps the pattern, a model kept for the purpose.
     Pattern,
@@ -88,7 +88,7 @@ impl BrushShape {
     }
 }
 
-/// The brush options of the reference editor's Brush panel (`m_brush.ui`).
+/// The brush options of the Brush panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrushOptions {
     /// The voxel brush's size, 1 to 64 ("Voxel Size").
@@ -399,14 +399,14 @@ pub fn face_region(volume: &Volume, voxel: IVec3, face: Face) -> Vec<IVec3> {
     )
 }
 
-/// What a region click takes in (the reference editor's Region options).
+/// What a region click takes in (the Region options).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Region {
     /// Every voxel of the clicked colour, anywhere in the model.
     SameColour,
     /// Voxels connected to the clicked one: of its colour only
     /// (`by_colour`) or any; through faces, or (`wide`) through edges and
-    /// corners as well -- the reference editor's "4" and "8" neighbours.
+    /// corners as well -- the "4" and "8" neighbours.
     Connected { by_colour: bool, wide: bool },
 }
 
@@ -514,8 +514,8 @@ pub fn stroke_cells(volume: &Volume, mode: BrushMode, shape: BrushShape, hit: &H
 }
 
 /// `cells` stretched across the whole box on each locked axis
-/// (the reference editor's Axis mode, which sets the brush's bounds to the model's
-/// on those axes). Duplicates are dropped, keeping the first's order.
+/// (the Axis mode, which sets the brush's bounds to the model's on those
+/// axes). Duplicates are dropped, keeping the first's order.
 pub fn through_axes(cells: &[IVec3], size: [u32; 3], axes: [bool; 3]) -> Vec<IVec3> {
     if !axes.iter().any(|&a| a) {
         return cells.to_vec();
@@ -539,8 +539,7 @@ pub fn through_axes(cells: &[IVec3], size: [u32; 3], axes: [bool; 3]) -> Vec<IVe
 }
 
 /// What the shader brush writes: the model `a` and the script's result `t`
-/// (both the same size) combined by the mode, as the reference editor's brush
-/// kernel does -- attach `a > 0 ? a : t`, erase `t > 0 ? 0 : a`, paint
+/// (both the same size) combined by the mode -- attach `a > 0 ? a : t`, erase `t > 0 ? 0 : a`, paint
 /// `min(a, t) > 0 ? t : a`.
 pub fn combine(volume: &Volume, result: &Volume, mode: BrushMode) -> Vec<(IVec3, u8)> {
     let [sx, sy, sz] = volume.size();

@@ -1,31 +1,29 @@
 //! The Transform tool: moving, scaling and turning the selected voxels.
 //!
-//! the reference editor's Transform options (`m_brush.ui`) are move/loop, scale, wrap
-//! and rotate, done with the mouse and committed with Enter. Moving is the
-//! editor's `move` (and the arrow keys); here are scale and rotate, as
-//! commands and panel buttons:
+//! The Transform options are move/loop, scale, wrap and rotate, done with
+//! the mouse and committed with Enter. Moving is the editor's `move` (and
+//! the arrow keys); here are scale and rotate, as commands and panel
+//! buttons:
 //!
 //! - `transform scale <axes> <factor>`: `transform scale xyz 2`;
 //! - `transform rotate <axis> <degrees>`: any angle.
 //!
-//! And with the mouse, as the reference editor's tool works: choose Move, Scale,
-//! Turn or Wrap, then drag in the viewport -- right and left (and for Move
-//! and Wrap, up and down) -- watching a preview; Enter keeps it as one undo
-//! step, Esc drops it. Shift snaps a turn to 15°.
+//! And with the mouse: choose Move, Scale, Turn or Wrap, then drag in the
+//! viewport -- right and left (and for Move and Wrap, up and down) --
+//! watching a preview; Enter keeps it as one undo step, Esc drops it.
+//! Shift snaps a turn to 15°.
 //!
-//! Wrap is the reference editor's (`the reference renderer`, hint "Wrap [N] : Commit [Enter] :
-//! Cancel [Esc] : Two-sided [SHIFT]"): the selection's box is stretched and
-//! the selection repeated to fill it ([`kernels::wrap`]), copies apart by
-//! the Wrap Spacing, every other one reflected on the axes whose Mirror
-//! toggle is on; a box pulled in smaller crops it. the reference editor drags a face
-//! of a box gizmo; here a drag moves the face the screen's right (or up)
+//! Wrap: the selection's box is stretched and the selection repeated to
+//! fill it ([`kernels::wrap`]), copies apart by the Wrap Spacing, every
+//! other one reflected on the axes whose Mirror toggle is on; a box pulled
+//! in smaller crops it. A drag moves the face the screen's right (or up)
 //! points to, a cell per 12 points, and pulls it in going back. Shift moves
 //! the opposite face too. `transform wrap <x|-x|y|-y|z|-z> <cells> [two]`
 //! does the same from the console, `transform spacing <x> <y> <z>` sets the
 //! gaps.
 //!
 //! The selected voxels are lifted out into their own box, transformed with
-//! the Edit panel's kernels (nearest cell, as there), and put back centred
+//! the Edit panel's kernels (nearest cell), and put back centred
 //! where they were; what falls outside the model is cut off. The old cells
 //! are cleared, the new ones written over whatever is there, and the
 //! selection follows -- one undo step.
@@ -428,7 +426,7 @@ impl App {
             }
         }
         if t == Some(Handle::Wrap) {
-            // the reference editor's Wrap Spacing: the gap between copies, per axis.
+            // Wrap Spacing: the gap between copies, per axis.
             ui.horizontal(|ui| {
                 ui.label("Gap").on_hover_text("Wrap spacing: empty cells between copies, x y z");
                 let gap = ui.spacing().item_spacing.x;

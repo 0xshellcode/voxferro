@@ -1,16 +1,13 @@
 //! The view cube, in the viewport's corner: a cube turned with the camera,
-//! its faces named; a click on one goes to that view. the reference editor shows one
-//! too (`lower.ui`'s "Show View Cube"); `view cube on|off`.
+//! its faces named; a click on one goes to that view; `view cube on|off`.
 //!
-//! Beside it, the camera ruler (`lower.ui`'s "Show Camera Ruler : Drag on
-//! Ruler"; `view ruler on|off`). As the reference editor a recent version draws it
-//! (`UI_3DView::GenRuler`, `MouseDrag`): not a graduated scale but two
-//! strips on the outer edges of the cube's corner, one reading the camera's
-//! turn and one its elevation, in whole degrees. A drag on a strip turns
-//! the camera on that axis, the corner where they meet both; the angle
-//! moves 180° for half the viewport's height dragged and lands on the
-//! scene's 5° snap (`scene : (snap = '5')` in `editor.ui`), starting from
-//! the current angle snapped. The turn reads 0 from the front.
+//! Beside it, the camera ruler (`view ruler on|off`): not a graduated
+//! scale but two strips on the outer edges of the cube's corner, one
+//! reading the camera's turn and one its elevation, in whole degrees. A
+//! drag on a strip turns the camera on that axis, the corner where they
+//! meet both; the angle moves 180° for half the viewport's height dragged
+//! and lands on the scene's 5° snap, starting from the current angle
+//! snapped. The turn reads 0 from the front.
 
 use crate::App;
 use crate::camera::View;

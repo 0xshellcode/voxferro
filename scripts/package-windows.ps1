@@ -2,9 +2,9 @@
 # (the icon is embedded by crates/app/build.rs) and an assets\ folder, zipped
 # to target\dist\Voxferro-<version>-windows-x64.zip.
 #
-# The the reference editor sample models and environment maps (assets\vox, assets\ibl)
-# are third-party and not in git. They are copied only with
-# -WithReferenceEditorAssets, for a package you keep for yourself: do not
+# The sample models and environment maps (assets\vox, assets\ibl), when
+# present, are third-party and not in git. They are copied only with
+# -WithSampleAssets, for a package you keep for yourself: do not
 # redistribute them.
 #
 # The app prefers Vulkan; on machines without a Vulkan driver it uses
@@ -15,8 +15,8 @@
 # dxil.dll is under a Microsoft licence with distribution requirements
 # (see LICENSE-MS.txt): read it before sharing a package that includes it.
 #
-# Usage: powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 [-WithDxc] [-WithReferenceEditorAssets]
-param([switch]$WithReferenceEditorAssets, [switch]$WithDxc)
+# Usage: powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 [-WithDxc] [-WithSampleAssets]
+param([switch]$WithSampleAssets, [switch]$WithDxc)
 
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -36,7 +36,7 @@ Copy-Item -Recurse "assets\scripts" (Join-Path $app "assets")
 Copy-Item "assets\materials_demo.vox" (Join-Path $app "assets")
 Copy-Item "LICENSE-MIT", "LICENSE-APACHE", "README.md" $app
 
-if ($WithReferenceEditorAssets) {
+if ($WithSampleAssets) {
     foreach ($dir in "vox", "ibl") {
         if (Test-Path "assets\$dir") {
             Copy-Item -Recurse "assets\$dir" (Join-Path $app "assets")

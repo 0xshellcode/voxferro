@@ -1,32 +1,32 @@
-//! the reference editor's World-mode object operations (`o_edit.ui`), read from
-//! its a recent version code, on the selected objects (`objects.rs`):
+//! The World-mode object operations, on the selected objects
+//! (`objects.rs`):
 //!
-//! - **Align** (`oalign`): each object moved, on its own, so its box's low
+//! - **Align**: each object moved, on its own, so its box's low
 //!   side, centre or high side meets the selection's: `object align x|y|z
 //!   -1|0|+1`.
-//! - **Ground** (`omove g`): the whole selection moved so its lowest cell
+//! - **Ground**: the whole selection moved so its lowest cell
 //!   sits on z = 0: `object ground`.
-//! - **Flip** (`oflip`): a mirrored placement, not mirrored voxels -- the
+//! - **Flip**: a mirrored placement, not mirrored voxels -- the
 //!   selection's box maps onto itself: `object flip x|y|z`.
-//! - **Union** and **intersection** (`ounion`, `ointer`): the selected
+//! - **Union** and **intersection**: the selected
 //!   objects fused into one new model in world cells, at most 256 a side
 //!   about the middle; where they overlap, the last selected wins; the
 //!   originals go. Intersection keeps only cells every object fills.
-//! - **Operand**, **subtract**, **replace** (`ooper`, `osub`, `orep`): the
+//! - **Operand**, **subtract**, **replace**: the
 //!   selected objects become the operand -- taken out of the scene and
 //!   kept aside -- then subtracting removes from each selected object the
 //!   voxels the operand fills, and replacing repaints them in its colours.
 //!   The operand stays for further use until the next. A model another
 //!   object also shows is copied first, so only the selected one changes.
-//! - **Copy**, **copy as reference**, **cut**, **paste** (`ocopy`, `ocopy
-//!   ref`, `ocut`, `opaste`): a copy brings its own model, so each paste is
-//!   independent; a reference shows the same model, so editing one edits
-//!   all; cut is a reference copy and a delete. Pasted objects land where
-//!   they were copied from, and become the selection.
-//! - **Reference to copy** (`oref2obj`): a selected object sharing its
-//!   model gets a model of its own.
+//! - **Copy**, **copy as reference**, **cut**, **paste**: a copy brings its
+//!   own model, so each paste is independent; a reference shows the same
+//!   model, so editing one edits all; cut is a reference copy and a delete.
+//!   Pasted objects land where they were copied from, and become the
+//!   selection.
+//! - **Reference to copy**: a selected object sharing its model gets a model
+//!   of its own.
 //!
-//! - **Transform copy and paste** (`m_copy`, `m_paste`): copy takes the
+//! - **Transform copy and paste**: copy takes the
 //!   first selected object's rotation and the centre of its box; paste
 //!   gives every selected object that rotation, turning it about its own
 //!   centre, and moves that centre onto the copied one. `paste rot` turns
@@ -76,7 +76,7 @@ fn union_box(a: Option<(IVec3, IVec3)>, b: (IVec3, IVec3)) -> Option<(IVec3, IVe
     })
 }
 
-/// the reference editor's centre: low side plus half the size, rounded toward 0.
+/// The centre: low side plus half the size, rounded toward 0.
 fn centre(lo: IVec3, hi: IVec3) -> IVec3 {
     lo + (hi - lo) / 2
 }
@@ -110,7 +110,7 @@ fn volume_of(cells: &HashMap<IVec3, u8>) -> Option<(Volume, Transform)> {
     if cells.is_empty() {
         return None;
     }
-    // the reference editor's clip: 256 a side, about the middle.
+    // The clip: 256 a side, about the middle.
     let mid = centre(lo, hi);
     lo = lo.max(mid - IVec3::splat(128));
     hi = hi.min(mid + IVec3::splat(128));
@@ -506,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn the_centre_rounds_toward_zero_as_reference_editor() {
+    fn the_centre_rounds_toward_zero() {
         assert_eq!(centre(IVec3::new(0, -5, 1), IVec3::new(3, 0, 2)), IVec3::new(1, -3, 1));
     }
 }

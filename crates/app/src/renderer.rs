@@ -34,7 +34,7 @@ struct Uniforms {
     select_color: [f32; 4],
 }
 
-/// the reference editor's editor options the voxel shader draws with.
+/// The editor options the voxel shader draws with.
 #[derive(Debug, Clone, Copy)]
 pub struct Shading {
     pub constant: bool,

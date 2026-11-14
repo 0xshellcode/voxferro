@@ -1,10 +1,8 @@
 // Voxel operations as compute kernels.
 //
-// This is the part of the design that Apple Silicon simplifies. the reference editor
-// packs the 3D volume into a 2D texture with modular arithmetic
-// (`convert_loc_from_voxel_to_buffer`) and runs edits as *fragment* shaders,
-// because OpenGL 2.x had no compute stage and no storage buffers. With wgpu
-// the volume is addressed directly in 3D and that whole packing disappears.
+// The volume is addressed directly in 3D, with edits as compute kernels:
+// no packing of the volume into a 2D texture and no edits as fragment
+// shaders, which an OpenGL 2.x design would need.
 //
 // Each kernel plays the role of an `xs_begin` shader in the editor: a
 // signed-distance style function evaluated once per voxel, in parallel.

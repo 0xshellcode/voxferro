@@ -2,10 +2,10 @@
 Type=Application
 Name=Voxferro
 GenericName=Voxel Editor
-Comment=Voxel editor compatible with the reference editor's .vox format
+Comment=Voxel editor for .vox files
 Exec=voxferro %f
 Icon=voxferro
 Terminal=false
 Categories=Graphics;3DGraphics;
-MimeType=application/x-the reference editor;
-Keywords=voxel;vox;the reference editor;3d;path tracer;
+MimeType=application/x-vox;
+Keywords=voxel;vox;3d;path tracer;

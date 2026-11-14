@@ -1,6 +1,5 @@
-//! the reference editor's model-editor shortcuts, from its `config/hotkey.txt`
-//! (a recent version), so hands that know it work here too. Ctrl there is Cmd on
-//! macOS, as for every shortcut here.
+//! The model editor's shortcuts. Ctrl is Cmd on macOS, as for every
+//! shortcut here.
 //!
 //! | Keys | Does |
 //! |---|---|
@@ -27,7 +26,7 @@
 //! | F2 | between the editor and the render |
 //! | Cmd+P, Cmd+Shift+P | a new project; a copy of this one in its folder |
 //!
-//! In the Move tool, the reference editor's world editor (in `objects.rs`):
+//! In the Move tool, the world editor (in `objects.rs`):
 //!
 //! | Keys | Does |
 //! |---|---|
@@ -43,15 +42,12 @@
 //! background colour, Cmd+C and Cmd+V the brush colour's material, Cmd+R
 //! that material back to diffuse (in `view_options.rs`).
 //!
-//! Not taken: Cmd+H and Cmd+W, which hide and close the app on macOS;
-//! Ctrl+5, Ctrl+6 and F12, whose actions the editor's files do not name;
-//! the camera slots on the keypad, which egui cannot tell from the digits.
+//! Not taken: Cmd+H and Cmd+W, which hide and close the app on macOS; the
+//! camera slots on the keypad, which egui cannot tell from the digits.
 //!
-//! Where these took a key this editor had used, the editor's moved: the
-//! fixed views are Alt+1 to Alt+7, the eyedropper Alt+click, and framing
-//! 5 as in the reference editor. Keys do nothing while a text field has focus, and
-//! the letters only without Cmd, so Cmd+B and the like stay the display
-//! switches.
+//! The fixed views are Alt+1 to Alt+7, the eyedropper Alt+click, and
+//! framing 5. Keys do nothing while a text field has focus, and the letters
+//! only without Cmd, so Cmd+B and the like stay the display switches.
 
 use crate::App;
 use eframe::{egui, egui_wgpu};
@@ -70,7 +66,7 @@ impl App {
             let (cmd, shift, alt) = (i.modifiers.command, i.modifiers.shift, i.modifiers.alt);
             let plain = !cmd && !alt;
             let pressed = |k: Key| i.key_pressed(k);
-            // Global, as the reference editor's: F1 the console, F2 between the
+            // Global: F1 the console, F2 between the
             // editor and the render, Cmd+P a new project and Cmd+Shift+P a
             // copy of it.
             if pressed(Key::F1) {
@@ -83,7 +79,7 @@ impl App {
             if cmd && shift && pressed(Key::P) {
                 lines.push("project dup".to_owned());
             }
-            // The Move tool is the reference editor's world editor, with keys of its
+            // The Move tool is the world editor, with keys of its
             // own (`object_input`): the model editor's letters stay out.
             let model_keys = !self.moving && !self.rendering;
             if plain && !shift && model_keys {
@@ -162,7 +158,7 @@ impl App {
             if cmd && !shift && pressed(Key::I) && model_keys {
                 lines.push("select invert".to_owned());
             }
-            // the reference editor clears the whole model here. Not this editor: a
+            // Delete without a selection does not clear the whole model: a
             // selection dropped without noticing, then Delete, would empty
             // the model when a piece was meant. Clear in the Edit panel
             // (`zero`) does it on purpose.

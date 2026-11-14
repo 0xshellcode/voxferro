@@ -4,14 +4,12 @@
 // A separate pass because bloom reads neighbouring pixels, which the tracing
 // pass cannot do while those pixels are still being written.
 //
-// Bloom follows the uniforms the editor sets in the reference renderer:
-// each frame gathers `iterations` random samples inside an ellipse of radius
-// `_scale * 200 + 1` pixels, stretched by 2^(_aspect * 4) and turned by the
-// lens blade angle; with lens blades the ellipse turns by pi / n every
-// iteration, which draws a star. Only light above `_threshold` glows. The
-// samples accumulate over frames like the image itself. How the editor's
-// shader weights the samples and mixes the result is not in the binary; the
-// falloff and the additive mix here are this renderer's choice.
+// Bloom: each frame gathers `iterations` random samples inside an ellipse of
+// radius `_scale * 200 + 1` pixels, stretched by 2^(_aspect * 4) and turned
+// by the lens blade angle; with lens blades the ellipse turns by pi / n
+// every iteration, which draws a star. Only light above `_threshold` glows.
+// The samples accumulate over frames like the image itself, with a falloff
+// and an additive mix.
 
 struct Post {
     resolution: vec2<u32>,
@@ -27,7 +25,7 @@ struct Post {
     star: vec4<f32>,
     // x: diagnostic view; 5 paints magenta without reading the tracer.
     debug: vec4<u32>,
-    // The background (the reference editor's): x 0 the sky, 1 a flat colour (yzw,
+    // The background: x 0 the sky, 1 a flat colour (yzw,
     // linear) behind what the camera sees, 2 transparent.
     look: vec4<f32>,
 };
@@ -111,10 +109,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = color + q.look.yzw * (1.0 - alpha);
     }
 
-    // Vignette. The editor uploads `vig = _vig^2 * 5` (EvalPost); a 0..5
-    // range reads as an exponent, so it shapes the usual 16uv(1-u)(1-v)
-    // falloff -- 1 in the middle, 0 at the corners. The form is this
-    // renderer's reading; the uniform's scale is the editor's.
+    // Vignette. `_vig^2 * 5`, a 0..5 range, is an exponent that shapes the
+    // usual 16uv(1-u)(1-v) falloff -- 1 in the middle, 0 at the corners.
     let uv = (vec2<f32>(gid.xy) + vec2<f32>(0.5)) / vec2<f32>(q.resolution);
     let falloff = 16.0 * uv.x * uv.y * (1.0 - uv.x) * (1.0 - uv.y);
     if (q.film.y > 0.0) {

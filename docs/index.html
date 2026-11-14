@@ -15,7 +15,7 @@
     <div>
       <p class="eyebrow">Documentation · v0.1.7 · Rust + wgpu</p>
       <h1>Voxferro<svg class="cube" viewBox="0 0 40 40" aria-hidden="true"><path d="M20 2 L37 11 L20 20 L3 11 Z" style="fill:var(--iron-soft);stroke:var(--iron);stroke-width:2"/><path d="M3 11 L20 20 L20 38 L3 29 Z" style="fill:var(--iron)"/><path d="M37 11 L20 20 L20 38 L37 29 Z" style="fill:var(--ember)"/></svg></h1>
-      <p class="lede">A voxel editor written in Rust, native on macOS, Windows and Linux, that reads and writes the reference editor's <code>.vox</code> files. This guide explains how it works inside: from the bytes of a file to the pixels of the render.</p>
+      <p class="lede">A voxel editor written in Rust, native on macOS, Windows and Linux, that reads and writes <code>.vox</code> files. This guide explains how it works inside: from the bytes of a file to the pixels of the render.</p>
       <dl class="facts">
         <div><dt>crates</dt><dd>3</dd></div>
         <div><dt>lines of Rust and WGSL</dt><dd>~32,000</dd></div>
@@ -47,7 +47,6 @@
       <li><a href="#gpu">Compute on the GPU</a></li>
       <li><a href="#mcp">Driven by an agent</a></li>
       <li><a href="#quality">Tests, fuzzing and CI</a></li>
-      <li><a href="#the reference editor">Working from the reference editor</a></li>
       <li><a href="#reading">Where to start reading</a></li>
       <li><a href="#glossary">Glossary</a></li>
     </ol>
@@ -57,14 +56,14 @@
     <section id="what">
       <h2>What Voxferro is</h2>
       <p>A <strong>voxel</strong> is to a volume what a pixel is to an image: one cell of a 3D grid. Voxferro is a program for modelling with voxels: you attach, erase and paint little cubes with brushes, arrange several models in a scene, animate them and make photorealistic renders.</p>
-      <p>It takes <strong>the reference editor</strong>, its author's free voxel editor, as its model. It opens and saves its <code>.vox</code> files without losing anything (materials, cameras, layers, animation, render settings) and follows its panel layout and shortcuts, so anyone who knows it feels at home.</p>
+      <p>It opens and saves <code>.vox</code> files without losing anything (materials, cameras, layers, animation, render settings).</p>
       <div class="note">
         <span class="tag">The approach</span>
-        <p>File compatibility is a goal; the architecture is its own, in idiomatic Rust, and does not try to copy the reference editor line by line.</p>
+        <p>File compatibility is a goal; the architecture is its own, in idiomatic Rust.</p>
       </div>
       <p>What it does today, in short:</p>
       <ul>
-        <li><strong>Editing:</strong> voxel, box, line, face, fill, pattern and script brushes; selection, copy and paste, transforms with the mouse; the reference editor's Edit panel (fill, clear, mirror, Perlin noise, maze, erosion...).</li>
+        <li><strong>Editing:</strong> voxel, box, line, face, fill, pattern and script brushes; selection, copy and paste, transforms with the mouse; an Edit panel (fill, clear, mirror, Perlin noise, maze, erosion...).</li>
         <li><strong>Scenes:</strong> several models, groups, layers and keyframe animation.</li>
         <li><strong>Rendering:</strong> a progressive path tracer on the GPU, with metal, glass, emission, clouds, an atmospheric sky and HDR maps.</li>
         <li><strong>Export:</strong> OBJ, PLY, marching cubes, XRAW, Qubicle, SLAB6, PNG slices and isometric sprites.</li>
@@ -94,11 +93,11 @@
           <tr><td><code>eframe</code> / <code>egui</code> 0.36</td><td>Window, event loop and interface</td><td>An <em>immediate mode</em> UI: the whole interface is described again every frame, with no widget tree to keep in sync. It brings wgpu by default.</td></tr>
           <tr><td><code>wgpu</code> 30</td><td>All the graphics</td><td>One API that becomes Metal on the Mac, DirectX 12 on Windows and Vulkan on Linux. On Apple silicon it emits native Metal, never touching OpenGL.</td></tr>
           <tr><td>WGSL</td><td>Shaders: viewport, shadows, path tracer, post-processing, kernels</td><td>wgpu's own language; <code>naga</code> translates it for each platform (MSL, HLSL, SPIR-V).</td></tr>
-          <tr><td><code>naga</code> 30</td><td>Voxel scripts</td><td>Compiles the reference editor's GLSL scripts to WGSL, and reports errors with line numbers before the GPU sees them.</td></tr>
+          <tr><td><code>naga</code> 30</td><td>Voxel scripts</td><td>Compiles GLSL voxel scripts to WGSL, and reports errors with line numbers before the GPU sees them.</td></tr>
           <tr><td><code>glam</code> 0.34</td><td>Vectors, matrices, quaternions</td><td>SIMD, and the ecosystem standard.</td></tr>
           <tr><td><code>bytemuck</code></td><td>Handing structs to the GPU</td><td><code>#[derive(Pod)]</code> turns a struct into bytes without copies or <code>unsafe</code> of our own.</td></tr>
           <tr><td><code>rfd</code> 0.17</td><td>Open and save dialogs</td><td>Each system's native panels.</td></tr>
-          <tr><td><code>miniz_oxide</code>, <code>png</code></td><td>PNG images</td><td>Compressing renders, and reading the reference editor's palettes, which are 256×1 PNGs.</td></tr>
+          <tr><td><code>miniz_oxide</code>, <code>png</code></td><td>PNG images</td><td>Compressing renders, and reading palette files, which are 256×1 PNGs.</td></tr>
           <tr><td><code>rmcp</code>, <code>tokio</code>, <code>axum</code></td><td>The MCP server</td><td>The official Rust SDK for the Model Context Protocol, served over HTTP on a thread of its own.</td></tr>
           <tr><td><code>egui-phosphor</code></td><td>Icons</td><td>The Phosphor icon font, packaged for egui.</td></tr>
           <tr><td><code>dot_vox</code></td><td>Tests only</td><td>An independent <code>.vox</code> reader, to check that ours reads the same.</td></tr>
@@ -139,7 +138,7 @@ cargo test --workspace</code></pre>
         </div></div>
         <figcaption>The twelve bytes that open every chunk. All integers are little-endian.</figcaption>
       </figure>
-      <p>Since every chunk says how long its content is and how long its children are, a reader can <strong>step over any chunk it does not know</strong>. That is why one parser reads every version of the format, and why files from newer the reference editor versions do not break the reader.</p>
+      <p>Since every chunk says how long its content is and how long its children are, a reader can <strong>step over any chunk it does not know</strong>. That is why one parser reads every version of the format, and why files written by newer versions of the format do not break the reader.</p>
       <div class="table wide"><table>
         <thead><tr><th>Chunk</th><th>What it holds</th></tr></thead>
         <tbody>
@@ -173,12 +172,12 @@ cargo test --workspace</code></pre>
       <p>The <code>Document</code> gathers the scene (models and graph), the palette, the materials, the render settings, the layers, the cameras and the palette order. It is exactly what goes into the file.</p>
       <h3>Scene graph and animation</h3>
       <p>The <code>nTRN → nGRP → nSHP</code> nodes form a tree. To draw, <code>flatten()</code> walks it at a given frame and produces a flat list of <em>instances</em>: which model, where, turned how. A model placed ten times is stored once and instanced ten times.</p>
-      <p>Animation stores keyframes on the nodes. Between two keys, position is interpolated linearly. This was not guessed: a file saved by the reference editor (<code>T-Rex-m.vox</code>) keys x = 44 at frame 11 and x = 148 at frame 19, and stores the position at frame 17 as 122, exactly 44 + 6/8 · 104.</p>
+      <p>Animation stores keyframes on the nodes. Between two keys, position is interpolated linearly. This was not guessed: a saved animated file keys x = 44 at frame 11 and x = 148 at frame 19, and stores the position at frame 17 as 122, exactly 44 + 6/8 · 104.</p>
     </section>
 
     <section id="editing">
       <h2>Editing and undo</h2>
-      <p>The central idea comes from the reference editor itself: <strong>everything goes through the console</strong>. A button, a shortcut, a typed line, a script or an agent over MCP all produce the same thing, a line of text, and a single interpreter runs it.</p>
+      <p>The central idea: <strong>everything goes through the console</strong>. A button, a shortcut, a typed line, a script or an agent over MCP all produce the same thing, a line of text, and a single interpreter runs it.</p>
       <div class="flow wide">
         <div class="src">
           <div class="box">Panel button</div>
@@ -207,7 +206,7 @@ cargo test --workspace</code></pre>
     SetGraph { before: Vec&lt;SceneNode&gt;, after: Vec&lt;SceneNode&gt; },
     <span class="c">// ... palette, materials, render, layers, cameras</span>
 }</code></pre>
-      <p>the reference editor does this with about 130 C++ classes, each with its own <code>DoIt</code>, <code>Undo</code> and <code>Redo</code>. An <code>enum</code> has one advantage: Rust's <code>match</code> is exhaustive, so adding a command that cannot be undone is a build error rather than a bug found later.</p>
+      <p>An <code>enum</code> has one advantage over a class per command, each with its own undo and redo: Rust's <code>match</code> is exhaustive, so adding a command that cannot be undone is a build error rather than a bug found later.</p>
       <h3>Brushes as pure functions</h3>
       <p>A brush crosses a <em>mode</em> (attach, erase, paint) with a <em>shape</em> (voxel, box, line, face, fill). In <code>brush.rs</code> each combination is a pure function: it takes the volume and the stroke's points and returns the list of cells to write. The app turns that list into a single <code>Command</code>, so a whole stroke undoes in one step.</p>
       <p>To know which voxel is under the mouse, <code>raycast.rs</code> casts a ray from the camera with the same DDA algorithm the path tracer uses (see chapter 9).</p>
@@ -235,7 +234,7 @@ cargo test --workspace</code></pre>
       </ul>
       <figure class="fig wide">
         <img src="images/editor.png" alt="The Voxferro window with the island open: palette and brushes on the left, the Edit and Project panels on the right, the console at the bottom" width="1600" height="1040" loading="lazy">
-        <figcaption>The editor with the island open, laid out as the reference editor is: palette and brush on the left, the Edit and Project panels on the right, the console and camera modes along the bottom.</figcaption>
+        <figcaption>The editor with the island open: palette and brush on the left, the Edit and Project panels on the right, the console and camera modes along the bottom.</figcaption>
       </figure>
     </section>
 
@@ -253,8 +252,8 @@ cargo test --workspace</code></pre>
         <figcaption>The ray leaves the black dot and crosses 11 empty cells before reaching the first solid one. Each orange dot is a border crossing: one step of the loop.</figcaption>
       </figure>
       <div class="note learn">
-        <span class="tag">Why it is simpler than in the reference editor</span>
-        <p>the reference editor was born on OpenGL 2, which had no compute stage and no storage buffers, so it packs the volume into a 2D texture with modular arithmetic. With wgpu the grid is read directly in 3D and all of that packing disappears.</p>
+        <span class="tag">Why it is simple</span>
+        <p>OpenGL 2 had no compute stage and no storage buffers, so a volume had to be packed into a 2D texture with modular arithmetic. With wgpu the grid is read directly in 3D and all of that packing disappears.</p>
       </div>
       <h3>Materials and light</h3>
       <ul>
@@ -266,7 +265,7 @@ cargo test --workspace</code></pre>
       <h3>Post-processing</h3>
       <p>A second compute shader, <code>post.wgsl</code>, reads the accumulator and applies bloom, exposure, vignette, the ACES tone curve and gamma. It is a separate pass because bloom reads neighbouring pixels, which the first pass is still writing.</p>
       <h3>Voxel shapes</h3>
-      <p>Voxels can be rendered as spheres, cylinders, studded bricks, clay or marching cubes. That code sits behind a pipeline constant (<code>override SHAPES</code>): the usual pipeline is compiled without it, and a second pipeline with shapes is created only when needed. The reason is Windows: with everything inlined, the shader was too large and DirectX's software rasteriser drew it black.</p>
+      <p>Voxels can be rendered as spheres, cylinders, studded bricks, clay or marching cubes. That code sits behind a pipeline constant (<code>override SHAPES</code>): the usual pipeline is compiled without it, and a second pipeline with shapes is created only when needed. The reason is Windows: with everything inlined, the shader was too large and DirectX's software rasteriser drew it black. The marching cubes table is <em>built</em> by joining the crossed edges on each face of the cell.</p>
       <figure class="fig wide">
         <img src="images/shapes.jpg" alt="A gold metal torus, a glass sphere with a glowing core and a rounded box" width="1600" height="1266" loading="lazy">
         <figcaption>Shapes made by the GPU kernels: a gold metal torus, a glass shell with a glowing core and a rounded box.</figcaption>
@@ -277,9 +276,9 @@ cargo test --workspace</code></pre>
       <h2>Compute on the GPU</h2>
       <p>The GPU does more than draw. Several editing operations are <strong>kernels</strong>: a function evaluated once per voxel, all at once, in a compute shader (<code>voxel_ops.wgsl</code>, in 4×4×4 workgroups).</p>
       <h3>Voxel scripts (xs)</h3>
-      <p>the reference editor's <code>xs</code> command runs user scripts. A script defines a function <code>map(v)</code> that receives a cell's centre and returns the colour index to put there. Voxferro accepts two languages:</p>
+      <p>The <code>xs</code> command runs user scripts. A script defines a function <code>map(v)</code> that receives a cell's centre and returns the colour index to put there. Voxferro accepts two languages:</p>
       <ul>
-        <li><strong>GLSL</strong> (<code>.txt</code>): the reference editor's own scripts, unchanged. <code>naga</code> compiles them into a compute shader and hands them to wgpu as WGSL.</li>
+        <li><strong>GLSL</strong> (<code>.txt</code>): GLSL voxel scripts, unchanged. <code>naga</code> compiles them into a compute shader and hands them to wgpu as WGSL.</li>
         <li><strong>WGSL</strong> (<code>.wgsl</code>): the project's own, such as <code>terrain</code>, <code>menger</code> or <code>erode</code>.</li>
       </ul>
       <p>Each pass reads the model as it was before the pass, never what the same pass has already written. So a script can grow, erode or shift a model, and <code>-n 3</code> chains three passes.</p>
@@ -311,7 +310,7 @@ claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
     <section id="quality">
       <h2>Tests, fuzzing and CI</h2>
       <ul>
-        <li><strong>286 tests</strong>, each next to the code it tests (<code>#[cfg(test)] mod tests</code> at the end of the file). The <code>.vox</code> reader is checked against <code>dot_vox</code> and against the reference editor's sample models.</li>
+        <li><strong>301 tests</strong>, each next to the code it tests (<code>#[cfg(test)] mod tests</code> at the end of the file). The <code>.vox</code> reader is checked against <code>dot_vox</code> and against sample models.</li>
         <li><strong>Fuzzing:</strong> <code>examples/fuzz_vox.rs</code> corrupts valid files and checks that the reader never panics. The last run passed 120,000 cases without a failure.</li>
         <li><strong>Clippy</strong> with <code>-D warnings</code>: any warning fails CI.</li>
       </ul>
@@ -323,20 +322,6 @@ claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
         <li>A shader that was too large drew black; hence the separate pipeline for shapes.</li>
       </ul>
       <p>Pushing a <code>v*</code> tag runs another workflow that builds the four downloads: macOS universal (<code>.dmg</code> and <code>.zip</code>), Windows and Linux.</p>
-    </section>
-
-    <section id="the reference editor">
-      <h2>Working from the reference editor</h2>
-      <p>Behaving like the reference editor means knowing exactly what it does, and that is not always documented. The sources, in order:</p>
-      <ol>
-        <li><strong>Its interface files</strong> (<code>config/ui/*.ui</code>): plain text with every control, its command, its range and its hint. And <code>hotkey.txt</code> for the shortcuts.</li>
-        <li><strong>Its executables.</strong> The macOS a recent version build keeps its C++ function names, which makes it very readable with reverse-engineering tools. The Windows a recent version build does not, but it has the newer features.</li>
-        <li><strong>The files it saves.</strong> A <code>.vox</code> saved by the reference editor pins down details the binary leaves unclear, such as how animation is interpolated.</li>
-      </ol>
-      <div class="note">
-        <span class="tag">A rule</span>
-        <p>the reference editor's code is reference only: it is read to understand behaviour and never copied. For example, Voxferro's marching cubes table is <em>built</em> by joining the crossed edges on each face of the cell, rather than copied from the reference editor. The formulas that were worked out (exposure, bloom, atmosphere, materials) are written down in the ROADMAP with where they came from.</p>
-      </div>
     </section>
 
     <section id="reading">
@@ -355,7 +340,7 @@ claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
       <pre><code>cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render-mode</code></pre>
       <p>And for a render to a PNG with nobody at the window:</p>
       <pre><code>cargo run --release -p voxferro -- scene.vox --run "render image 1920 1080 256 out.png"</code></pre>
-      <p><a href="../ROADMAP.md"><code>ROADMAP.md</code></a> tells the full story, phase by phase, with the decisions and the measured numbers.</p>
+      <p><a href="../ROADMAP.md"><code>ROADMAP.md</code></a> lists the phases and where each one stands.</p>
     </section>
 
     <section id="glossary">
@@ -386,7 +371,7 @@ claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
 <footer>
   <div class="wrap">
     <span>Voxferro · MIT or Apache 2.0</span>
-    <span>the reference editor is the work of its author. Voxferro is not affiliated with the reference editor and contains none of its code.</span>
+    <span>A voxel editor for <code>.vox</code> files.</span>
   </div>
 </footer>
 

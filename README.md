@@ -2,10 +2,10 @@
 
 <img src="assets/icon/icon.png" alt="Voxferro icon" width="128">
 
-A voxel editor in Rust, native on macOS (Apple silicon and Intel), Windows and Linux, compatible with the reference editor's `.vox` format.
+A voxel editor in Rust, native on macOS (Apple silicon and Intel), Windows and Linux, compatible with the `.vox` format.
 
 File interoperability is a goal; the architecture is its own, in
-idiomatic Rust, and does not copy the reference editor line by line.
+idiomatic Rust.
 
 A guide to how it works inside -- the crates, the `.vox` format, meshing,
 the path tracer, the GPU kernels and the MCP server -- is in
@@ -32,12 +32,11 @@ samples.*
 | | |
 |---|---|
 | ![Voxel scripts: terrain, a Menger sponge and an eroded ball](assets/showcase/scripts.jpg) | ![The island exported as isometric pixel sprites](assets/showcase/island-iso.png) |
-| *Made by voxel scripts alone: hills from the `terrain` script in three colour bands, a gold Menger sponge from `menger`, a stone ball worn by three passes of `erode` ([`scripts.cmds`](assets/showcase/scripts.cmds)); 256 samples.* | *The island exported with `export iso`: four isometric pixel-art views, lit as the reference editor's iso export lights them.* |
+| *Made by voxel scripts alone: hills from the `terrain` script in three colour bands, a gold Menger sponge from `menger`, a stone ball worn by three passes of `erode` ([`scripts.cmds`](assets/showcase/scripts.cmds)); 256 samples.* | *The island exported with `export iso`: four isometric pixel-art views.* |
 
 ![The editor](assets/showcase/editor.png)
 
-*The editor with the island open, laid out as the reference editor is: palette and
-brush on the left, the Edit and Project panels on the right, the console
+*The editor with the island open: palette and brush on the left, the Edit and Project panels on the right, the console
 and camera modes along the bottom.*
 
 To rebuild a scene and render it yourself:
@@ -48,7 +47,7 @@ cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render
 
 ## Status
 
-Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **303 tests
+Phases 0–40 and 43–50 of the [ROADMAP](ROADMAP.md) are complete, with **301 tests
 passing**; 41 and 42 (Windows and Linux) are prepared and built in CI, not
 yet tried on real machines. Working today:
 
@@ -62,7 +61,7 @@ yet tried on real machines. Working today:
   of scenes with multiple models, rotated ones included
 - Open, new, save as, and a warning about unsaved changes; a Project
   panel (a folder of models opened with a click; rename, duplicate, move
-  to the trash) and palette files (the reference editor's 256 × 1 PNGs)
+  to the trash) and palette files (256 × 1 PNGs)
 - Attach / erase / paint brushes with voxel (1 to 64 across, cube or
   sphere, flat or solid), box, line (optionally laid on the surface),
   square, circle, face and fill shapes, with preview and one-step undo/redo per stroke; a shader
@@ -72,11 +71,10 @@ yet tried on real machines. Working today:
 - Selection (box marquee, square or circle on a layer, face, color), copy/cut/paste, move; rotate, mirror,
   crop and resize the model; move, scale, turn and wrap the selection with
   the mouse (wrap repeats it to fill a stretched box)
-- the reference editor's Edit panel: full, reverse, double and halve, loop, scale,
+- An Edit panel: full, reverse, double and halve, loop, scale,
   shear, any-angle rotation, repeat, mirror and diagonal symmetry, shapes,
-  maze, Perlin noise, fractal, hull, flood, dilation and erosion, with the
-  formulas of its own kernels
-- Several objects at once, as the reference editor's World mode: Shift+click and
+  maze, Perlin noise, fractal, hull, flood, dilation and erosion
+- Several objects at once: Shift+click and
   marquee selection; union, intersection, subtraction and replacement;
   align, drop to the ground, flip; copy, copy as reference, cut and paste;
   a placement copied from one object and pasted on others (whole, only the
@@ -87,15 +85,14 @@ yet tried on real machines. Working today:
   (one layer alone, sorted by name, its objects selected), all
   saved in the file
 - Palette and materials editable from the interface, with undo
-- Animation: playback, transform keys (interpolated as in
-  the reference editor a recent version), shape frames, range, timeline (with
+- Animation: playback, interpolated transform keys, shape frames, range, timeline (with
   draggable keys) and export of rendered frames to PNG; stepping a frame
   or a key at a time (`,` `.`, Cmd+`,` Cmd+`.`), loops, reversed keys, and
   Global Time (off, only the open group animates); several models packed
   into the frames of one (and unpacked again), a file's models imported
   as a looping sprite animation, and keys picked on the timeline
   (Cmd/Shift+click) to remove together
-- Export to OBJ + MTL + palette texture, and to the reference editor's other
+- Export to OBJ + MTL + palette texture, and to other
   formats: PLY (faces, cubes or points), a smooth surface by marching
   cubes, XRAW, Qubicle QB, SLAB6, PNG
   slices and isometric or front-view pixel sprites; import of `.vox`, XRAW, QB and SLAB6 models into a scene, of OBJ
@@ -103,14 +100,14 @@ yet tried on real machines. Working today:
   another project's materials, render settings, cameras or palette, and
   *Recover* for damaged files
 - Camera: frame selection or scene, axis and isometric views,
-  the reference editor's four modes -- perspective, free (look around and fly with
+  four modes -- perspective, free (look around and fly with
   W A S D Q E), orthographic and isometric -- also in the path tracer and
   in saved cameras, panning, a view cube with a camera ruler (drag to turn
   in 5° steps), and snapshots of the viewport or the whole window
 - Display switches: voxel edges, frame lines, grid, background objects,
-  wireframe and shadows, with the reference editor's shortcuts (Cmd+E, F, G, B, M;
+  wireframe and shadows, with shortcuts (Cmd+E, F, G, B, M;
   in the render, Cmd+E and Cmd+G switch its own edges and grid);
-  the reference editor's view options: ambient occlusion, constant shading, the
+  view options: ambient occlusion, constant shading, the
   other models faded while one is edited, the background, frame, edge and
   selection colours, the frame lines' spacing and the interface scale
   (Cmd+minus, Cmd+plus)
@@ -129,19 +126,19 @@ yet tried on real machines. Working today:
 - Render settings (sun, uniform / atmospheric / HDR sky, ground, lens,
   film, bloom) editable in the panel, with undo and saved in the
   file; depth of field with a polygonal aperture, focused with a click;
-  stereographic and panorama lenses; the reference editor's sample options
+  stereographic and panorama lenses; sample options
   (diffuse, specular and scatter depths, an energy limit against
   fireflies, anti-aliasing on or off)
 - Command console
 - Voxel operations as compute kernels in WGSL
-- Voxel scripts (`xs`): the reference editor's GLSL scripts run unchanged, and WGSL
+- Voxel scripts (`xs`): GLSL voxel scripts run unchanged, and WGSL
   ones of our own, from a Scripts panel with a slider per argument
 - Atomic saving that preserves materials, cameras and renderer settings
 - Progressive path tracer (GI, shadows, ACES) with the file's lighting
 - Metal, glass, emissive and cloud materials (media that absorb, scatter
-  or emit), with the reference editor's formulas; fog
+  or emit); fog
 - Infinite ground plane that blends into the horizon
-- Lighting with HDR maps, oriented and normalized as in the reference editor
+- Lighting with HDR maps, oriented and normalized
 - Atmospheric sky with Rayleigh and Mie scattering, and a sun that reddens at sunset
 
 The backend wgpu picks is logged at startup; on an Apple M2, for example: `[voxferro] graphics backend: Metal on Apple M2`.
@@ -156,12 +153,12 @@ tag like `v0.1.0` (matching the workspace version) is pushed.
 ## Usage
 
 ```bash
-cargo run -p voxferro                                  # opens monu1.vox
-cargo run -p voxferro -- assets/vox/castle.vox         # opens another model
+cargo run -p voxferro                                  # opens an empty model
+cargo run -p voxferro -- assets/showcase/island.vox    # opens a model
 cargo run -p voxferro -- --run "gpu torus 166 40 14 replace" --run "save out.vox"
 cargo run -p voxferro -- --run "new 40" --run "xs menger 3" --run "xs -n 2 grow" --screenshot out.bmp
-cargo run -p voxferro -- assets/vox/monu1.vox --render-mode           # opens in Render mode
-cargo run -p voxferro -- assets/vox/monu1.vox --render 200 --screenshot out.bmp
+cargo run -p voxferro -- assets/showcase/island.vox --render-mode           # opens in Render mode
+cargo run -p voxferro -- assets/showcase/island.vox --render 200 --screenshot out.bmp
 # A final render at its own size, saved as PNG; the editor quits when done:
 cargo run --release -p voxferro -- scene.vox --run "render image 1920 1080 256 out.png"
 cargo run -p voxferro -- --run "new 16" --run "brush attach box" --drag 0.3 0.7 0.6 0.8 --screenshot out.bmp
@@ -169,7 +166,7 @@ cargo run -p voxferro -- --run "new 16" --run "brush attach box" --drag 0.3 0.7 
 
 | Flag | What it does |
 |---|---|
-| `[model.vox]` | The file to open (default: the bundled `monu1.vox`, or an empty model) |
+| `[model.vox]` | The file to open (default: an empty model) |
 | `--run <command>` | A console line run before the first frame; repeatable, in order |
 | `--script <file>` | A file of console lines, one per line (`#` comments and blank lines skipped) |
 | `--screenshot <file.bmp>` | Saves the viewport (or the render) as a BMP, then quits |
@@ -251,20 +248,20 @@ in).
 the ground; Shift+drag, up and down; Cmd+drag turns around z;
 X, Y, Z give a quarter turn.
 
-**Keyboard,** the reference editor's (its `hotkey.txt`): V F B L C P brush shape
+**Keyboard:** V F B L C P brush shape
 (voxel, face, box, line, shader, pattern), T R G mode (attach, erase,
 paint), M marquee and N region select, 1 2 3 mirror and Cmd+1 2 3 axis on
 x, y, z, U full, I fill,
 Alt+click takes a voxel's colour, 5 frames (Shift+F everything), 6
 snapshot, 7 and 8 save and load the camera slot, comma and period step
-the animation's frames, F5 and F6 add and remove a key. The editor's own:
+the animation's frames, F5 and F6 add and remove a key;
 Alt+1–7 fixed views, O orthographic, - and + brush size, W A S D Q E fly (free camera);
 Cmd+E/F/G/B/M display switches (Shadow has none: Cmd+W closes the window);
 Cmd+N/O/S, Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z or Cmd+Y; with a selection,
 Cmd+A, Esc or Cmd+D to deselect, Delete, Cmd+C/X/V, arrow keys and Page Up/Page Down to move it;
-Enter keeps and Esc drops a pending mouse transform. Also the reference editor's:
+Enter keeps and Esc drops a pending mouse transform;
 F1 the console, F2 between editor and render, Cmd+P a new project and
-Cmd+Shift+P a copy of it. In the Move tool, its world editor's: arrows
+Cmd+Shift+P a copy of it. In the Move tool: arrows
 and Page Up/Down move the objects, - + and 0 9 turn them about z and x,
 G drops them to the ground, Cmd+R groups and Cmd+Shift+R ungroups,
 Cmd+C, Cmd+Shift+C (as references), Cmd+X and Cmd+V, Cmd+T makes a
@@ -285,7 +282,7 @@ that material back to diffuse.
 | Model | `rotate x\|y\|z` (or `rot90`), `mirror x\|y\|z` (or `flip`), `crop` (or `shrink`), `resize x y z`, `fill`, `clear`, `box`, `sphere`, `voxels x y z c …`, `gpu …` |
 | Scene | `instance list\|select i\|move dx dy dz\|place x y z\|turn\|dup\|delete\|new [x y z]` |
 | Objects | `object all\|none\|invert\|add i\|remove i\|list`, `object move dx dy dz\|turn x\|y\|z [-]\|delete`, `object align x\|y\|z -1\|0\|+1`, `object ground`, `object flip <axes>`, `object union\|intersect\|operand\|subtract\|replace`, `object copy [ref\|frame]\|cut\|paste\|own`, `object transform copy\|paste [rot\|pos]\|reset`, `object level in\|out` (Tab, Shift+Tab) |
-| Palette | `palette open\|save <file.png>`, `palette reset`, `palette default 0-3`, `palette swap\|gradient\|copy <a> <b>`, `palette paste <i>`, `palette <i> <r> <g> <b>`, `palette select all\|none\|invert\|used\|unused`, `palette sort <keys>`, `palette rand`, `palette set\|fill <colour>`, `palette adjust h\|s\|v\|r\|g\|b <n>`, `palette copy\|paste`, `material <i> <diffuse\|metal\|glass\|emit\|cloud\|blend> [key=value]…`, `material copy\|paste\|reset` |
+| Palette | `palette open\|save <file.png>`, `palette reset`, `palette swap\|gradient\|copy <a> <b>`, `palette paste <i>`, `palette <i> <r> <g> <b>`, `palette select all\|none\|invert\|used\|unused`, `palette sort <keys>`, `palette rand`, `palette set\|fill <colour>`, `palette adjust h\|s\|v\|r\|g\|b <n>`, `palette copy\|paste`, `material <i> <diffuse\|metal\|glass\|emit\|cloud\|blend> [key=value]…`, `material copy\|paste\|reset` |
 | Groups and layers | `group [i ...]\|select n`, `ungroup`, `node name\|hide\|show\|move\|turn\|into`, `tree sort\|expand [all]\|close [inactive]\|hide [deep\|others]\|show [deep\|all]\|toggle`, `layer list\|new\|hide\|show\|toggle\|name\|assign\|current n\|only [n]\|all\|sort\|select [n]` |
 | Animation | `anim play\|stop\|frame n\|fps n\|key\|unkey\|newframe\|movekey a b\|moveframe a b\|range a b\|export dir [samples]`, `anim step <n>`, `anim key next\|prev\|first\|last`, `anim loop on\|off`, `anim reverse`, `anim global [on\|off]`, `anim select all\|invert\|none`, `object pack [xform] [loop]`, `object unpack`, `import sprites <file>` |
 | Camera | `camera front\|back\|left\|right\|top\|bottom\|iso\|ortho\|persp\|free\|frame [all\|selection\|group\|instance]` (`orth`, `pers` also), `camera zoom <f>\|slots\|save <0-9>\|load <0-9>`, `snap [file.png]`, `snap window [file.png]`, `render save <file.png>`, `render image <w> <h> <samples> <file.png>\|cancel`, `render spin <frames> <degrees> <blur %> <w> <h> <samples> <file.png>`, `camera set x\|y\|z\|pitch\|yaw\|roll\|zoom\|fov\|mouse\|keys <v>` |
@@ -337,17 +334,15 @@ cargo test                               # everything
 
 ## License and scope
 
-Independent implementation. The `.vox` format is publicly documented
-by its author, its author. This repository contains no the reference editor code or
-assets; the test models are kept out of version control
-(see `assets/README.md`).
+Independent implementation. The `.vox` format is publicly documented.
+Third-party sample models and environment maps are kept out of version
+control (see `assets/README.md`).
 
 ## License
 
 Dual-licensed, at the user's option: [MIT](LICENSE-MIT) or
 [Apache 2.0](LICENSE-APACHE).
 
-the reference editor is the work of its author. Voxferro is not affiliated with the reference editor and
-does not contain its code: it reads and writes its `.vox` format. The example models and
-the reference editor's environment maps are not included in the repository (see
+Voxferro reads and writes the `.vox` format. Sample models and
+environment maps are not included in the repository (see
 [assets/README.md](assets/README.md)).

@@ -273,7 +273,7 @@ impl ServerHandler for Editor {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("voxferro", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Voxferro, a voxel editor compatible with the reference editor's .vox files. \
+                "Voxferro, a voxel editor compatible with the .vox format. \
                  Start with describe_scene and get_palette; send `help` to run_command for the \
                  command list. Build with run_commands (many lines, one call, one undo step) or \
                  set_voxels; look at the result with capture_view. Everything can be undone \

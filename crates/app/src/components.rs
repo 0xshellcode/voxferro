@@ -1,7 +1,5 @@
-//! Component files: the reference editor's File tab exports and imports a project's
-//! materials, render settings and cameras on their own (`o_comp`,
-//! `i_comp`). They are text, written by `the reference renderer::
-//! SaveDictToSLM` in the syntax of its `config.txt`:
+//! Component files: a project's materials, render settings and cameras
+//! exported and imported on their own. They are text, in this syntax:
 //!
 //! ```text
 //! name : {
@@ -14,11 +12,10 @@
 //! for each render object, `camera` blocks keyed by `_id` -- and `import
 //! ... <file.txt>` reads them back, one undo step. The block names are this
 //! editor's choice; the reader takes any name, and comments (`//`) and blank
-//! lines are skipped, so the reference editor's own files read too.
+//! lines are skipped.
 //!
 //! The palette's notes (`export notes`, `import notes`) are one block of
-//! bare quoted lines, a note each, as the reference editor writes its note
-//! component (read from its a recent version executable):
+//! bare quoted lines, a note each:
 //!
 //! ```text
 //! note : {
@@ -59,7 +56,7 @@ pub fn parse(text: &str) -> Result<Vec<(String, Dict)>, String> {
     Ok(out)
 }
 
-/// Writes blocks as `SaveDictToSLM` does.
+/// Writes blocks in the component-file syntax.
 pub fn write(blocks: &[(String, Dict)]) -> String {
     let mut out = String::new();
     for (name, dict) in blocks {
@@ -190,8 +187,8 @@ impl crate::App {
 impl crate::App {
     /// `note <row 0-31> [text]`, `note clear`, `note save on|off`: the
     /// palette's notes, a line for each row of eight colours as shown.
-    /// `note clear` empties them all, as the reference editor's does; `note save off`
-    /// leaves them out of saved files (its "Save in the File").
+    /// `note clear` empties them all; `note save off` leaves them out of
+    /// saved files ("Save in the File").
     pub fn note_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().skip(1).collect();
         let usage = "note <row 0-31> [text] | note clear | note save on|off";
@@ -214,7 +211,7 @@ impl crate::App {
             }
             [row, text @ ..] => match row.parse::<usize>() {
                 Ok(row) if row < 32 => {
-                    // The files the reference editor writes carry all 32.
+                    // Files carry all 32.
                     after.resize(after.len().max(32), String::new());
                     after[row] = text.join(" ");
                     format!("note {row} set")
@@ -272,16 +269,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn blocks_round_trip_and_read_reference_editor_syntax() {
+    fn blocks_round_trip_and_skip_comments() {
         let mut d = Dict::default();
         d.set("_type", "_metal");
         d.set("_rough", "0.1");
         let text = write(&[("mtl".to_owned(), d.clone())]);
         assert_eq!(text, "mtl : {\n    _type = '_metal'\n    _rough = '0.1'\n}\n");
         assert_eq!(parse(&text).unwrap(), vec![("mtl".to_owned(), d)]);
-        // the reference editor's config.txt style, comments and all.
-        let mv = "io_obj :\n{\n    scale   : '0.1'\n}\n";
-        assert!(parse(mv).is_err(), "':' pairs are not dict values");
+        // Pairs written with ':' are refused; comments are skipped.
+        let colon_pairs = "export :\n{\n    scale   : '0.1'\n}\n";
+        assert!(parse(colon_pairs).is_err(), "':' pairs are not dict values");
         let ok = "render : {\n    _type = '_env' // the sky\n\n    _i = '1'\n}\n";
         let blocks = parse(ok).unwrap();
         assert_eq!(blocks[0].1.get("_i"), Some("1"));

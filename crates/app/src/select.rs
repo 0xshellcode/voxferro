@@ -28,7 +28,7 @@ pub struct SelectDrag {
     /// The instance the gesture selects in.
     instance: usize,
     combine: Combine,
-    /// Square and circle (the reference editor's Box Select): the voxel pressed and
+    /// Square and circle (Box Select): the voxel pressed and
     /// the cell the drag reaches, in its layer.
     layer: Option<(voxel_core::Hit, IVec3)>,
 }
@@ -443,8 +443,8 @@ impl App {
     }
 
     /// The Selection and Model panel sections.
-    /// The Edit panel's Select section: the reference editor's All, Inv, None,
-    /// Copy, Cut and Paste, with the editor's Delete, Paint and By colour,
+    /// The Edit panel's Select section: All, Inv, None, Copy, Cut and
+    /// Paste, with Delete, Paint and By colour,
     /// then the Transform tool.
     pub fn selection_ui(&mut self, ui: &mut egui::Ui) {
         use crate::layout::button_row;

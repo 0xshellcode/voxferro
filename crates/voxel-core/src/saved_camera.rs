@@ -1,30 +1,23 @@
-//! Saved cameras: the editor's `rCAM` slots, as views this editor can use.
+//! Saved cameras: a file's `rCAM` slots, as views this editor can use.
 //!
-//! What the keys mean, read from `the reference writer` in the editor (`SaveCamera`,
-//! `LoadCamera`, `SetAngle`, `SetMode`; macOS a recent version and Windows
-//! a recent version):
+//! What the keys mean:
 //!
-//! - `_mode`: `pers`, `free`, `orth` or `iso` (index 0-3 on Windows).
+//! - `_mode`: `pers`, `free`, `orth` or `iso` (or their index 0-3).
 //! - `_focus`: the point the camera orbits, in world coordinates.
-//! - `_angle`: pitch, yaw, roll in degrees -- the editor's own camera panel
-//!   labels them so. Pitch is clamped to ±90 and yaw kept in 0..360; `iso`
-//!   forces the pitch to ±35.26°.
+//! - `_angle`: pitch, yaw, roll in degrees. Pitch is clamped to ±90 and yaw
+//!   kept in 0..360; `iso` forces the pitch to ±35.26°.
 //! - `_radius`: the distance from the focus to the eye.
 //! - `_frustum`: `tan(fov / 2)` in perspective; in the parallel modes the
-//!   half height of the view, which `SetMode` derives as
-//!   `radius * tan(fov / 2)` -- the same rule this editor uses.
+//!   half height of the view, `radius * tan(fov / 2)` -- the same rule this
+//!   editor uses.
 //! - `_fov`: the vertical field of view in degrees.
 //!
 //! The eye sits at `focus + radius * B * (sin yaw cos pitch, -sin pitch,
-//! cos yaw cos pitch)`, `B` being a fixed base change the binary keeps in
-//! the camera. Rather than reading `B` out of an initialiser, it was
-//! measured in the editor (macOS a recent version) with a model marked on +X, +Y
-//! and +Z, and then checked by loading slots this editor wrote. Its camera
-//! panel shows the file's yaw negated -- a slot saved as `0 90 0` shows
-//! "Yaw -90", `-35.26 315 0` shows 45 -- while pitch matches. In file
-//! terms: pitch -20, yaw 0 looks from -Y and from above; yaw 90 looks from
-//! +X. So the direction from the focus to the eye is
-//! `(sin yaw cos pitch, -cos yaw cos pitch, -sin pitch)`.
+//! cos yaw cos pitch)`, `B` being a fixed base change. `B` was measured
+//! with a model marked on +X, +Y and +Z, and then checked by loading slots
+//! this editor wrote. In file terms: pitch -20, yaw 0 looks from -Y and
+//! from above; yaw 90 looks from +X. So the direction from the focus to the
+//! eye is `(sin yaw cos pitch, -cos yaw cos pitch, -sin pitch)`.
 //!
 //! This editor's orbit camera puts the eye at `(cos p cos y, cos p sin y,
 //! sin p)` from its target, so `p = -pitch` and `y = yaw - 90°`.
@@ -32,7 +25,7 @@
 use glam::Vec3;
 use vox_format::{Camera, Dict};
 
-/// The editor's four camera modes, as `_mode` names them.
+/// The four camera modes, as `_mode` names them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Projection {
     /// Orbiting a focus, in perspective.
@@ -127,7 +120,7 @@ impl SavedView {
         })
     }
 
-    /// The `rCAM` entry for slot `id`, keys in the order the editor writes.
+    /// The `rCAM` entry for slot `id`, keys in the order files carry them.
     pub fn to_camera(&self, id: i32) -> Camera {
         let pitch = -self.pitch.to_degrees();
         let yaw = (self.yaw.to_degrees() + 90.0).rem_euclid(360.0);
@@ -171,7 +164,7 @@ pub fn slots(cameras: &[Camera]) -> [Option<SavedView>; SLOTS] {
 }
 
 /// `cameras` with slot `id` replaced by `view`, keeping every other entry
-/// (and the editor's unused defaults) as they were.
+/// (and any unused defaults) as they were.
 pub fn with_slot(cameras: &[Camera], id: i32, view: &SavedView) -> Vec<Camera> {
     let mut out = cameras.to_vec();
     let camera = view.to_camera(id);
@@ -201,13 +194,13 @@ mod tests {
     }
 
     #[test]
-    fn the_measured_views_come_out_where_the_editor_shows_them() {
+    fn the_measured_views_come_out_where_they_were_measured() {
         // Pitch -20, yaw 0: from -Y, above.
         let v = SavedView::from_camera(&camera("pers", "0 0 8", "-20 0 0", "47.7")).unwrap();
         let b = v.back();
         assert!(b.y < -0.9 && b.z > 0.3 && b.x.abs() < 1e-5, "{b:?}");
         assert_eq!(v.target, Vec3::new(0.0, 0.0, 8.0));
-        // Yaw 90 (the editor's panel shows -90): from +X.
+        // Yaw 90: from +X.
         let v = SavedView::from_camera(&camera("pers", "0 0 8", "-20 90 0", "47.7")).unwrap();
         assert!(v.back().x > 0.9, "{:?}", v.back());
     }

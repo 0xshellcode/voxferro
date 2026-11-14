@@ -1,7 +1,6 @@
 //! Physically based sky: single scattering through a spherical atmosphere.
 //!
-//! The model is the one the reference editor's `the reference renderer`
-//! sets up, decompiled with REA:
+//! The model's parameters:
 //!
 //! * scattering `β_ray = ray_k · 0.05 · (10^(1.5·ray_d) − 1)`,
 //!   `β_mie = mie_k · (10^(1.5·mie_d) − 1) / 300`, and an ozone term with the
@@ -12,10 +11,9 @@
 //!
 //! That logarithm pins down the density profile: `e^(−altitude)` with a scale
 //! height of 1 puts the top exactly where density times the strongest
-//! coefficient falls to one millionth. The editor's sky shader itself is
-//! generated at run time and is not in the binary as text, so the integration
-//! below (single scattering, Rayleigh and Cornette-Shanks phases) is a
-//! standard one built on those parameters, not a transcription.
+//! coefficient falls to one millionth. The integration below (single
+//! scattering, Rayleigh and Cornette-Shanks phases) is a standard one built
+//! on those parameters.
 
 use crate::EnvMap;
 use glam::Vec3;
@@ -24,8 +22,7 @@ pub const PLANET_RADIUS: f32 = 10_000.0;
 
 /// Overall scale of the computed sky against the sun.
 ///
-/// Not read from the binary -- the sky shader is generated at run time -- but
-/// calibrated against the editor's own render of the same scene, using ratios
+/// Calibrated against a reference render of the same scene, using ratios
 /// that cancel exposure: sky against sunlit ground, and shadow against
 /// sunlit ground. Both put the factor between roughly 4 and 7; 2π sits in
 /// that range. An earlier match on absolute pixel values pointed at 4π, but

@@ -1,19 +1,16 @@
-//! The outline's menus, as the reference editor has them: sort the objects by name,
-//! close or expand branches, hide or show objects and their contents
-//! (`sort`, `oexpand`, `ohide` in its `editor.ui`), and the layer menu's
-//! sort, visibility and select-by-layer (`lay_sort`, `lay_vis`,
-//! `osel_layer`).
+//! The outline's menus: sort the objects by name, close or expand branches,
+//! hide or show objects and their contents, and the layer menu's sort,
+//! visibility and select-by-layer.
 //!
-//! What each one touches was read from the a recent version executable:
+//! What each one touches:
 //!
 //! - "selected" is the object selection, or the selected group or model;
 //! - the open group is the one entered with Tab; at the top level it is the
 //!   scene itself;
 //! - closing and expanding are a view setting of the session: nothing is
 //!   saved and nothing goes into the undo history;
-//! - hiding writes the node's `_hidden`, saved with the file. the reference editor
-//!   does not undo it; here it is one undo step like every other edit of
-//!   the scene graph.
+//! - hiding writes the node's `_hidden`, saved with the file, as one undo
+//!   step like every other edit of the scene graph.
 
 use crate::App;
 use voxel_core::graph::TreeKind;
@@ -33,10 +30,10 @@ impl App {
     /// show [deep|all] | toggle`
     ///
     /// `hide` and `show` act on the selected objects alone; with `deep`, on
-    /// them and everything inside (the reference editor's Hide and Show Sub
-    /// Objects). `hide others` hides everything at each level from the
-    /// scene down to the open group, and down to each selected object, but
-    /// the way down and the selection; `show all` shows every object.
+    /// them and everything inside (Hide and Show Sub Objects). `hide others`
+    /// hides everything at each level from the scene down to the open group,
+    /// and down to each selected object, but the way down and the selection;
+    /// `show all` shows every object.
     pub fn tree_command(&mut self, line: &str) -> String {
         let words: Vec<&str> = line.split_whitespace().skip(1).collect();
         let usage = "tree sort | expand [all] | close [inactive] | hide [deep|others] | show [deep|all] | toggle";
@@ -93,8 +90,8 @@ impl App {
                     return "nothing selected".to_owned();
                 }
                 // The way down to the open group and to each selected object
-                // -- the outline can pick one deeper than the open group,
-                // which the reference editor's cannot -- stays shown...
+                // -- the outline can pick one deeper than the open group --
+                // stays shown...
                 let mut keep: Vec<i32> = self.open_groups.clone();
                 for &n in &picked {
                     keep.extend(scene.path_to(n));

@@ -1,16 +1,14 @@
-//! Several objects at once: the reference editor's World mode selection
-//! (`osel_all`, `osel_inv`, `osel_none`, Shift+click), and what acts on it.
+//! Several objects at once: the World mode selection (Shift+click), and
+//! what acts on it.
 //!
 //! In the Move tool, a click picks a model (or the selected group holding
 //! it); Shift+click without dragging adds it to the selection or takes it
-//! out; Cmd+A, Cmd+I and Cmd+D select all, invert and clear, as the reference editor
-//! has them in World mode. A drag on empty space draws a marquee: the
-//! objects whose box falls wholly inside it are selected -- Shift adds
-//! them, Shift+Alt takes them out, as the reference editor's. A drag on any selected
-//! object moves them all,
-//! Cmd+drag and X, Y, Z turn them all about their common centre, and
-//! Delete removes them. `object all|none|invert|add <i>|remove <i>|list`
-//! from the console.
+//! out; Cmd+A, Cmd+I and Cmd+D select all, invert and clear. A drag on empty
+//! space draws a marquee: the objects whose box falls wholly inside it are
+//! selected -- Shift adds them, Shift+Alt takes them out. A drag on any
+//! selected object moves them all, Cmd+drag and X, Y, Z turn them all about
+//! their common centre, and Delete removes them.
+//! `object all|none|invert|add <i>|remove <i>|list` from the console.
 //!
 //! The selection holds transform node ids, which moving and turning keep.
 //! Adding or removing a node renumbers them all (`graph::compact`), so such
@@ -137,7 +135,7 @@ impl App {
         format!("{} objects selected: {:?}", self.object_indices().len(), self.object_indices())
     }
 
-    /// the reference editor's world-editor keys, in the Move tool (see `hotkeys`).
+    /// The world-editor keys, in the Move tool (see `hotkeys`).
     pub fn object_input(&mut self, ctx: &egui::Context) {
         if !self.moving || self.rendering || ctx.egui_wants_keyboard_input() {
             return;
@@ -195,8 +193,7 @@ impl App {
                 if delta != IVec3::ZERO {
                     line(&format!("object move {} {} {}", delta.x, delta.y, delta.z));
                 }
-                // Its `orot`: minus and zero a turn one way, plus and nine
-                // the other.
+                // Minus and zero a turn one way, plus and nine the other.
                 if pressed(Key::Minus) {
                     line("object turn z");
                 }
@@ -320,8 +317,8 @@ impl App {
             ["operand"] => return self.take_operand(),
             ["subtract"] => return self.apply_operand(false),
             ["replace"] => return self.apply_operand(true),
-            // the reference editor's `ocopy frame` copies objects as they are at this
-            // frame, without their keys: what `object copy` always does.
+            // `object copy frame` copies objects as they are at this frame,
+            // without their keys: what `object copy` always does.
             ["copy"] | ["copy", "frame"] => return self.copy_objects(false),
             ["pack", flags @ ..] if flags.iter().all(|f| matches!(*f, "xform" | "loop")) => {
                 let indices = self.object_indices();
@@ -473,7 +470,7 @@ impl App {
 }
 
 impl App {
-    /// the reference editor's `olevel` (Tab, Shift+Tab). Tab on a selected group
+    /// Tab, Shift+Tab: into and out of groups. Tab on a selected group
     /// opens it: its children become the objects, and selecting, moving
     /// and the object commands stay inside it. Tab on a selected model
     /// leaves the Move tool to edit it; Tab while editing comes back.
@@ -510,7 +507,7 @@ impl App {
             self.objects.clear();
             format!("opened the group; {}", self.level_name())
         } else {
-            // A model: edit it, as the reference editor's Tab into a shape.
+            // A model: edit it.
             if let Some(&i) = held.first() {
                 self.selected = i;
             }
