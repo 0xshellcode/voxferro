@@ -6,6 +6,8 @@
 <title>Voxferro Guide</title>
 <meta name="description" content="How Voxferro, a voxel editor in Rust, works inside: from the bytes of a .vox file to the pixels of the path traced render.">
 <link rel="icon" href="images/icon.png">
+<link rel="alternate" hreflang="en" href="https://0xshellcode.github.io/voxferro/">
+<link rel="alternate" hreflang="es" href="https://0xshellcode.github.io/voxferro/es/">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -13,14 +15,15 @@
 <header class="hero">
   <div class="wrap">
     <div>
-      <p class="eyebrow">Documentation · v0.1.7 · Rust + wgpu</p>
+      <p class="eyebrow">Documentation · v0.1.7 · Rust + wgpu <span class="lang"><a href="es/" hreflang="es" lang="es">Español</a></span></p>
       <h1>Voxferro<svg class="cube" viewBox="0 0 40 40" aria-hidden="true"><path d="M20 2 L37 11 L20 20 L3 11 Z" style="fill:var(--iron-soft);stroke:var(--iron);stroke-width:2"/><path d="M3 11 L20 20 L20 38 L3 29 Z" style="fill:var(--iron)"/><path d="M37 11 L20 20 L20 38 L37 29 Z" style="fill:var(--ember)"/></svg></h1>
       <p class="lede">A voxel editor written in Rust, native on macOS, Windows and Linux, that reads and writes <code>.vox</code> files. This guide explains how it works inside: from the bytes of a file to the pixels of the render.</p>
+      <p class="links"><a href="https://github.com/0xshellcode/voxferro">Source code on GitHub</a> · <a href="https://github.com/0xshellcode/voxferro#readme">README</a> · <a href="https://github.com/0xshellcode/voxferro/blob/master/ROADMAP.md">Roadmap</a></p>
       <dl class="facts">
         <div><dt>crates</dt><dd>3</dd></div>
-        <div><dt>lines of Rust and WGSL</dt><dd>~32,000</dd></div>
-        <div><dt>tests</dt><dd>286</dd></div>
-        <div><dt>WGSL shaders</dt><dd>6</dd></div>
+        <div><dt>lines of Rust and WGSL</dt><dd>~34,500</dd></div>
+        <div><dt>tests</dt><dd>301</dd></div>
+        <div><dt>WGSL shaders</dt><dd>7</dd></div>
       </dl>
     </div>
     <figure>
@@ -91,7 +94,7 @@
         <thead><tr><th>Piece</th><th>For</th><th>Why this one</th></tr></thead>
         <tbody>
           <tr><td><code>eframe</code> / <code>egui</code> 0.36</td><td>Window, event loop and interface</td><td>An <em>immediate mode</em> UI: the whole interface is described again every frame, with no widget tree to keep in sync. It brings wgpu by default.</td></tr>
-          <tr><td><code>wgpu</code> 30</td><td>All the graphics</td><td>One API that becomes Metal on the Mac, DirectX 12 on Windows and Vulkan on Linux. On Apple silicon it emits native Metal, never touching OpenGL.</td></tr>
+          <tr><td><code>wgpu</code> 30</td><td>All the graphics</td><td>One API that becomes Metal on the Mac and Vulkan on Linux and Windows (DirectX 12 where a Windows machine has no Vulkan driver). On Apple silicon it emits native Metal, never touching OpenGL.</td></tr>
           <tr><td>WGSL</td><td>Shaders: viewport, shadows, path tracer, post-processing, kernels</td><td>wgpu's own language; <code>naga</code> translates it for each platform (MSL, HLSL, SPIR-V).</td></tr>
           <tr><td><code>naga</code> 30</td><td>Voxel scripts</td><td>Compiles GLSL voxel scripts to WGSL, and reports errors with line numbers before the GPU sees them.</td></tr>
           <tr><td><code>glam</code> 0.34</td><td>Vectors, matrices, quaternions</td><td>SIMD, and the ecosystem standard.</td></tr>
@@ -243,6 +246,10 @@ cargo test --workspace</code></pre>
       <p>Render mode does not use the mesh. It casts rays from the camera, bounces them through the scene and averages a great many random light paths. That is <strong>path tracing</strong>, and it gives soft shadows, reflections, glass and indirect light without tricks.</p>
       <h3>Progressive</h3>
       <p>A compute shader (<code>pathtrace.wgsl</code>, in 8×8 pixel workgroups) computes <strong>one sample per pixel each frame</strong> and adds it to an accumulator. The image clears up while the camera holds still and starts over when it moves.</p>
+      <div class="note">
+        <span class="tag">A real trap</span>
+        <p>Windows resets a GPU whose work runs longer than two seconds. On an integrated GPU, one sample of a large image with voxel shapes took four, and the device was lost. So each sample is traced in <strong>bands of rows</strong>, each submitted on its own. The band size follows the measured GPU time, aiming at a tenth of a second, so a fast GPU is soon back to a single submission per sample, and the image is the same to the bit.</p>
+      </div>
       <h3>Walking the grid: DDA</h3>
       <p>The whole visible scene goes to the GPU as a <strong>3D texture</strong> of indices. To advance a ray, the Amanatides–Woo DDA steps along whichever axis reaches its next cell border first. Every cell the ray touches is visited, in order, so the first solid one is truly the nearest. Fixed-size steps could tunnel through a one-voxel wall without seeing it.</p>
       <figure class="fig wide">
@@ -266,6 +273,8 @@ cargo test --workspace</code></pre>
       <p>A second compute shader, <code>post.wgsl</code>, reads the accumulator and applies bloom, exposure, vignette, the ACES tone curve and gamma. It is a separate pass because bloom reads neighbouring pixels, which the first pass is still writing.</p>
       <h3>Voxel shapes</h3>
       <p>Voxels can be rendered as spheres, cylinders, studded bricks, clay or marching cubes. That code sits behind a pipeline constant (<code>override SHAPES</code>): the usual pipeline is compiled without it, and a second pipeline with shapes is created only when needed. The reason is Windows: with everything inlined, the shader was too large and DirectX's software rasteriser drew it black. The marching cubes table is <em>built</em> by joining the crossed edges on each face of the cell.</p>
+      <h3>Lines on the surfaces</h3>
+      <p>The render can draw a grid every few voxels and a line along every edge where the surface turns. They are not a second pass: a surface point simply takes the line's colour before it is lit, at every bounce, so lines show in reflections too.</p>
       <figure class="fig wide">
         <img src="images/shapes.jpg" alt="A gold metal torus, a glass sphere with a glowing core and a rounded box" width="1600" height="1266" loading="lazy">
         <figcaption>Shapes made by the GPU kernels: a gold metal torus, a glass shell with a glowing core and a rounded box.</figcaption>
@@ -315,7 +324,7 @@ claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
         <li><strong>Clippy</strong> with <code>-D warnings</code>: any warning fails CI.</li>
       </ul>
       <h3>Continuous integration</h3>
-      <p>On every push, GitHub Actions builds and tests on Linux and Windows, and runs three smoke tests: opening the editor view, path tracing a scene (and checking the image's mean brightness) and a full MCP session. On Windows the GPU is <strong>WARP</strong>, DirectX's software rasteriser, which found real bugs:</p>
+      <p>On every push, GitHub Actions builds and tests on Linux and Windows, and runs three smoke tests: opening the editor view, path tracing a scene (and checking the image's mean brightness) and a full MCP session. The runners have no GPU: Linux uses lavapipe (Vulkan in software) and Windows <strong>WARP</strong>, DirectX's software rasteriser, which found real bugs:</p>
       <ul>
         <li>The main thread's stack (1 MB) overflowed while compiling the shader; <code>build.rs</code> raises it to 16 MB.</li>
         <li>The FXC compiler cannot write to a vector through a variable index (<code>v[axis] = …</code>), so masks are used instead.</li>
@@ -340,7 +349,7 @@ claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
       <pre><code>cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render-mode</code></pre>
       <p>And for a render to a PNG with nobody at the window:</p>
       <pre><code>cargo run --release -p voxferro -- scene.vox --run "render image 1920 1080 256 out.png"</code></pre>
-      <p><a href="../ROADMAP.md"><code>ROADMAP.md</code></a> lists the phases and where each one stands.</p>
+      <p>The <a href="https://github.com/0xshellcode/voxferro/blob/master/ROADMAP.md">roadmap</a> lists the phases and where each one stands, and the <a href="https://github.com/0xshellcode/voxferro#readme">README</a> every console command and shortcut.</p>
     </section>
 
     <section id="glossary">
@@ -370,7 +379,7 @@ claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
 
 <footer>
   <div class="wrap">
-    <span>Voxferro · MIT or Apache 2.0</span>
+    <span>Voxferro · MIT or Apache 2.0 · <a href="https://github.com/0xshellcode/voxferro">GitHub</a></span>
     <span>A voxel editor for <code>.vox</code> files.</span>
   </div>
 </footer>

@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Guía de Voxferro</title>
+<meta name="description" content="Cómo funciona por dentro Voxferro, un editor de vóxeles en Rust: desde los bytes de un archivo .vox hasta los píxeles del render con path tracing.">
+<link rel="icon" href="../images/icon.png">
+<link rel="alternate" hreflang="en" href="https://0xshellcode.github.io/voxferro/">
+<link rel="alternate" hreflang="es" href="https://0xshellcode.github.io/voxferro/es/">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <div>
+      <p class="eyebrow">Documentación · v0.1.7 · Rust + wgpu <span class="lang"><a href="../" hreflang="en" lang="en">English</a></span></p>
+      <h1>Voxferro<svg class="cube" viewBox="0 0 40 40" aria-hidden="true"><path d="M20 2 L37 11 L20 20 L3 11 Z" style="fill:var(--iron-soft);stroke:var(--iron);stroke-width:2"/><path d="M3 11 L20 20 L20 38 L3 29 Z" style="fill:var(--iron)"/><path d="M37 11 L20 20 L20 38 L37 29 Z" style="fill:var(--ember)"/></svg></h1>
+      <p class="lede">Un editor de vóxeles escrito en Rust, nativo en macOS, Windows y Linux, que lee y escribe archivos <code>.vox</code>. Esta guía explica cómo funciona por dentro: desde los bytes de un archivo hasta los píxeles del render.</p>
+      <p class="links"><a href="https://github.com/0xshellcode/voxferro">Código fuente en GitHub</a> · <a href="https://github.com/0xshellcode/voxferro#readme">README</a> · <a href="https://github.com/0xshellcode/voxferro/blob/master/ROADMAP.md">Hoja de ruta</a></p>
+      <dl class="facts">
+        <div><dt>crates</dt><dd>3</dd></div>
+        <div><dt>líneas de Rust y WGSL</dt><dd>~34&nbsp;500</dd></div>
+        <div><dt>pruebas</dt><dd>301</dd></div>
+        <div><dt>shaders WGSL</dt><dd>7</dd></div>
+      </dl>
+    </div>
+    <figure>
+      <img src="../images/island.jpg" alt="Una isla de vóxeles con árboles y una casa con las ventanas iluminadas, bajo un cielo atmosférico con nubes" width="1600" height="1266">
+      <figcaption>Una isla de 12&nbsp;336 vóxeles, construida con comandos de consola y renderizada por el path tracer de Voxferro (1024 muestras).</figcaption>
+    </figure>
+  </div>
+  <div class="strip" aria-hidden="true"><span style="background:#d15e5e"></span><span style="background:#d1735e"></span><span style="background:#d1895e"></span><span style="background:#d19e5e"></span><span style="background:#d1b45e"></span><span style="background:#d1c95e"></span><span style="background:#c2d15e"></span><span style="background:#add15e"></span><span style="background:#97d15e"></span><span style="background:#82d15e"></span><span style="background:#6cd15e"></span><span style="background:#5ed165"></span><span style="background:#5ed17a"></span><span style="background:#5ed190"></span><span style="background:#5ed1a5"></span><span style="background:#5ed1bb"></span><span style="background:#5ed1d1"></span><span style="background:#5ebbd1"></span><span style="background:#5ea5d1"></span><span style="background:#5e90d1"></span><span style="background:#5e7ad1"></span><span style="background:#5e65d1"></span><span style="background:#6c5ed1"></span><span style="background:#825ed1"></span><span style="background:#975ed1"></span><span style="background:#ad5ed1"></span><span style="background:#c25ed1"></span><span style="background:#d15ec9"></span><span style="background:#d15eb4"></span><span style="background:#d15e9e"></span><span style="background:#d15e89"></span><span style="background:#d15e73"></span></div>
+</header>
+
+<div class="wrap layout">
+  <nav class="toc" aria-label="Capítulos">
+    <p>Capítulos</p>
+    <ol>
+      <li><a href="#what">Qué es Voxferro</a></li>
+      <li><a href="#journey">El viaje de un vóxel</a></li>
+      <li><a href="#stack">Tecnologías</a></li>
+      <li><a href="#crates">Tres crates</a></li>
+      <li><a href="#format">Leer un archivo .vox</a></li>
+      <li><a href="#memory">El modelo en memoria</a></li>
+      <li><a href="#editing">Edición y deshacer</a></li>
+      <li><a href="#viewport">Dibujar el editor</a></li>
+      <li><a href="#pathtracer">El path tracer</a></li>
+      <li><a href="#gpu">Cómputo en la GPU</a></li>
+      <li><a href="#mcp">Controlado por un agente</a></li>
+      <li><a href="#quality">Pruebas, fuzzing y CI</a></li>
+      <li><a href="#reading">Por dónde empezar a leer</a></li>
+      <li><a href="#glossary">Glosario</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <section id="what">
+      <h2>Qué es Voxferro</h2>
+      <p>Un <strong>vóxel</strong> es a un volumen lo que un píxel es a una imagen: una celda de una cuadrícula 3D. Voxferro es un programa para modelar con vóxeles: con pinceles se añaden, se borran y se pintan cubitos, se colocan varios modelos en una escena, se animan y se hacen renders fotorrealistas.</p>
+      <p>Abre y guarda archivos <code>.vox</code> sin perder nada (materiales, cámaras, capas, animación, ajustes de render).</p>
+      <div class="note">
+        <span class="tag">El enfoque</span>
+        <p>La compatibilidad de archivos es un objetivo; la arquitectura es propia, en Rust idiomático.</p>
+      </div>
+      <p>Lo que hace hoy, en resumen:</p>
+      <ul>
+        <li><strong>Edición:</strong> pinceles de vóxel, caja, línea, cara, relleno, patrón y script; selección, copiar y pegar, transformaciones con el puntero; un panel Edit (rellenar, vaciar, reflejar, ruido Perlin, laberinto, erosión...).</li>
+        <li><strong>Escenas:</strong> varios modelos, grupos, capas y animación por fotogramas clave.</li>
+        <li><strong>Render:</strong> un path tracer progresivo en la GPU, con metal, vidrio, emisión, nubes, cielo atmosférico y mapas HDR.</li>
+        <li><strong>Exportación:</strong> OBJ, PLY, marching cubes, XRAW, Qubicle, SLAB6, cortes en PNG y sprites isométricos.</li>
+        <li><strong>Automatización:</strong> una consola de comandos, scripts de vóxeles en la GPU y un servidor MCP para que un agente de IA pueda usar el editor.</li>
+      </ul>
+    </section>
+
+    <section id="journey">
+      <h2>El viaje de un vóxel</h2>
+      <p>La forma más fácil de entender el programa es seguir un vóxel desde el disco hasta la pantalla. Cada paso es un capítulo de esta guía:</p>
+      <ol class="journey wide">
+        <li><a href="#format"><b>Leer</b><span>El archivo <code>.vox</code> se convierte en estructuras de Rust.</span></a></li>
+        <li><a href="#memory"><b>Guardar en memoria</b><span>Una cuadrícula densa de bytes, dividida en bloques de 32³.</span></a></li>
+        <li><a href="#editing"><b>Editar</b><span>Cada cambio es un comando que sabe deshacerse.</span></a></li>
+        <li><a href="#viewport"><b>Dibujar</b><span>Una malla de caras visibles, rasterizada con wgpu.</span></a></li>
+        <li><a href="#pathtracer"><b>Renderizar</b><span>Rayos que recorren la cuadrícula en un compute shader.</span></a></li>
+      </ol>
+      <p>Las dos primeras etapas no saben nada de gráficos. Las tres últimas viven en la aplicación, la única parte que habla con la GPU.</p>
+    </section>
+
+    <section id="stack">
+      <h2>Tecnologías</h2>
+      <p>Todo está escrito en <strong>Rust</strong> (edición 2024, versión mínima 1.89) y en <strong>WGSL</strong>, el lenguaje de shaders de WebGPU. Estas son las piezas y el motivo de cada elección:</p>
+      <div class="table wide"><table>
+        <thead><tr><th>Pieza</th><th>Para qué</th><th>Por qué esta</th></tr></thead>
+        <tbody>
+          <tr><td><code>eframe</code> / <code>egui</code> 0.36</td><td>Ventana, bucle de eventos e interfaz</td><td>Una interfaz en <em>modo inmediato</em>: toda la interfaz se vuelve a describir en cada fotograma, sin un árbol de widgets que mantener sincronizado. Trae wgpu de serie.</td></tr>
+          <tr><td><code>wgpu</code> 30</td><td>Todos los gráficos</td><td>Una sola API que se convierte en Metal en el Mac y en Vulkan en Linux y Windows (DirectX 12 cuando una máquina con Windows no tiene controlador de Vulkan). En Apple silicon emite Metal nativo, sin pasar nunca por OpenGL.</td></tr>
+          <tr><td>WGSL</td><td>Shaders: viewport, sombras, path tracer, posprocesado, kernels</td><td>El lenguaje propio de wgpu; <code>naga</code> lo traduce para cada plataforma (MSL, HLSL, SPIR-V).</td></tr>
+          <tr><td><code>naga</code> 30</td><td>Scripts de vóxeles</td><td>Compila a WGSL los scripts de vóxeles escritos en GLSL e informa de los errores con su número de línea antes de que la GPU los vea.</td></tr>
+          <tr><td><code>glam</code> 0.34</td><td>Vectores, matrices, cuaterniones</td><td>SIMD, y el estándar del ecosistema.</td></tr>
+          <tr><td><code>bytemuck</code></td><td>Pasar structs a la GPU</td><td><code>#[derive(Pod)]</code> convierte un struct en bytes sin copias y sin <code>unsafe</code> propio.</td></tr>
+          <tr><td><code>rfd</code> 0.17</td><td>Diálogos de abrir y guardar</td><td>Los paneles nativos de cada sistema.</td></tr>
+          <tr><td><code>miniz_oxide</code>, <code>png</code></td><td>Imágenes PNG</td><td>Comprimir los renders y leer los archivos de paleta, que son PNG de 256×1.</td></tr>
+          <tr><td><code>rmcp</code>, <code>tokio</code>, <code>axum</code></td><td>El servidor MCP</td><td>El SDK oficial de Rust para el Model Context Protocol, servido por HTTP en un hilo propio.</td></tr>
+          <tr><td><code>egui-phosphor</code></td><td>Iconos</td><td>La fuente de iconos Phosphor, empaquetada para egui.</td></tr>
+          <tr><td><code>dot_vox</code></td><td>Solo en las pruebas</td><td>Un lector de <code>.vox</code> independiente, para comprobar que el nuestro lee lo mismo.</td></tr>
+          <tr><td>GitHub Actions</td><td>CI y publicación de versiones</td><td>Compila, prueba y empaqueta en Linux, Windows y macOS.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="note">
+        <span class="tag">Una trampa real</span>
+        <p><code>eframe</code> ya depende de wgpu. Si el proyecto pidiera otra versión de wgpu, Cargo compilaría las dos y sus tipos dejarían de ser asignables entre sí, con errores casi ilegibles. Por eso las versiones se eligen para que haya <strong>un solo</strong> wgpu en el grafo de dependencias, y se comprueba con <code>cargo tree | grep wgpu</code>.</p>
+      </div>
+    </section>
+
+    <section id="crates">
+      <h2>Tres crates</h2>
+      <p>El código es un <em>workspace</em> de Cargo con tres crates (paquetes de Rust). Cada uno depende solo de los que tiene a su izquierda:</p>
+      <div class="crates wide">
+        <div class="crate"><h4>vox-format</h4><p>Lee y escribe archivos <code>.vox</code> (versiones 150 y 200). Solo sabe de bytes.</p><span class="deps">depende de: thiserror</span></div>
+        <div class="crate"><h4>voxel-core</h4><p>El volumen, el grafo de escena, la animación, el deshacer, los pinceles, el mallado, marching cubes y las exportaciones.</p><span class="deps">depende de: vox-format, glam</span></div>
+        <div class="crate"><h4>app <small>(el binario voxferro)</small></h4><p>La ventana, la interfaz, wgpu, los shaders, la consola, el path tracer y el servidor MCP.</p><span class="deps">depende de: voxel-core, eframe, wgpu…</span></div>
+      </div>
+      <p>La división es deliberada: <strong>los dos primeros crates no dependen de nada gráfico</strong>. Así, <code>cargo test -p vox-format -p voxel-core</code> tarda segundos, porque no compila wgpu, y la lógica se puede probar sin ventana y sin GPU.</p>
+      <pre><code><span class="c"># the fast tests: no wgpu</span>
+cargo test -p vox-format -p voxel-core
+<span class="c"># everything, as CI runs it</span>
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace</code></pre>
+    </section>
+
+    <section id="format">
+      <h2>Leer un archivo .vox</h2>
+      <p>Un <code>.vox</code> empieza con la palabra mágica <code>VOX </code> y un número de versión. Después viene un <strong>árbol de <em>chunks</em></strong>, al estilo RIFF. Cada chunk abre con una cabecera de tres campos:</p>
+      <figure class="fig wide">
+        <div class="panel"><div class="bytes" role="img" aria-label="La cabecera de un chunk: 4 bytes de id, 4 de tamaño del contenido y 4 de tamaño de los hijos">
+          <div class="id">X</div><div class="id">Y</div><div class="id">Z</div><div class="id">I</div>
+          <div class="n1">u32</div><div class="n1">·</div><div class="n1">·</div><div class="n1">·</div>
+          <div>u32</div><div>·</div><div>·</div><div>·</div>
+          <div class="f">id: cuatro letras</div><div class="f">bytes de contenido</div><div class="f">bytes de hijos</div>
+        </div></div>
+        <figcaption>Los doce bytes con los que abre cada chunk. Todos los enteros son little-endian.</figcaption>
+      </figure>
+      <p>Como cada chunk indica cuánto mide su contenido y cuánto miden sus hijos, un lector puede <strong>saltarse cualquier chunk que no conozca</strong>. Por eso un solo parser lee todas las versiones del formato, y por eso los archivos escritos por versiones más nuevas del formato no rompen el lector.</p>
+      <div class="table wide"><table>
+        <thead><tr><th>Chunk</th><th>Qué contiene</th></tr></thead>
+        <tbody>
+          <tr><td><code>MAIN</code></td><td>La raíz; todo lo demás son sus hijos.</td></tr>
+          <tr><td><code>SIZE</code> + <code>XYZI</code></td><td>Un modelo: su tamaño y la lista de vóxeles, de cuatro bytes cada uno (x, y, z, índice de color).</td></tr>
+          <tr><td><code>RGBA</code></td><td>La paleta: 256 colores.</td></tr>
+          <tr><td><code>nTRN</code>, <code>nGRP</code>, <code>nSHP</code></td><td>El grafo de escena: transformaciones, grupos y formas (qué modelo se muestra).</td></tr>
+          <tr><td><code>LAYR</code></td><td>Capas: nombre, color, visibilidad.</td></tr>
+          <tr><td><code>MATL</code></td><td>El material de cada color: difuso, metal, vidrio, emisivo, nube, mezcla.</td></tr>
+          <tr><td><code>rOBJ</code>, <code>rCAM</code></td><td>Ajustes de render y cámaras guardadas.</td></tr>
+          <tr><td><code>IMAP</code>, <code>NOTE</code>, <code>META</code></td><td>El orden en que se muestra la paleta, sus notas y datos como el rango de la animación.</td></tr>
+        </tbody>
+      </table></div>
+      <h3>DICT: la bolsa de claves</h3>
+      <p>Los nodos, las capas, los materiales, las cámaras y los ajustes no guardan structs empaquetados, sino <strong>pares clave/valor de texto</strong> (<code>_t "10 0 4"</code>, <code>_rough "0.1"</code>). Un lector que no reconoce una clave simplemente la ignora. Voxferro va más allá: conserva las claves que no entiende y las vuelve a escribir, así que no se pierde nada al guardar.</p>
+      <h3>Escritura</h3>
+      <p>Escribir tiene una dificultad: la cabecera de un chunk necesita el tamaño de sus hijos <em>antes</em> de escribirlos. <code>write.rs</code> construye cada chunk en su propio búfer y lo inserta en su sitio cuando ya se conocen las longitudes. El guardado es atómico: el archivo se escribe con un nombre temporal y luego se renombra, así que un fallo a medias nunca deja un archivo roto.</p>
+    </section>
+
+    <section id="memory">
+      <h2>El modelo en memoria</h2>
+      <h3>Volume: una cuadrícula densa</h3>
+      <p>Un modelo es un <code>Volume</code>: un <code>Vec&lt;u8&gt;</code> con un byte por celda. El byte es un <strong>índice de paleta</strong> (de 1 a 255); el 0 significa vacío. Es denso, no disperso: un modelo mide como mucho 256³, así que el peor caso son 16 MB, y a cambio leer cualquier celda cuesta siempre lo mismo.</p>
+      <pre><code><span class="k">pub struct</span> Volume {
+    size: [u32; 3],
+    voxels: Vec&lt;u8&gt;,     <span class="c">// palette index per cell; 0 = empty</span>
+    versions: Vec&lt;u64&gt;,  <span class="c">// one version per 32³ block</span>
+}</code></pre>
+      <p>El volumen se divide en <strong>bloques de 32³</strong>, y cada bloque lleva una versión que cambia cada vez que cambia uno de sus vóxeles. Las versiones salen de un contador global, así que nunca se reutilizan. Todo lo que se deriva de los vóxeles (la malla, la cuadrícula del path tracer) compara versiones y rehace solo los bloques que cambiaron, venga el cambio de un pincel, de la consola, de un kernel o del deshacer.</p>
+      <h3>Document: todo lo que una edición puede cambiar</h3>
+      <p>El <code>Document</code> reúne la escena (modelos y grafo), la paleta, los materiales, los ajustes de render, las capas, las cámaras y el orden de la paleta. Es exactamente lo que va al archivo.</p>
+      <h3>Grafo de escena y animación</h3>
+      <p>Los nodos <code>nTRN → nGRP → nSHP</code> forman un árbol. Para dibujar, <code>flatten()</code> lo recorre en un fotograma dado y produce una lista plana de <em>instancias</em>: qué modelo, dónde y con qué giro. Un modelo colocado diez veces se guarda una sola vez y se instancia diez.</p>
+      <p>La animación guarda fotogramas clave en los nodos. Entre dos claves, la posición se interpola linealmente. No es una suposición: un archivo animado guardado tiene una clave con x = 44 en el fotograma 11 y otra con x = 148 en el fotograma 19, y guarda como posición en el fotograma 17 el valor 122, exactamente 44 + 6/8 · 104.</p>
+    </section>
+
+    <section id="editing">
+      <h2>Edición y deshacer</h2>
+      <p>La idea central: <strong>todo pasa por la consola</strong>. Un botón, un atajo, una línea tecleada, un script o un agente por MCP producen lo mismo, una línea de texto, y un único intérprete la ejecuta.</p>
+      <div class="flow wide">
+        <div class="src">
+          <div class="box">Botón de un panel</div>
+          <div class="box">Atajo de teclado</div>
+          <div class="box">Consola y <code>--script</code></div>
+          <div class="box">Agente por MCP</div>
+        </div>
+        <div class="to" aria-hidden="true">→</div>
+        <div class="stack">
+          <div class="box key">Línea de comando<small><code>brush attach box</code></small></div>
+          <div class="box key">Intérprete<small><code>console::execute</code></small></div>
+        </div>
+        <div class="to" aria-hidden="true">→</div>
+        <div class="stack">
+          <div class="box">Un valor <code>Command</code><small>aplicado al Document</small></div>
+          <div class="box">Historial<small>deshacer / rehacer</small></div>
+        </div>
+      </div>
+      <p>Gracias a eso, la automatización salió gratis: todo lo que hace un clic se puede escribir en un script, y un agente usa exactamente el mismo historial de deshacer que la persona.</p>
+      <h3>Los cambios son valores</h3>
+      <p>Cada cambio que se puede deshacer es una variante de <code>enum Command</code>, que guarda el antes y el después:</p>
+      <pre><code><span class="k">pub enum</span> Command {
+    SetVoxels { model: usize, changes: Vec&lt;(IVec3, u8, u8)&gt; },  <span class="c">// cell, before, after</span>
+    ReplaceModel { model: usize, before: Volume, after: Volume },
+    SetColor { index: u8, before: Color, after: Color },
+    SetGraph { before: Vec&lt;SceneNode&gt;, after: Vec&lt;SceneNode&gt; },
+    <span class="c">// ... palette, materials, render, layers, cameras</span>
+}</code></pre>
+      <p>Un <code>enum</code> tiene una ventaja sobre una clase por comando, cada una con su deshacer y su rehacer: el <code>match</code> de Rust es exhaustivo, así que añadir un comando que no se puede deshacer es un error de compilación y no un fallo que se descubre más tarde.</p>
+      <h3>Pinceles como funciones puras</h3>
+      <p>Un pincel combina un <em>modo</em> (añadir, borrar, pintar) con una <em>forma</em> (vóxel, caja, línea, cara, relleno). En <code>brush.rs</code> cada combinación es una función pura: recibe el volumen y los puntos del trazo y devuelve la lista de celdas que hay que escribir. La app convierte esa lista en un solo <code>Command</code>, así que un trazo entero se deshace de una vez.</p>
+      <p>Para saber qué vóxel hay bajo el puntero, <code>raycast.rs</code> lanza un rayo desde la cámara con el mismo algoritmo DDA que usa el path tracer (ver el capítulo 9).</p>
+    </section>
+
+    <section id="viewport">
+      <h2>Dibujar el editor</h2>
+      <p>La GPU dibuja triángulos, no vóxeles. Por eso el editor convierte cada modelo en una <strong>malla</strong>, en tres pasos.</p>
+      <h3>1. Solo las caras visibles</h3>
+      <p>Una cara se dibuja solo si la celda del otro lado está vacía. Un bloque macizo de 64³ tiene 24&nbsp;576 caras visibles en lugar de 1,5 millones: la diferencia entre un visor que funciona y uno que no.</p>
+      <h3>2. Fusionar caras (mallado voraz)</h3>
+      <p>Las caras coplanares de un mismo color se fusionan en rectángulos. Para cada dirección y cada corte, las caras visibles forman una cuadrícula 2D de colores; los rectángulos crecen primero a lo largo de un eje y luego a lo largo del otro.</p>
+      <figure class="fig wide">
+        <div class="panel"><svg class="dia" viewBox="-2 -2 424 124" role="img" aria-labelledby="gr-t"><title id="gr-t">Mallado voraz</title><rect class="q a" x="0" y="0" width="30" height="30"/><rect class="q a" x="30" y="0" width="30" height="30"/><rect class="q a" x="60" y="0" width="30" height="30"/><rect class="q a" x="90" y="0" width="30" height="30"/><rect class="q b" x="120" y="0" width="30" height="30"/><rect class="q b" x="150" y="0" width="30" height="30"/><rect class="q a" x="0" y="30" width="30" height="30"/><rect class="q a" x="30" y="30" width="30" height="30"/><rect class="q a" x="60" y="30" width="30" height="30"/><rect class="q a" x="90" y="30" width="30" height="30"/><rect class="q b" x="120" y="30" width="30" height="30"/><rect class="q b" x="150" y="30" width="30" height="30"/><rect class="q a" x="0" y="60" width="30" height="30"/><rect class="q a" x="30" y="60" width="30" height="30"/><rect class="q b" x="60" y="60" width="30" height="30"/><rect class="q b" x="90" y="60" width="30" height="30"/><rect class="q b" x="120" y="60" width="30" height="30"/><rect class="q b" x="150" y="60" width="30" height="30"/><rect class="q a" x="0" y="90" width="30" height="30"/><rect class="q a" x="30" y="90" width="30" height="30"/><rect class="q b" x="60" y="90" width="30" height="30"/><rect class="q b" x="90" y="90" width="30" height="30"/><rect class="q b" x="120" y="90" width="30" height="30"/><rect class="q b" x="150" y="90" width="30" height="30"/><path class="arrow" d="M194 60.0 h32 m-8 -6 l8 6 l-8 6"/><rect class="q a merged" x="240" y="0" width="120" height="60"/><rect class="q b merged" x="360" y="0" width="60" height="120"/><rect class="q a merged" x="240" y="60" width="60" height="60"/><rect class="q b merged" x="300" y="60" width="60" height="60"/></svg></div>
+        <figcaption>24 caras sueltas (izquierda) se convierten en 4 rectángulos (derecha). El exportador de OBJ usa la misma técnica.</figcaption>
+      </figure>
+      <h3>3. Rehacer solo lo que cambió</h3>
+      <p>La malla de cada modelo se genera por bloques de 32³, y cada bloque recuerda las versiones a partir de las que se construyó (la suya y las de sus seis vecinos, porque una cara del borde depende del vecino). Tras una edición solo se rehacen los bloques tocados, en todos los núcleos. En un Apple M2, la malla de un modelo de 256³ con 4,5 millones de vóxeles se genera en unos 100 ms; editarlo después cuesta unos 8 ms.</p>
+      <h3>La pasada de render</h3>
+      <p>egui dibuja la interfaz en su propia pasada de render, pero esa pasada no tiene <em>búfer de profundidad</em>, que la geometría sólida necesita. Por eso la escena se dibuja con wgpu en una textura propia (color y profundidad), que luego se registra en egui y se muestra como cualquier otra imagen.</p>
+      <ul>
+        <li><code>voxel.wgsl</code> sombrea las caras. Cada vértice lleva un <strong>índice de paleta</strong> en lugar de un color: cambiar un color de la paleta no reconstruye ninguna malla.</li>
+        <li><code>shadow.wgsl</code> construye un <em>mapa de sombras</em> (shadow map): la profundidad de la escena tal como la ve la luz.</li>
+        <li><code>lines.wgsl</code> dibuja la caja del modelo y la cuadrícula del suelo, con mezcla alfa.</li>
+      </ul>
+      <figure class="fig wide">
+        <img src="../images/editor.png" alt="La ventana de Voxferro con la isla abierta: la paleta y los pinceles a la izquierda, los paneles Edit y Project a la derecha, la consola abajo" width="1600" height="1040" loading="lazy">
+        <figcaption>El editor con la isla abierta: la paleta y el pincel a la izquierda, los paneles Edit y Project a la derecha, y la consola y los modos de cámara en la parte inferior.</figcaption>
+      </figure>
+    </section>
+
+    <section id="pathtracer">
+      <h2>El path tracer</h2>
+      <p>El modo de render no usa la malla. Lanza rayos desde la cámara, los hace rebotar por la escena y promedia una enorme cantidad de caminos de luz aleatorios. Eso es el <strong><em>path tracing</em></strong>, y da sombras suaves, reflejos, vidrio y luz indirecta sin trucos.</p>
+      <h3>Progresivo</h3>
+      <p>Un compute shader (<code>pathtrace.wgsl</code>, en grupos de trabajo de 8×8 píxeles) calcula <strong>una muestra por píxel en cada fotograma</strong> y la suma a un acumulador. La imagen se va limpiando mientras la cámara está quieta y vuelve a empezar cuando se mueve.</p>
+      <div class="note">
+        <span class="tag">Una trampa real</span>
+        <p>Windows reinicia una GPU cuyo trabajo dura más de dos segundos. En una GPU integrada, una muestra de una imagen grande con formas de vóxel tardaba cuatro, y el dispositivo se perdía. Por eso cada muestra se traza en <strong>franjas de filas</strong>, y cada franja se envía por separado. El tamaño de la franja se ajusta al tiempo de GPU medido, con el objetivo de una décima de segundo, así que una GPU rápida vuelve enseguida a un solo envío por muestra, y la imagen es idéntica bit a bit.</p>
+      </div>
+      <h3>Recorrer la cuadrícula: DDA</h3>
+      <p>Toda la escena visible va a la GPU como una <strong>textura 3D</strong> de índices. Para avanzar un rayo, el DDA de Amanatides–Woo da un paso por el eje que llega antes al siguiente borde de celda. Se visitan todas las celdas que toca el rayo, en orden, así que la primera sólida es de verdad la más cercana. Con pasos de tamaño fijo, el rayo podría atravesar una pared de un vóxel sin verla.</p>
+      <figure class="fig wide">
+        <div class="panel"><svg class="dia" viewBox="-2 -2 444 244" role="img" aria-labelledby="dda-t"><title id="dda-t">Recorrido DDA de la cuadrícula</title><rect class="cell seen" x="0" y="0" width="40" height="40"/><rect class="cell" x="0" y="40" width="40" height="40"/><rect class="cell" x="0" y="80" width="40" height="40"/><rect class="cell" x="0" y="120" width="40" height="40"/><rect class="cell" x="0" y="160" width="40" height="40"/><rect class="cell" x="0" y="200" width="40" height="40"/><rect class="cell seen" x="40" y="0" width="40" height="40"/><rect class="cell seen" x="40" y="40" width="40" height="40"/><rect class="cell" x="40" y="80" width="40" height="40"/><rect class="cell" x="40" y="120" width="40" height="40"/><rect class="cell" x="40" y="160" width="40" height="40"/><rect class="cell" x="40" y="200" width="40" height="40"/><rect class="cell" x="80" y="0" width="40" height="40"/><rect class="cell seen" x="80" y="40" width="40" height="40"/><rect class="cell" x="80" y="80" width="40" height="40"/><rect class="cell" x="80" y="120" width="40" height="40"/><rect class="cell" x="80" y="160" width="40" height="40"/><rect class="cell" x="80" y="200" width="40" height="40"/><rect class="cell" x="120" y="0" width="40" height="40"/><rect class="cell seen" x="120" y="40" width="40" height="40"/><rect class="cell seen" x="120" y="80" width="40" height="40"/><rect class="cell" x="120" y="120" width="40" height="40"/><rect class="cell" x="120" y="160" width="40" height="40"/><rect class="cell" x="120" y="200" width="40" height="40"/><rect class="cell" x="160" y="0" width="40" height="40"/><rect class="cell" x="160" y="40" width="40" height="40"/><rect class="cell seen" x="160" y="80" width="40" height="40"/><rect class="cell" x="160" y="120" width="40" height="40"/><rect class="cell" x="160" y="160" width="40" height="40"/><rect class="cell" x="160" y="200" width="40" height="40"/><rect class="cell" x="200" y="0" width="40" height="40"/><rect class="cell" x="200" y="40" width="40" height="40"/><rect class="cell seen" x="200" y="80" width="40" height="40"/><rect class="cell" x="200" y="120" width="40" height="40"/><rect class="cell" x="200" y="160" width="40" height="40"/><rect class="cell" x="200" y="200" width="40" height="40"/><rect class="cell" x="240" y="0" width="40" height="40"/><rect class="cell" x="240" y="40" width="40" height="40"/><rect class="cell seen" x="240" y="80" width="40" height="40"/><rect class="cell seen" x="240" y="120" width="40" height="40"/><rect class="cell" x="240" y="160" width="40" height="40"/><rect class="cell" x="240" y="200" width="40" height="40"/><rect class="cell" x="280" y="0" width="40" height="40"/><rect class="cell" x="280" y="40" width="40" height="40"/><rect class="cell" x="280" y="80" width="40" height="40"/><rect class="cell seen" x="280" y="120" width="40" height="40"/><rect class="cell" x="280" y="160" width="40" height="40"/><rect class="cell solid" x="280" y="200" width="40" height="40"/><rect class="cell" x="320" y="0" width="40" height="40"/><rect class="cell" x="320" y="40" width="40" height="40"/><rect class="cell" x="320" y="80" width="40" height="40"/><rect class="cell hit" x="320" y="120" width="40" height="40"/><rect class="cell solid" x="320" y="160" width="40" height="40"/><rect class="cell solid" x="320" y="200" width="40" height="40"/><rect class="cell" x="360" y="0" width="40" height="40"/><rect class="cell" x="360" y="40" width="40" height="40"/><rect class="cell" x="360" y="80" width="40" height="40"/><rect class="cell solid" x="360" y="120" width="40" height="40"/><rect class="cell solid" x="360" y="160" width="40" height="40"/><rect class="cell solid" x="360" y="200" width="40" height="40"/><rect class="cell" x="400" y="0" width="40" height="40"/><rect class="cell" x="400" y="40" width="40" height="40"/><rect class="cell" x="400" y="80" width="40" height="40"/><rect class="cell solid" x="400" y="120" width="40" height="40"/><rect class="cell solid" x="400" y="160" width="40" height="40"/><rect class="cell solid" x="400" y="200" width="40" height="40"/><text class="num" x="5" y="13">1</text><text class="num" x="45" y="13">2</text><text class="num" x="45" y="53">3</text><text class="num" x="85" y="53">4</text><text class="num" x="125" y="53">5</text><text class="num" x="125" y="93">6</text><text class="num" x="165" y="93">7</text><text class="num" x="205" y="93">8</text><text class="num" x="245" y="93">9</text><text class="num" x="245" y="133">10</text><text class="num" x="285" y="133">11</text><line class="ray" x1="14.0" y1="22.0" x2="320.0" y2="151.9"/><line class="ray ghost" x1="320.0" y1="151.9" x2="424.0" y2="196.0"/><circle class="cross" cx="40.0" cy="33.0" r="2.6"/><circle class="cross" cx="56.4" cy="40.0" r="2.6"/><circle class="cross" cx="80.0" cy="50.0" r="2.6"/><circle class="cross" cx="120.0" cy="67.0" r="2.6"/><circle class="cross" cx="150.7" cy="80.0" r="2.6"/><circle class="cross" cx="160.0" cy="84.0" r="2.6"/><circle class="cross" cx="200.0" cy="100.9" r="2.6"/><circle class="cross" cx="240.0" cy="117.9" r="2.6"/><circle class="cross" cx="244.9" cy="120.0" r="2.6"/><circle class="cross" cx="280.0" cy="134.9" r="2.6"/><circle class="eye" cx="14.0" cy="22.0" r="5"/><circle class="hitdot" cx="320.0" cy="151.9" r="5"/></svg>
+          <div class="legend"><span><i class="l-seen"></i>celda visitada (en orden)</span><span><i class="l-solid"></i>celda sólida</span><span><i class="l-hit"></i>primer impacto</span></div>
+        </div>
+        <figcaption>El rayo sale del punto negro y cruza 11 celdas vacías antes de llegar a la primera sólida. Cada punto naranja es un cruce de borde: un paso del bucle.</figcaption>
+      </figure>
+      <div class="note learn">
+        <span class="tag">Por qué es sencillo</span>
+        <p>OpenGL 2 no tenía etapa de cómputo ni storage buffers, así que había que empaquetar un volumen en una textura 2D con aritmética modular. Con wgpu la cuadrícula se lee directamente en 3D y todo ese empaquetado desaparece.</p>
+      </div>
+      <h3>Materiales y luz</h3>
+      <ul>
+        <li><strong>Materiales:</strong> los chunks <code>MATL</code> se resuelven en la CPU en una tabla de 256 entradas, una por color. Hay difuso, metal, vidrio (con absorción de Beer–Lambert: el vidrio toma su color de lo que absorbe), emisivo, nube (un medio que absorbe, dispersa o emite) y mezcla.</li>
+        <li><strong>Sol y cielo:</strong> un rayo de sombra hacia el sol en cada rebote. El cielo puede ser uniforme, un mapa HDR (muestreado según el brillo, con una tabla de sumas acumuladas) o atmosférico, con dispersión de Rayleigh y de Mie, que enrojece el sol al atardecer.</li>
+        <li><strong>Lámparas:</strong> los vóxeles emisivos con una cara al aire se listan en la CPU. Una superficie elige uno al azar y le lanza un rayo de sombra (<em>next event estimation</em>), en lugar de esperar a que un rebote lo encuentre por suerte.</li>
+        <li><strong>Aleatoriedad:</strong> un hash PCG por píxel y por fotograma, y direcciones con ponderación de coseno, para que el término de Lambert se cancele.</li>
+      </ul>
+      <h3>Posprocesado</h3>
+      <p>Un segundo compute shader, <code>post.wgsl</code>, lee el acumulador y aplica bloom, exposición, viñeteado, la curva tonal ACES y la gamma. Es una pasada aparte porque el bloom lee píxeles vecinos, que la primera pasada todavía está escribiendo.</p>
+      <h3>Formas de vóxel</h3>
+      <p>Los vóxeles se pueden renderizar como esferas, cilindros, ladrillos con tetones, arcilla o marching cubes. Ese código está detrás de una constante de pipeline (<code>override SHAPES</code>): el pipeline habitual se compila sin él, y un segundo pipeline con formas se crea solo cuando hace falta. El motivo es Windows: con todo expandido en línea, el shader era demasiado grande y el rasterizador por software de DirectX lo dibujaba en negro. La tabla de marching cubes se <em>construye</em> uniendo las aristas cruzadas en cada cara de la celda.</p>
+      <h3>Líneas sobre las superficies</h3>
+      <p>El render puede dibujar una cuadrícula cada pocos vóxeles y una línea en cada arista donde la superficie cambia de dirección. No son una segunda pasada: un punto de la superficie simplemente toma el color de la línea antes de iluminarse, en cada rebote, así que las líneas también se ven en los reflejos.</p>
+      <figure class="fig wide">
+        <img src="../images/shapes.jpg" alt="Un toro de metal dorado, una esfera de vidrio con un núcleo luminoso y una caja redondeada" width="1600" height="1266" loading="lazy">
+        <figcaption>Formas hechas por los kernels de GPU: un toro de metal dorado, una cáscara de vidrio con un núcleo luminoso y una caja redondeada.</figcaption>
+      </figure>
+    </section>
+
+    <section id="gpu">
+      <h2>Cómputo en la GPU</h2>
+      <p>La GPU hace algo más que dibujar. Varias operaciones de edición son <strong>kernels</strong>: una función que se evalúa una vez por vóxel, para todos a la vez, en un compute shader (<code>voxel_ops.wgsl</code>, en grupos de trabajo de 4×4×4).</p>
+      <h3>Scripts de vóxeles (xs)</h3>
+      <p>El comando <code>xs</code> ejecuta scripts del usuario. Un script define una función <code>map(v)</code> que recibe el centro de una celda y devuelve el índice de color que hay que poner ahí. Voxferro acepta dos lenguajes:</p>
+      <ul>
+        <li><strong>GLSL</strong> (<code>.txt</code>): scripts de vóxeles en GLSL, sin cambios. <code>naga</code> los compila en un compute shader y se los pasa a wgpu como WGSL.</li>
+        <li><strong>WGSL</strong> (<code>.wgsl</code>): los propios del proyecto, como <code>terrain</code>, <code>menger</code> o <code>erode</code>.</li>
+      </ul>
+      <p>Cada pasada lee el modelo tal como estaba antes de la pasada, nunca lo que la misma pasada ya ha escrito. Así un script puede hacer crecer, erosionar o desplazar un modelo, y <code>-n 3</code> encadena tres pasadas.</p>
+      <figure class="fig wide">
+        <img src="../images/scripts.jpg" alt="Colinas en tres franjas de color, una esponja de Menger dorada y una bola de piedra erosionada" width="1600" height="1480" loading="lazy">
+        <figcaption>Hecho solo con scripts: colinas con <code>terrain</code>, una esponja de Menger con <code>menger</code> y una bola desgastada por tres pasadas de <code>erode</code>.</figcaption>
+      </figure>
+    </section>
+
+    <section id="mcp">
+      <h2>Controlado por un agente</h2>
+      <p>Voxferro incluye un servidor <strong>MCP</strong> (Model Context Protocol), el protocolo que usa un asistente como Claude para llamar a herramientas externas. Con <code>--mcp</code>, o desde el panel, escucha en <code>127.0.0.1:47800</code>.</p>
+      <pre><code>cargo run -p voxferro -- --mcp
+claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
+      <p>El servidor corre en su propio hilo, con su propio runtime de <code>tokio</code>, y <strong>nunca toca el documento</strong>. Cada llamada se convierte en una petición al hilo de la interfaz, que la ejecuta entre fotogramas como si se hubiera tecleado en la consola: el mismo intérprete, el mismo historial de deshacer. La respuesta vuelve por un canal <em>oneshot</em>.</p>
+      <div class="table wide"><table>
+        <thead><tr><th>Herramienta</th><th>Qué hace</th></tr></thead>
+        <tbody>
+          <tr><td><code>run_command</code>, <code>run_commands</code></td><td>Ejecuta una línea de consola, o varias como un solo paso de deshacer.</td></tr>
+          <tr><td><code>describe_scene</code>, <code>get_palette</code></td><td>Describe el documento y la paleta en JSON.</td></tr>
+          <tr><td><code>set_voxels</code></td><td>Escribe los vóxeles indicados en el modelo seleccionado.</td></tr>
+          <tr><td><code>capture_view</code></td><td>Devuelve la vista del editor o el render como PNG, para que el agente vea lo que hizo.</td></tr>
+          <tr><td><code>open_file</code>, <code>save_file</code></td><td>Abre y guarda; sobrescribir un archivo requiere el sí de la persona.</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>Seguridad:</strong> solo acepta conexiones locales, rechaza cualquier petición que un navegador marque con un <code>Origin</code> (contra ataques desde páginas web) y nunca sobrescribe un archivo sin una confirmación en la ventana.</p>
+    </section>
+
+    <section id="quality">
+      <h2>Pruebas, fuzzing y CI</h2>
+      <ul>
+        <li><strong>301 pruebas</strong>, cada una junto al código que prueba (<code>#[cfg(test)] mod tests</code> al final del archivo). El lector de <code>.vox</code> se contrasta con <code>dot_vox</code> y con modelos de ejemplo.</li>
+        <li><strong>Fuzzing:</strong> <code>examples/fuzz_vox.rs</code> corrompe archivos válidos y comprueba que el lector nunca se detiene con un <em>panic</em>. La última ejecución pasó 120&nbsp;000 casos sin un solo fallo.</li>
+        <li><strong>Clippy</strong> con <code>-D warnings</code>: cualquier advertencia hace fallar la CI.</li>
+      </ul>
+      <h3>Integración continua</h3>
+      <p>Con cada push, GitHub Actions compila y prueba en Linux y Windows, y ejecuta tres pruebas de humo: abrir la vista del editor, renderizar una escena con el path tracer (y comprobar el brillo medio de la imagen) y una sesión MCP completa. Las máquinas de la CI no tienen GPU: Linux usa lavapipe (Vulkan por software) y Windows <strong>WARP</strong>, el rasterizador por software de DirectX, que encontró fallos reales:</p>
+      <ul>
+        <li>La pila del hilo principal (1 MB) se desbordaba al compilar el shader; <code>build.rs</code> la sube a 16 MB.</li>
+        <li>El compilador FXC no puede escribir en un vector a través de un índice variable (<code>v[axis] = …</code>), así que se usan máscaras.</li>
+        <li>Un shader demasiado grande se dibujaba en negro; de ahí el pipeline aparte para las formas.</li>
+      </ul>
+      <p>Subir una etiqueta <code>v*</code> lanza otro workflow que compila las cuatro descargas: macOS universal (<code>.dmg</code> y <code>.zip</code>), Windows y Linux.</p>
+    </section>
+
+    <section id="reading">
+      <h2>Por dónde empezar a leer</h2>
+      <p>Un orden que sigue el viaje del vóxel. Cada archivo empieza con un comentario <code>//!</code> que explica qué hace y por qué:</p>
+      <ol>
+        <li><code>crates/vox-format/src/lib.rs</code>, <code>dict.rs</code> y <code>parse.rs</code>: el formato.</li>
+        <li><code>crates/voxel-core/src/volume.rs</code>, <code>document.rs</code> y <code>command.rs</code>: el modelo y el deshacer.</li>
+        <li><code>mesh.rs</code>, <code>greedy.rs</code> y <code>mesh_cache.rs</code>: de los vóxeles a los triángulos.</li>
+        <li><code>raycast.rs</code> y <code>brush.rs</code>: el puntero y los pinceles.</li>
+        <li><code>crates/app/src/main.rs</code>, <code>console.rs</code> y <code>renderer.rs</code> con <code>shaders/voxel.wgsl</code>: la app y el viewport.</li>
+        <li><code>pathtrace.rs</code>, <code>shaders/pathtrace.wgsl</code> y <code>post.wgsl</code>: el render.</li>
+        <li><code>xs.rs</code> y <code>mcp.rs</code>: los scripts y los agentes.</li>
+      </ol>
+      <p>Para verlo funcionar, reconstruye la isla del principio de esta página y renderízala:</p>
+      <pre><code>cargo run --release -p voxferro -- --script assets/showcase/island.cmds --render-mode</code></pre>
+      <p>Y para renderizar a un PNG sin nadie delante de la ventana:</p>
+      <pre><code>cargo run --release -p voxferro -- scene.vox --run "render image 1920 1080 256 out.png"</code></pre>
+      <p>La <a href="https://github.com/0xshellcode/voxferro/blob/master/ROADMAP.md">hoja de ruta</a> enumera las fases y en qué punto está cada una, y el <a href="https://github.com/0xshellcode/voxferro#readme">README</a>, todos los comandos de consola y los atajos (los dos, en inglés).</p>
+    </section>
+
+    <section id="glossary">
+      <h2>Glosario</h2>
+      <dl class="gloss">
+        <dt>Vóxel (voxel)</dt><dd>Una celda de una cuadrícula 3D. Aquí guarda un índice de paleta.</dd>
+        <dt>Índice de paleta</dt><dd>Un número de 1 a 255 que apunta a un color (y a un material). El 0 es vacío.</dd>
+        <dt>Chunk</dt><dd>Dos cosas distintas: en el archivo, un bloque con cabecera; en memoria, un bloque de 32³ vóxeles con su versión.</dd>
+        <dt>Malla (mesh)</dt><dd>La lista de triángulos que dibuja la GPU.</dd>
+        <dt>Mallado voraz (greedy meshing)</dt><dd>Fusionar las caras coplanares de un mismo color en rectángulos grandes.</dd>
+        <dt>Shader</dt><dd>Un programa que se ejecuta en la GPU. Los shaders de <em>vértices</em> y de <em>fragmentos</em> dibujan; los <em>compute</em> shaders calculan cualquier cosa.</dd>
+        <dt>WGSL</dt><dd>El lenguaje de shaders de WebGPU y wgpu.</dd>
+        <dt>Búfer uniform / storage</dt><dd>Dos formas de pasar datos a un shader: un uniform es pequeño, de solo lectura y rápido; un storage buffer es grande y se puede escribir.</dd>
+        <dt>Path tracing</dt><dd>Simular la luz siguiendo caminos aleatorios de rayos y promediándolos.</dd>
+        <dt>DDA</dt><dd>Recorrer una cuadrícula con un rayo, celda a celda, sin saltarse ninguna.</dd>
+        <dt>Next event estimation</dt><dd>Apuntar un rayo directamente a una luz en lugar de esperar a encontrarla al azar.</dd>
+        <dt>Mapeo tonal (tone mapping, ACES)</dt><dd>Comprimir la luz de un render, que no tiene techo, al rango que muestra una pantalla.</dd>
+        <dt>Interfaz en modo inmediato (immediate mode UI)</dt><dd>La interfaz se vuelve a describir en cada fotograma, como hace egui.</dd>
+        <dt>MCP</dt><dd>Model Context Protocol: el protocolo que usa un agente de IA para llamar a herramientas.</dd>
+        <dt>Fuzzing</dt><dd>Probar un programa con miles de entradas corruptas o aleatorias para encontrar fallos.</dd>
+        <dt>Clippy</dt><dd>El linter de Rust: avisa del código sospechoso o poco idiomático.</dd>
+        <dt>MSRV</dt><dd>La versión mínima de Rust con la que compila el proyecto (1.89).</dd>
+      </dl>
+    </section>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>Voxferro · MIT o Apache 2.0 · <a href="https://github.com/0xshellcode/voxferro">GitHub</a></span>
+    <span>Un editor de vóxeles para archivos <code>.vox</code>.</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+  if (!('IntersectionObserver' in window)) return;
+  var byId = {};
+  links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      links.forEach(function (a) { a.classList.remove('on'); });
+      var a = byId[e.target.id]; if (a) a.classList.add('on');
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  document.querySelectorAll('main section[id]').forEach(function (s) { io.observe(s); });
+})();
+</script>
+</body>
+</html>
