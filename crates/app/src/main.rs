@@ -463,11 +463,16 @@ impl App {
         eprintln!("[voxferro] graphics backend: {backend}");
         // Nothing works after this, and what fails next (egui's buffers)
         // says nothing of why: say it first.
-        state.device.set_device_lost_callback(|reason, message| {
+        // The way out is the other backend, whichever this one is.
+        let other = match info.backend {
+            wgpu::Backend::Vulkan => "dx12",
+            _ => "vulkan",
+        };
+        state.device.set_device_lost_callback(move |reason, message| {
             if reason != wgpu::DeviceLostReason::Destroyed {
                 eprintln!(
                     "[voxferro] the graphics device was lost ({reason:?}: {message}). The GPU was reset or \
-                     its driver failed; on Windows, setting WGPU_BACKEND=vulkan may avoid it."
+                     its driver failed; on Windows, setting WGPU_BACKEND={other} may avoid it."
                 );
             }
         });
