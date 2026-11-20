@@ -120,6 +120,28 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then grep "graphics: DirectX 12 with DXC" smoke.log; fi
           $py scripts/ci/check_image.py smoke.bmp
 
+      # Voxels drawn as other shapes use another build of the tracer (one
+      # per shape); marching cubes is the largest of them. Too large a
+      # kernel once rendered black on WARP while the cubes passed.
+      - name: Smoke test, path traced render with shaped voxels
+        shell: bash
+        timeout-minutes: 15
+        env:
+          VOXFERRO_NO_RECENT: "1"
+        run: |
+          run=""; if [ "$RUNNER_OS" = Linux ]; then run="xvfb-run -a"; fi
+          py=python3; if [ "$RUNNER_OS" = Windows ]; then py=python; fi
+          { cat assets/showcase/shapes.cmds; echo "env shape mc"; } > shaped.cmds
+          set +e
+          $run ./target/debug/voxferro --script shaped.cmds --render 8 --screenshot shaped.bmp > shaped.log 2>&1
+          code=$?
+          set -e
+          cat shaped.log
+          echo "voxferro exited with $code"
+          [ $code -eq 0 ]
+          grep "voxels as mc: built in" shaped.log
+          $py scripts/ci/check_image.py shaped.bmp
+
       - name: Smoke test, MCP session
         shell: bash
         timeout-minutes: 15

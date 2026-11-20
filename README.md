@@ -281,7 +281,10 @@ powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 -WithDxc   
 ```
 
 Voxferro uses Vulkan when the GPU's driver offers it: with voxel shapes the
-path tracer ran 6 to 12 times faster there than under DirectX 12. Without a
+path tracer has run several times faster there than under DirectX 12. Each
+shape now has its own build of the tracer, which narrowed the gap (on an
+integrated AMD GPU, a sphere sample at 790×730 went from 4.1 s to 2.3 s
+under DirectX 12, and a shape's build takes half a second). Without a
 Vulkan driver (or when only DirectX 12 reaches the discrete GPU) it uses
 DirectX 12, whose Render mode needs Microsoft's DXC shader compiler
 (`dxcompiler.dll` and `dxil.dll` next to `voxferro.exe`; `-WithDxc` downloads

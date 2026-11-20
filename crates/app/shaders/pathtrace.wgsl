@@ -351,16 +351,18 @@ fn is_glass(cell: vec3<i32>) -> bool {
 
 // --- Voxels drawn as other shapes ------------------------------------------
 //
-// Only in a second build of this shader, with SHAPES set when the render
-// draws voxels as something else than cubes: in the usual build the shape
-// code compiles away, and the shader stays as small as it was. (Inlined
-// wherever a ray is traced, it made the shader more than the DirectX
-// software rasteriser renders correctly.)
+// Only in other builds of this shader, one per shape, with SHAPE set to the
+// shape's number (as `p.shape.x`: 1 sphere, 2 cylinder, 3 brick, 4 clay, 5
+// marching cubes). In the usual build (0) the shape code compiles away, and
+// in each shape's build only that shape's code is left. Inlined wherever a
+// ray is traced, all five together made a kernel that DirectX compiled
+// slowly and ran several times slower than Vulkan, and that its software
+// rasteriser (WARP) rendered black.
 // Each test looks for the shape inside one cell, between the distances
 // t_in (where the ray enters the cell) and t_out (where it leaves); a miss
 // lets the walk go on to the next cell. Glass and media stay cubes.
 
-override SHAPES: bool = false;
+override SHAPE: u32 = 0u;
 
 fn shaped(index: u32) -> bool {
     let k = materials[index].kind;
@@ -609,7 +611,7 @@ fn mc_reaches(cell: vec3<i32>) -> bool {
 
 // The shape in a solid cell, entered through the face `entry` points out of.
 fn shape_in(origin: vec3<f32>, dir: vec3<f32>, cell: vec3<i32>, t_in: f32, t_out: f32, entry: vec3<f32>) -> ShapeHit {
-    let kind = u32(p.shape.x + 0.5);
+    let kind = SHAPE;
     if (kind == 1u) {
         return sphere_in(origin, dir, cell, t_in, t_out);
     }
@@ -710,9 +712,9 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, mode: u32) 
             stop = !is_glass(cell);
         }
         // Voxels drawn as other shapes: the shape in the cell, or on.
-        if (SHAPES && mode == 0u && p.shape.x > 0.5) {
+        if (SHAPE != 0u && mode == 0u && p.shape.x > 0.5) {
             let t_out = min(min(t_max.x, t_max.y), t_max.z);
-            let marching = u32(p.shape.x + 0.5) == 5u;
+            let marching = SHAPE == 5u;
             if (stop && shaped(voxel_at(cell))) {
                 let s = shape_in(origin, direction, cell, travelled, t_out, normal);
                 stop = false;
@@ -734,7 +736,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, mode: u32) 
                     result.point = s.point;
                     return result;
                 }
-            } else if (!stop && u32(p.shape.x + 0.5) == 3u) {
+            } else if (!stop && SHAPE == 3u) {
                 let under = cell - vec3<i32>(0, 0, 1);
                 if (voxel_at(under) != 0u && shaped(voxel_at(under))) {
                     let s = stud_in(origin, direction, cell, travelled, t_out);

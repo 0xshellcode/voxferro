@@ -81,9 +81,9 @@ is never reset mid-render; Vulkan preferred over DirectX 12).
 - **Signing:** the app signed and notarized for macOS (requires an Apple
   Developer account), and the Windows executable signed, so SmartScreen
   does not stop it.
-- **Voxel shapes under DirectX 12** are several times slower than under
-  Vulkan, which Windows now prefers: a build per shape, or a pipeline
-  cache, would help machines without a Vulkan driver.
+- **Voxel shapes under DirectX 12** are still slower than under Vulkan on
+  an integrated GPU (a sphere sample at 790×730 on an integrated AMD:
+  2.3 s), though each shape now has its own build of the tracer.
 - **Glass drawn as marching cubes** shows dark seams: the walk inside
   glass goes cell by cell while the entry is on the smooth surface.
 - Lines (grid and edges) in the render are drawn on cubes only.

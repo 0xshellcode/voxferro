@@ -949,9 +949,10 @@ pub struct PathTracer {
     /// How a sample is split into submissions.
     bands: Bands,
     pipeline: wgpu::ComputePipeline,
-    /// The same shader built with `SHAPES`, for voxels drawn as spheres,
-    /// bricks... -- made the first time it is wanted.
-    shaped_pipeline: Option<wgpu::ComputePipeline>,
+    /// The same shader built once per voxel shape (`SHAPE`, indexed by
+    /// [`VoxelShape`]), each the first time it is wanted: only that shape's
+    /// code is left in it. Index 0, cubes, stays empty: that is `pipeline`.
+    shaped_pipelines: [Option<wgpu::ComputePipeline>; VoxelShape::ALL.len()],
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
     layout: wgpu::BindGroupLayout,
@@ -1189,7 +1190,7 @@ impl PathTracer {
             mc_table,
             bands: Bands::new(),
             pipeline,
-            shaped_pipeline: None,
+            shaped_pipelines: Default::default(),
             shader,
             pipeline_layout,
             layout,
@@ -1559,15 +1560,23 @@ impl PathTracer {
         environment: &Environment,
         volume_offset: Vec3,
     ) -> Option<egui::TextureId> {
-        if environment.voxel_shape != VoxelShape::Cube && self.shaped_pipeline.is_none() {
-            self.shaped_pipeline = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("path tracer pipeline, shaped voxels"),
+        let shape = environment.voxel_shape as usize;
+        if shape != 0 && self.shaped_pipelines[shape].is_none() {
+            let started = std::time::Instant::now();
+            let label = format!("path tracer pipeline, voxels as {}", VoxelShape::ALL[shape].1);
+            self.shaped_pipelines[shape] = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(&label),
                 layout: Some(&self.pipeline_layout),
                 module: &self.shader,
                 entry_point: Some("main"),
-                compilation_options: wgpu::PipelineCompilationOptions { constants: &[("SHAPES", 1.0)], ..Default::default() },
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[("SHAPE", shape as f64)],
+                    ..Default::default()
+                },
                 cache: None,
             }));
+            // Seconds with DirectX: worth seeing in the log.
+            eprintln!("[voxferro] {label}: built in {:.0?}", started.elapsed());
         }
         self.bands.update();
         // Size the target before borrowing the volume: ensure_target needs
@@ -1808,10 +1817,7 @@ impl PathTracer {
         // The sample in bands of rows, each its own submission (see `Bands`).
         // Each band's row range goes in with the parameters: a buffer write
         // takes effect at the next submission, so each band sees its own.
-        let pipeline = match (&self.shaped_pipeline, environment.voxel_shape) {
-            (Some(shaped), shape) if shape != VoxelShape::Cube => shaped,
-            _ => &self.pipeline,
-        };
+        let pipeline = self.shaped_pipelines[environment.voxel_shape as usize].as_ref().unwrap_or(&self.pipeline);
         let band = self.bands.rows(size[0]);
         let started = std::time::Instant::now();
         let mut first_row = 0;

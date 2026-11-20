@@ -272,7 +272,7 @@ cargo test --workspace</code></pre>
       <h3>Post-processing</h3>
       <p>A second compute shader, <code>post.wgsl</code>, reads the accumulator and applies bloom, exposure, vignette, the ACES tone curve and gamma. It is a separate pass because bloom reads neighbouring pixels, which the first pass is still writing.</p>
       <h3>Voxel shapes</h3>
-      <p>Voxels can be rendered as spheres, cylinders, studded bricks, clay or marching cubes. That code sits behind a pipeline constant (<code>override SHAPES</code>): the usual pipeline is compiled without it, and a second pipeline with shapes is created only when needed. The reason is Windows: with everything inlined, the shader was too large and DirectX's software rasteriser drew it black. The marching cubes table is <em>built</em> by joining the crossed edges on each face of the cell.</p>
+      <p>Voxels can be rendered as spheres, cylinders, studded bricks, clay or marching cubes. That code sits behind a pipeline constant (<code>override SHAPE</code>, the shape's number): the usual pipeline is compiled with 0, which leaves no shape code at all, and each shape gets its own pipeline the first time it is used, with only that shape's code in it. The reason is Windows: every call is inlined, and with all five shapes in one kernel DirectX compiled it slowly, ran it several times slower than Vulkan, and its software rasteriser drew it black. The marching cubes table is <em>built</em> by joining the crossed edges on each face of the cell.</p>
       <h3>Lines on the surfaces</h3>
       <p>The render can draw a grid every few voxels and a line along every edge where the surface turns. They are not a second pass: a surface point simply takes the line's colour before it is lit, at every bounce, so lines show in reflections too.</p>
       <figure class="fig wide">
@@ -356,7 +356,7 @@ url = "http://127.0.0.1:47800/mcp"</code></pre>
       <ul>
         <li>The main thread's stack (1 MB) overflowed while compiling the shader; <code>build.rs</code> raises it to 16 MB.</li>
         <li>The FXC compiler cannot write to a vector through a variable index (<code>v[axis] = …</code>), so masks are used instead.</li>
-        <li>A shader that was too large drew black; hence the separate pipeline for shapes.</li>
+        <li>A shader that was too large drew black, without any error; hence a pipeline per voxel shape, and a path tracer that lights each bounce from a single block of code.</li>
       </ul>
       <p>Pushing a <code>v*</code> tag runs another workflow that builds the four downloads: macOS universal (<code>.dmg</code> and <code>.zip</code>), Windows and Linux.</p>
     </section>

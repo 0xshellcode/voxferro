@@ -1,11 +1,14 @@
 //! Choosing the graphics backend on Windows.
 //!
 //! Measured on Windows with real GPUs (ROADMAP, "Checked on Windows"): the
-//! path tracer's build with voxel shapes runs 6 to 12 times slower under
+//! path tracer's build with voxel shapes ran 6 to 12 times slower under
 //! DirectX 12 than under Vulkan (a sphere sample at 790x730 on an RTX 4070
 //! Ti: 148 ms against 22.5; an integrated AMD, 10 to 12 times slower), and
-//! compiling it through DXC costs ~6 s a launch, where Vulkan's driver
-//! caches it. With cubes the two are even. So, in order:
+//! compiling it through DXC cost ~6 s a launch, where Vulkan's driver
+//! caches it. With cubes the two are even. One build per shape has since
+//! narrowed that (on the integrated AMD under DirectX 12, a sphere sample
+//! went from 4.1 s to 2.3 s; a shape's build takes half a second), but
+//! Vulkan stays ahead on the GPUs that have it. So, in order:
 //!
 //! 1. Vulkan, when a Vulkan driver offers a hardware adapter -- unless the
 //!    machine has a discrete GPU that only DirectX 12 offers, which Vulkan

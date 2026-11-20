@@ -272,7 +272,7 @@ cargo test --workspace</code></pre>
       <h3>Posprocesado</h3>
       <p>Un segundo compute shader, <code>post.wgsl</code>, lee el acumulador y aplica bloom, exposición, viñeteado, la curva tonal ACES y la gamma. Es una pasada aparte porque el bloom lee píxeles vecinos, que la primera pasada todavía está escribiendo.</p>
       <h3>Formas de vóxel</h3>
-      <p>Los vóxeles se pueden renderizar como esferas, cilindros, ladrillos con tetones, arcilla o marching cubes. Ese código está detrás de una constante de pipeline (<code>override SHAPES</code>): el pipeline habitual se compila sin él, y un segundo pipeline con formas se crea solo cuando hace falta. El motivo es Windows: con todo expandido en línea, el shader era demasiado grande y el rasterizador por software de DirectX lo dibujaba en negro. La tabla de marching cubes se <em>construye</em> uniendo las aristas cruzadas en cada cara de la celda.</p>
+      <p>Los vóxeles se pueden renderizar como esferas, cilindros, ladrillos con tetones, arcilla o marching cubes. Ese código está detrás de una constante de pipeline (<code>override SHAPE</code>, el número de la forma): el pipeline habitual se compila con 0, que no deja nada de código de formas, y cada forma tiene su propio pipeline, creado la primera vez que se usa y solo con el código de esa forma. El motivo es Windows: cada llamada se expande en línea, y con las cinco formas en un mismo kernel DirectX lo compilaba despacio, lo ejecutaba varias veces más lento que Vulkan y su rasterizador por software lo dibujaba en negro. La tabla de marching cubes se <em>construye</em> uniendo las aristas cruzadas en cada cara de la celda.</p>
       <h3>Líneas sobre las superficies</h3>
       <p>El render puede dibujar una cuadrícula cada pocos vóxeles y una línea en cada arista donde la superficie cambia de dirección. No son una segunda pasada: un punto de la superficie simplemente toma el color de la línea antes de iluminarse, en cada rebote, así que las líneas también se ven en los reflejos.</p>
       <figure class="fig wide">
@@ -356,7 +356,7 @@ url = "http://127.0.0.1:47800/mcp"</code></pre>
       <ul>
         <li>La pila del hilo principal (1 MB) se desbordaba al compilar el shader; <code>build.rs</code> la sube a 16 MB.</li>
         <li>El compilador FXC no puede escribir en un vector a través de un índice variable (<code>v[axis] = …</code>), así que se usan máscaras.</li>
-        <li>Un shader demasiado grande se dibujaba en negro; de ahí el pipeline aparte para las formas.</li>
+        <li>Un shader demasiado grande se dibujaba en negro, sin ningún error; de ahí un pipeline por forma de vóxel, y un path tracer que ilumina cada rebote desde un único bloque de código.</li>
       </ul>
       <p>Subir una etiqueta <code>v*</code> lanza otro workflow que compila las cuatro descargas: macOS universal (<code>.dmg</code> y <code>.zip</code>), Windows y Linux.</p>
     </section>
