@@ -904,15 +904,26 @@ fn horizon_fade(distance: f32) -> f32 {
     return 1.0 - exp(-p.ground.z * 0.0005 * distance);
 }
 
+// A direction toward the environment map, and the light it brings to a
+// lambertian surface if nothing is in the way (zero when the sample is
+// wasted). The shadow ray is the caller's.
+struct EnvSample {
+    direction: vec3<f32>,
+    light: vec3<f32>,
+};
+
 // Next event estimation toward the environment map.
 //
 // Picks a texel with probability proportional to its weight by binary search
 // over the CDF, then a direction inside it uniform in cos θ -- uniform in
 // solid angle within the texel, which makes the pdf exact instead of
 // approximate near the poles.
-fn sample_env(point: vec3<f32>, normal: vec3<f32>, state: ptr<function, u32>) -> vec3<f32> {
+fn pick_env(normal: vec3<f32>, state: ptr<function, u32>) -> EnvSample {
+    var none: EnvSample;
+    none.direction = normal;
+    none.light = vec3<f32>(0.0);
     if (p.ibl.x < 0.5 || p.ibl.w <= 0.0) {
-        return vec3<f32>(0.0);
+        return none;
     }
     let w = p.ibl_size.x;
     let h = p.ibl_size.y;
@@ -941,7 +952,7 @@ fn sample_env(point: vec3<f32>, normal: vec3<f32>, state: ptr<function, u32>) ->
         weight = weight - env_cdf[index - 1u];
     }
     if (weight <= 0.0) {
-        return vec3<f32>(0.0);
+        return none;
     }
 
     let cos0 = cos(PI * f32(y) / f32(h));
@@ -955,20 +966,22 @@ fn sample_env(point: vec3<f32>, normal: vec3<f32>, state: ptr<function, u32>) ->
 
     let cos_surface = dot(normal, dir);
     if (cos_surface <= 0.0) {
-        return vec3<f32>(0.0);
+        return none;
     }
     // Below the horizon the ground plane is in the way.
     if (p.ground.y > 0.5 && dir.z < 0.0) {
-        return vec3<f32>(0.0);
+        return none;
     }
 
     let solid_angle = (2.0 * PI / f32(w)) * (cos0 - cos1);
     let pdf = (weight / p.ibl.w) / solid_angle;
-    let visible = shadow(point, dir, 1e5);
     // The sampled texel's own value: consistent with the weight it was
     // chosen by, where a bilinear lookup would blur across neighbours.
     let radiance = env_texel(i32(x), i32(y)) * p.ibl.y;
-    return radiance * visible * cos_surface / (PI * pdf);
+    var sample: EnvSample;
+    sample.direction = dir;
+    sample.light = radiance * cos_surface / (PI * pdf);
+    return sample;
 }
 
 // A point on the unit aperture: a disc, or a regular polygon with one corner
@@ -1195,14 +1208,16 @@ fn fresnel(cos_theta: f32, ior: f32) -> f32 {
 // One stage of the render, for finding where a GPU goes wrong: 1 a flat
 // grey, 2 the primary hit's normal, 3 its palette colour, 4 the sky alone.
 // A ray that hits nothing shows dark purple.
-fn debug_view(mode: u32, origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+// 1 and 4 come before any tracing; the rest take the camera ray's first hit
+// from the path loop, which keeps a second grid walk out of the shader.
+fn debug_view(mode: u32, direction: vec3<f32>) -> vec3<f32> {
     if (mode == 1u) {
         return vec3<f32>(0.5);
     }
-    if (mode == 4u) {
-        return sky(direction, true, false);
-    }
-    let hit = trace(origin, direction, 1e30, 0u);
+    return sky(direction, true, false);
+}
+
+fn debug_hit(mode: u32, hit: Hit) -> vec3<f32> {
     if (!hit.hit) {
         return vec3<f32>(0.1, 0.0, 0.1);
     }
@@ -1354,8 +1369,9 @@ fn main(@builtin(global_invocation_id) local_id: vec3<u32>) {
     var specular_events = 0;
     // A diagnostic view replaces the whole path.
     var steps = 128;
-    if (p.emitter_info.y != 0u) {
-        radiance = debug_view(p.emitter_info.y, origin, direction);
+    let debug = p.emitter_info.y;
+    if (debug == 1u || debug == 4u) {
+        radiance = debug_view(debug, direction);
         steps = 0;
     }
 
@@ -1392,11 +1408,30 @@ fn main(@builtin(global_invocation_id) local_id: vec3<u32>) {
             // grid, and trace() clips to the grid box itself.
             hit = trace(origin, direction, 1e30, 0u);
         }
+        if (debug != 0u) {
+            radiance = debug_hit(debug, hit);
+            break;
+        }
 
         // The ground wins when it is nearer than any voxel, or when the ray
         // left the grid without hitting one. Not from inside glass: the
         // voxel reached there is already the nearest thing.
         let t_ground = select(ground_distance(origin, direction), -1.0, from_glass);
+
+        // Where the path goes on from. Each event below that neither ends
+        // nor turns the path itself only fills these in, and the lighting
+        // after them is written once: one copy per event made the shader
+        // too large for Windows' software GPU (WARP), which then dropped
+        // parts of the result and rendered black. `scattered` is a
+        // scattering in fog or a medium, lit through the phase function
+        // `phase_g`; otherwise `vertex` is on a diffuse surface facing
+        // `normal`, its shadow rays reaching `sun_reach`.
+        var scattered = false;
+        var last_scatter = false;
+        var phase_g = 0.0;
+        var vertex = origin;
+        var normal = vec3<f32>(0.0, 0.0, 1.0);
+        var sun_reach = far;
 
         // Fog: a homogeneous medium everywhere. Sample how far the ray goes
         // before it scatters; if that is before whatever it would reach,
@@ -1422,29 +1457,21 @@ fn main(@builtin(global_invocation_id) local_id: vec3<u32>) {
             let s = pulled_back - log(max(1.0 - random(&rng), 1e-7)) / p.fog.x;
             if (s < reach) {
                 met = true;
-                let point = origin + direction * s;
-                throughput = throughput * p.fog_color.rgb;
-                let to_sun = normalize(p.sun_direction.xyz);
                 // The fog does not dim the sun on its way in: an infinite
                 // medium would leave no sunlight at all.
-                let visible = shadow(point, to_sun, far);
-                radiance = radiance + energy(throughput * visible * p.sun_color.rgb * p.sun_intensity
-                    * hg_phase(dot(direction, to_sun), p.fog.y) * PI, deep);
-                direction = sample_hg(direction, p.fog.y, &rng);
-                origin = point;
+                throughput = throughput * p.fog_color.rgb;
+                scattered = true;
+                phase_g = p.fog.y;
+                vertex = origin + direction * s;
                 pulled_back = 0.0;
-                specular = false;
-                env_sampled = false;
                 // Fog scatters a path once: it spends the whole budget.
                 scatters = i32(p.fog.z);
-                continue;
             }
         }
-        if (t_ground > 0.0 && (!hit.hit || t_ground < hit.distance)) {
+        if (!scattered && t_ground > 0.0 && (!hit.hit || t_ground < hit.distance)) {
             met = true;
             let point = origin + direction * t_ground;
             let up = vec3<f32>(0.0, 0.0, 1.0);
-            let lifted = point + up * 0.001;
 
             // Distant ground dissolves into the sky *at the horizon*. Not
             // the background straight along the ray: below the horizon that
@@ -1458,182 +1485,191 @@ fn main(@builtin(global_invocation_id) local_id: vec3<u32>) {
             throughput = throughput * (1.0 - fade) * lined(p.ground_color.rgb, point, up, vec3<i32>(0), true);
 
             // A diffuse surface like any other: sun, emitters, a bounce.
-            let to_sun = normalize(p.sun_direction.xyz);
-            if (to_sun.z > 0.0) {
-                let visible = shadow(lifted, to_sun, 1e5);
-                radiance = radiance + energy(throughput * visible * p.sun_color.rgb * p.sun_intensity * to_sun.z, deep);
-            }
-            radiance = radiance + energy(throughput * sample_emitters(lifted, up, &rng), deep);
-            radiance = radiance + energy(throughput * sample_env(lifted, up, &rng), deep);
-
-            diffuse_events = diffuse_events + 1;
-            if (diffuse_events > i32(p.bounces)) {
-                if (p.sample.w > 0.5) {
-                    radiance = radiance + energy(throughput * background(up), deep);
+            vertex = point + up * 0.001;
+            normal = up;
+            sun_reach = 1e5;
+        } else if (!scattered) {
+            pulled_back = 0.0;
+            if (!hit.hit) {
+                // Only bounces light from the sky once the background is a
+                // colour or nothing: the camera does not see it.
+                if (met || p.look.x < 0.5) {
+                    radiance = radiance + energy(throughput * sky(direction, specular, env_sampled), deep);
                 }
                 break;
             }
-            // After a diffuse bounce, at most one more mirror or glass event.
-            specular_events = max(specular_events, i32(p.sample.x) - 1);
-            direction = sample_hemisphere(up, &rng);
-            origin = lifted;
-            specular = false;
-            env_sampled = true;
-            continue;
-        }
+            met = true;
 
-        pulled_back = 0.0;
-        if (!hit.hit) {
-            // Only bounces light from the sky once the background is a
-            // colour or nothing: the camera does not see it.
-            if (met || p.look.x < 0.5) {
-                radiance = radiance + energy(throughput * sky(direction, specular, env_sampled), deep);
+            let index = voxel_at(hit.cell);
+            var albedo = palette[index].rgb;
+            // Lines follow the cubes' faces; other shapes go without.
+            if (p.shape.x < 0.5 && (p.lines.x > 0.0 || p.lines.w > 0.0)) {
+                albedo = lined(albedo, hit.point, hit.normal, hit.cell, false);
             }
-            break;
-        }
-        met = true;
+            let m = materials[index];
+            let surface = hit.point;
+            // Offset off the surface, or the next ray re-hits the voxel it left.
+            let outside = surface + hit.normal * 0.001;
 
-        let index = voxel_at(hit.cell);
-        var albedo = palette[index].rgb;
-        // Lines follow the cubes' faces; other shapes go without.
-        if (p.shape.x < 0.5 && (p.lines.x > 0.0 || p.lines.w > 0.0)) {
-            albedo = lined(albedo, hit.point, hit.normal, hit.cell, false);
-        }
-        let m = materials[index];
-        let surface = hit.point;
-        // Offset off the surface, or the next ray re-hits the voxel it left.
-        let outside = surface + hit.normal * 0.001;
+            if ((m.kind == KIND_EMIT || m.kind == KIND_BLEND) && specular) {
+                radiance = radiance + energy(throughput * m.emission.rgb, deep);
+            }
 
-        if ((m.kind == KIND_EMIT || m.kind == KIND_BLEND) && specular) {
-            radiance = radiance + energy(throughput * m.emission.rgb, deep);
-        }
-
-        if (m.kind == KIND_MEDIA) {
-            let w = walk_medium(surface + direction * 0.001, direction, true, &rng);
-            radiance = radiance + energy(throughput * w.emitted, deep);
-            throughput = throughput * w.transmittance;
-            if (!w.scattered) {
-                // Straight through: on from where the medium ends, without
-                // spending a bounce.
-                origin = w.point + direction * 0.001;
-                crossings = crossings + 1;
-                if (crossings >= 32) {
-                    break;
+            if (m.kind == KIND_MEDIA) {
+                let w = walk_medium(surface + direction * 0.001, direction, true, &rng);
+                radiance = radiance + energy(throughput * w.emitted, deep);
+                throughput = throughput * w.transmittance;
+                if (!w.scattered) {
+                    // Straight through: on from where the medium ends,
+                    // without spending a bounce.
+                    origin = w.point + direction * 0.001;
+                    crossings = crossings + 1;
+                    if (crossings >= 32) {
+                        break;
+                    }
+                    continue;
                 }
-                continue;
+                // Scattered inside: direct sun through the phase function,
+                // then a new direction drawn from it.
+                throughput = throughput * w.albedo;
+                scattered = true;
+                phase_g = w.g;
+                vertex = w.point;
+                scatters = scatters + 1;
+                last_scatter = scatters > i32(p.fog.z);
+                // After a scattering in a cloud, one more of each surface
+                // event.
+                diffuse_events = max(diffuse_events, i32(p.bounces) - 1);
+                specular_events = max(specular_events, i32(p.sample.x) - 1);
+            } else {
+                // Pick a lobe with probability equal to its weight.
+                // Throughput needs no correction for that choice: each lobe
+                // is sampled exactly as often as it contributes.
+                let lobe = random(&rng);
+
+                // Blend: metal for its share, then glass for its share of
+                // the rest, then diffuse.
+                let blend_glass = m.kind == KIND_BLEND && lobe >= m.amount
+                    && (lobe - m.amount) / max(1.0 - m.amount, 1e-6) < m.extra.x;
+                let mirror = (m.kind == KIND_METAL || m.kind == KIND_BLEND) && lobe < m.amount;
+                if (mirror || (m.kind == KIND_GLASS && lobe < m.amount) || blend_glass) {
+                    specular_events = specular_events + 1;
+                    if (specular_events > i32(p.sample.x)) {
+                        break;
+                    }
+                }
+                if (mirror) {
+                    // Mirror reflection, blurred by roughness. The CPU
+                    // already applied the editor's 0.15 scale, so this is
+                    // used as-is.
+                    let fuzz = m.roughness;
+                    let reflected = normalize(
+                        reflect(direction, hit.normal) + random_in_sphere(&rng) * fuzz
+                    );
+                    if (dot(reflected, hit.normal) <= 0.0) {
+                        break; // scattered into the surface: absorbed
+                    }
+                    throughput = throughput * albedo;
+                    direction = reflected;
+                    origin = outside;
+                    specular = true;
+                    env_sampled = false;
+                    continue;
+                }
+
+                if ((m.kind == KIND_GLASS && lobe < m.amount) || blend_glass) {
+                    let cos_i = -dot(direction, hit.normal);
+                    if (random(&rng) < fresnel(cos_i, m.ior)) {
+                        // Specular reflection off the glass, untinted.
+                        direction = reflect(direction, hit.normal);
+                        origin = outside;
+                        specular = true;
+                        env_sampled = false;
+                        continue;
+                    }
+
+                    // Refract in, walk through the glass, refract out -- or
+                    // reach an opaque voxel behind it, shaded on the next
+                    // iteration.
+                    let refracted = refract(direction, hit.normal, 1.0 / m.ior);
+                    let w = walk_glass(surface - hit.normal * 0.001, refracted, m.ior, far);
+                    if (w.outcome == 2u) {
+                        break;
+                    }
+                    throughput = throughput * absorb(albedo, m.emission.w, w.inside);
+                    origin = w.origin;
+                    direction = w.direction;
+                    if (w.outcome == 1u) {
+                        forced = true;
+                        forced_hit = w.hit;
+                    }
+                    specular = true;
+                    env_sampled = false;
+                    continue;
+                }
+
+                // Diffuse (also the non-metal / non-glass share of mixed
+                // materials, and the reflective part of emitters).
+                throughput = throughput * albedo;
+                vertex = outside;
+                normal = hit.normal;
             }
-            // Scattered inside: direct sun through the phase function, then
-            // a new direction drawn from it.
-            throughput = throughput * w.albedo;
-            let to_sun = normalize(p.sun_direction.xyz);
-            let visible = shadow(w.point, to_sun, far);
-            radiance = radiance + energy(throughput * visible * p.sun_color.rgb * p.sun_intensity
-                * hg_phase(dot(direction, to_sun), w.g) * PI, deep);
-            direction = sample_hg(direction, w.g, &rng);
-            origin = w.point;
-            specular = false;
-            env_sampled = false;
-            scatters = scatters + 1;
-            if (scatters > i32(p.fog.z)) {
-                break;
-            }
-            // After a scattering in a cloud, one more of each surface event.
-            diffuse_events = max(diffuse_events, i32(p.bounces) - 1);
-            specular_events = max(specular_events, i32(p.sample.x) - 1);
-            continue;
         }
 
-        // Pick a lobe with probability equal to its weight. Throughput needs
-        // no correction for that choice: each lobe is sampled exactly as
-        // often as it contributes.
-        let lobe = random(&rng);
-
-        // Blend: metal for its share, then glass for its share of the rest,
-        // then diffuse.
-        let blend_glass = m.kind == KIND_BLEND && lobe >= m.amount
-            && (lobe - m.amount) / max(1.0 - m.amount, 1e-6) < m.extra.x;
-        let mirror = (m.kind == KIND_METAL || m.kind == KIND_BLEND) && lobe < m.amount;
-        if (mirror || (m.kind == KIND_GLASS && lobe < m.amount) || blend_glass) {
-            specular_events = specular_events + 1;
-            if (specular_events > i32(p.sample.x)) {
-                break;
-            }
-        }
-        if (mirror) {
-            // Mirror reflection, blurred by roughness. The CPU already
-            // applied the editor's 0.15 scale, so this is used as-is.
-            let fuzz = m.roughness;
-            let reflected = normalize(
-                reflect(direction, hit.normal) + random_in_sphere(&rng) * fuzz
-            );
-            if (dot(reflected, hit.normal) <= 0.0) {
-                break; // scattered into the surface: absorbed
-            }
-            throughput = throughput * albedo;
-            direction = reflected;
-            origin = outside;
-            specular = true;
-            env_sampled = false;
-            continue;
-        }
-
-        if ((m.kind == KIND_GLASS && lobe < m.amount) || blend_glass) {
-            let cos_i = -dot(direction, hit.normal);
-            if (random(&rng) < fresnel(cos_i, m.ior)) {
-                // Specular reflection off the glass, untinted.
-                direction = reflect(direction, hit.normal);
-                origin = outside;
-                specular = true;
-                env_sampled = false;
-                continue;
-            }
-
-            // Refract in, walk through the glass, refract out -- or reach an
-            // opaque voxel behind it, shaded on the next iteration.
-            let refracted = refract(direction, hit.normal, 1.0 / m.ior);
-            let w = walk_glass(surface - hit.normal * 0.001, refracted, m.ior, far);
-            if (w.outcome == 2u) {
-                break;
-            }
-            throughput = throughput * absorb(albedo, m.emission.w, w.inside);
-            origin = w.origin;
-            direction = w.direction;
-            if (w.outcome == 1u) {
-                forced = true;
-                forced_hit = w.hit;
-            }
-            specular = true;
-            env_sampled = false;
-            continue;
-        }
-
-        // Diffuse (also the non-metal / non-glass share of mixed materials,
-        // and the reflective part of emitters).
-        throughput = throughput * albedo;
-
-        // Direct sun through one shadow ray.
+        // Direct light. The sun, weighted by the phase function in a medium
+        // and by the angle on a surface; on a surface also the emissive
+        // voxels and the map.
         let to_sun = normalize(p.sun_direction.xyz);
-        let facing = dot(hit.normal, to_sun);
-        if (facing > 0.0) {
-            let visible = shadow(outside, to_sun, far);
-            radiance = radiance + energy(throughput * visible * p.sun_color.rgb * p.sun_intensity * facing, deep);
+        var sun_weight = dot(normal, to_sun);
+        if (scattered) {
+            sun_weight = hg_phase(dot(direction, to_sun), phase_g) * PI;
         }
-
-        // Direct light from emissive voxels.
-        radiance = radiance + energy(throughput * sample_emitters(outside, hit.normal, &rng), deep);
-        radiance = radiance + energy(throughput * sample_env(outside, hit.normal, &rng), deep);
+        var env: EnvSample;
+        env.light = vec3<f32>(0.0);
+        var rays = 1;
+        if (!scattered) {
+            radiance = radiance + energy(throughput * sample_emitters(vertex, normal, &rng), deep);
+            env = pick_env(normal, &rng);
+            rays = 2;
+        }
+        // The shadow rays toward the sun and the map's sample, from one
+        // call in a loop: a second call was a second copy of the grid walk.
+        for (var ray = 0; ray < rays; ray = ray + 1) {
+            var toward = to_sun;
+            var reach = sun_reach;
+            var light = p.sun_color.rgb * p.sun_intensity * sun_weight;
+            if (ray == 1) {
+                toward = env.direction;
+                reach = 1e5;
+                light = env.light;
+            }
+            if ((sun_weight > 0.0 || ray == 1) && any(light > vec3<f32>(0.0))) {
+                radiance = radiance + energy(throughput * shadow(vertex, toward, reach) * light, deep);
+            }
+        }
+        if (scattered) {
+            if (last_scatter) {
+                break;
+            }
+            direction = sample_hg(direction, phase_g, &rng);
+            origin = vertex;
+            specular = false;
+            env_sampled = false;
+            continue;
+        }
 
         diffuse_events = diffuse_events + 1;
         if (diffuse_events > i32(p.bounces)) {
             if (p.sample.w > 0.5) {
-                radiance = radiance + energy(throughput * background(hit.normal), deep);
+                radiance = radiance + energy(throughput * background(normal), deep);
             }
             break;
         }
+        // After a diffuse bounce, at most one more mirror or glass event.
         specular_events = max(specular_events, i32(p.sample.x) - 1);
         // Cosine-weighted bounce; the lambertian term cancels.
-        direction = sample_hemisphere(hit.normal, &rng);
-        origin = outside;
+        direction = sample_hemisphere(normal, &rng);
+        origin = vertex;
         specular = false;
         env_sampled = true;
     }
