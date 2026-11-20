@@ -140,12 +140,33 @@ fn main() -> eframe::Result {
     if let Some(message) = windows_graphics::configure(&mut options) {
         eprintln!("[voxferro] {message}");
     }
+    pick_adapter_by_name(&mut options);
 
     eframe::run_native(
         "Voxferro",
         options,
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
+}
+
+/// `WGPU_ADAPTER_NAME`, if set: the first adapter whose name contains it,
+/// ignoring case -- e.g. `Basic Render` with `WGPU_BACKEND=dx12` for WARP,
+/// the software rasteriser CI renders with, on any Windows machine. wgpu
+/// reads this variable only in a helper eframe does not call.
+fn pick_adapter_by_name(options: &mut eframe::NativeOptions) {
+    let Some(wanted) = std::env::var("WGPU_ADAPTER_NAME").ok().filter(|n| !n.is_empty()) else { return };
+    let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup else { return };
+    let wanted = wanted.to_lowercase();
+    setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters: &[wgpu::Adapter], _surface| {
+        adapters
+            .iter()
+            .find(|a| a.get_info().name.to_lowercase().contains(&wanted))
+            .cloned()
+            .ok_or_else(|| {
+                let names: Vec<String> = adapters.iter().map(|a| a.get_info().name).collect();
+                format!("no adapter named like WGPU_ADAPTER_NAME; there are: {}", names.join(", "))
+            })
+    }));
 }
 
 /// The `assets` folder, first found of:
