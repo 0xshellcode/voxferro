@@ -13,18 +13,28 @@
 //! an empty allowlist, so any request a browser marks with an `Origin` is
 //! rejected. Writing over an existing file needs the user's yes in the
 //! window (see `App::mcp_poll`).
+//!
+//! `rmcp` speaks every protocol version from 2024-11-05 to the stateless
+//! 2026-07-28 one (no session, the version on each request). The tools carry
+//! annotations (which only read, which may destroy) so a client can approve
+//! the harmless ones by itself; `describe_scene` answers with structured
+//! content and its schema; a render reports its samples as progress, and a
+//! client that cancels a call drops it from the editor too.
 
 use eframe::egui;
 use rmcp::{
-    ErrorData, ServerHandler,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig},
+    ErrorData, Peer, RoleServer, ServerHandler,
+    handler::server::{common::schema_for_output, router::tool::ToolRouter, wrapper::Parameters},
+    model::{
+        CallToolResult, ContentBlock, Implementation, ProgressNotificationParam, ProgressToken, RequestMetaObject,
+        ServerCapabilities, ServerConfig,
+    },
     tool, tool_handler, tool_router,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -54,11 +64,81 @@ pub enum Reply {
     Text(String),
     Error(String),
     Png(Vec<u8>),
+    Scene(Box<SceneDescription>),
 }
 
 pub struct Request {
     pub op: Op,
+    /// Closed when the client cancelled the call or gave up waiting: the
+    /// editor then drops what it was keeping for it.
     pub reply: tokio::sync::oneshot::Sender<Reply>,
+    /// How far a long request has got (a render's samples so far), for the
+    /// client's progress notifications.
+    pub progress: tokio::sync::watch::Sender<u32>,
+}
+
+/// The open document, as `describe_scene` returns it.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct SceneDescription {
+    /// The document's name.
+    pub file: String,
+    /// Where it was loaded from or last saved; null for a new model.
+    pub path: Option<String>,
+    pub unsaved_changes: bool,
+    pub models: Vec<ModelInfo>,
+    /// Models placed in the scene: one model can be placed many times.
+    pub instances: Vec<InstanceInfo>,
+    /// Index into `instances`.
+    pub selected_instance: usize,
+    /// Index into `models` of the model edits go to.
+    pub selected_model: Option<usize>,
+    pub layers: Vec<LayerInfo>,
+    pub colours_in_use: Vec<ColourUse>,
+    /// The palette index painting uses.
+    pub brush_colour: u8,
+    pub animation_frame: u32,
+    /// Whether the editor shows the path tracer.
+    pub rendering: bool,
+    pub undo_steps: usize,
+    /// How to read the coordinates.
+    pub axes: String,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ModelInfo {
+    pub index: usize,
+    /// Cells along x, y, z.
+    pub size: [u32; 3],
+    /// Filled cells.
+    pub voxels: u64,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct InstanceInfo {
+    pub index: usize,
+    /// Index into `models`.
+    pub model: usize,
+    /// World position of the model's centre, in voxels.
+    pub position: [i32; 3],
+    pub layer: i32,
+    pub hidden: bool,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct LayerInfo {
+    pub id: i32,
+    pub name: Option<String>,
+    pub hidden: bool,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ColourUse {
+    /// Palette index 1-255.
+    pub index: u8,
+    /// `#rrggbb`.
+    pub hex: String,
+    /// Voxels of this colour across all models.
+    pub voxels: u64,
 }
 
 /// The running server. Dropping it stops it.
@@ -184,52 +264,113 @@ impl Editor {
         Self { sender, ctx, tool_router: Self::tool_router() }
     }
 
-    async fn ask(&self, op: Op) -> CallToolResult {
-        let (reply, answer) = tokio::sync::oneshot::channel();
-        if self.sender.send(Request { op, reply }).is_err() {
+    /// Sends `op` to the editor and waits for its answer, the client's
+    /// cancellation or the timeout. With `progress`, every change the editor
+    /// reports goes to the client as a progress notification out of `total`.
+    async fn ask(&self, op: Op, ct: CancellationToken, progress: Option<(Peer<RoleServer>, ProgressToken, u32)>) -> CallToolResult {
+        let (reply, mut answer) = tokio::sync::oneshot::channel();
+        let (progress_sender, mut done) = tokio::sync::watch::channel(0u32);
+        if self.sender.send(Request { op, reply, progress: progress_sender }).is_err() {
             return error("the editor has closed");
         }
         self.ctx.request_repaint();
-        match tokio::time::timeout(REPLY_TIMEOUT, answer).await {
-            Ok(Ok(Reply::Text(t))) => CallToolResult::success(vec![ContentBlock::text(t)]),
-            Ok(Ok(Reply::Error(e))) => error(e),
-            Ok(Ok(Reply::Png(png))) => CallToolResult::success(vec![ContentBlock::image(base64(&png), "image/png")]),
-            Ok(Err(_)) => error("the editor dropped the request"),
-            Err(_) => error("the editor did not answer in time"),
+        let deadline = tokio::time::sleep(REPLY_TIMEOUT);
+        tokio::pin!(deadline);
+        let mut watching = progress.is_some();
+        // Dropping `answer` on the way out (cancelled, timed out) closes the
+        // editor's sender, which is how it learns to stop waiting too.
+        loop {
+            tokio::select! {
+                result = &mut answer => return match result {
+                    Ok(Reply::Text(t)) => CallToolResult::success(vec![ContentBlock::text(t)]),
+                    Ok(Reply::Error(e)) => error(e),
+                    Ok(Reply::Png(png)) => CallToolResult::success(vec![ContentBlock::image(base64(&png), "image/png")]),
+                    Ok(Reply::Scene(scene)) => match serde_json::to_value(scene) {
+                        Ok(value) => CallToolResult::structured(value),
+                        Err(e) => error(e.to_string()),
+                    },
+                    Err(_) => error("the editor dropped the request"),
+                },
+                _ = ct.cancelled() => {
+                    // Wake the editor so it sees the request is gone.
+                    drop(answer);
+                    self.ctx.request_repaint();
+                    return error("cancelled");
+                }
+                _ = &mut deadline => {
+                    drop(answer);
+                    self.ctx.request_repaint();
+                    return error("the editor did not answer in time");
+                }
+                changed = done.changed(), if watching => {
+                    let Ok(()) = changed else {
+                        watching = false;
+                        continue;
+                    };
+                    let so_far = *done.borrow_and_update();
+                    if let Some((peer, token, total)) = &progress {
+                        let note = ProgressNotificationParam::new(token.clone(), so_far as f64)
+                            .with_total(*total as f64)
+                            .with_message(format!("{so_far} of {total} samples"));
+                        let _ = peer.notify_progress(note).await;
+                    }
+                }
+            }
         }
     }
 
-    #[tool(description = "Run one line of the editor's console: the same commands its buttons use. \
-        Edits go into the undo history. Send `help` for the list. Returns the console's output.")]
-    async fn run_command(&self, Parameters(a): Parameters<CommandArgs>) -> Result<CallToolResult, ErrorData> {
-        Ok(self.ask(Op::Command(a.command)).await)
+    #[tool(
+        title = "Run a console command",
+        description = "Run one line of the editor's console: the same commands its buttons use. \
+            Edits go into the undo history. Send `help` for the list. Returns the console's output.",
+        annotations(destructive_hint = true, open_world_hint = false)
+    )]
+    async fn run_command(&self, Parameters(a): Parameters<CommandArgs>, ct: CancellationToken) -> Result<CallToolResult, ErrorData> {
+        Ok(self.ask(Op::Command(a.command), ct, None).await)
     }
 
-    #[tool(description = "Run several console lines in order as one undo step: much faster than \
-        one run_command per line. Stops at the first line that fails. Returns each line's output.")]
-    async fn run_commands(&self, Parameters(a): Parameters<BatchArgs>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        title = "Run console commands",
+        description = "Run several console lines in order as one undo step: much faster than \
+            one run_command per line. Stops at the first line that fails. Returns each line's output.",
+        annotations(destructive_hint = true, open_world_hint = false)
+    )]
+    async fn run_commands(&self, Parameters(a): Parameters<BatchArgs>, ct: CancellationToken) -> Result<CallToolResult, ErrorData> {
         if a.commands.is_empty() {
             return Ok(error("no commands given"));
         }
-        Ok(self.ask(Op::Batch(a.commands)).await)
+        Ok(self.ask(Op::Batch(a.commands), ct, None).await)
     }
 
-    #[tool(description = "List the palette: each index 1-255 with its colour as hex, and its \
-        material when it is not plain diffuse. Use it to pick colours before building.")]
-    async fn get_palette(&self) -> Result<CallToolResult, ErrorData> {
-        Ok(self.ask(Op::Palette).await)
+    #[tool(
+        title = "List the palette",
+        description = "List the palette: each index 1-255 with its colour as hex, and its \
+            material when it is not plain diffuse. Use it to pick colours before building.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_palette(&self, ct: CancellationToken) -> Result<CallToolResult, ErrorData> {
+        Ok(self.ask(Op::Palette, ct, None).await)
     }
 
-    #[tool(description = "Describe the open document as JSON: file, models with their sizes and \
-        voxel counts, placed instances, layers, the colours in use, the selected model, the \
-        animation frame and whether there are unsaved changes.")]
-    async fn describe_scene(&self) -> Result<CallToolResult, ErrorData> {
-        Ok(self.ask(Op::Describe).await)
+    #[tool(
+        title = "Describe the scene",
+        description = "Describe the open document: file, models with their sizes and voxel \
+            counts, placed instances, layers, the colours in use, the selected model, the \
+            animation frame and whether there are unsaved changes.",
+        output_schema = schema_for_output::<SceneDescription>(),
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn describe_scene(&self, ct: CancellationToken) -> Result<CallToolResult, ErrorData> {
+        Ok(self.ask(Op::Describe, ct, None).await)
     }
 
-    #[tool(description = "Set voxels of the selected model, as one undo step. Coordinates are \
-        the model's own cells, z up; colour 0 erases.")]
-    async fn set_voxels(&self, Parameters(a): Parameters<VoxelArgs>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        title = "Set voxels",
+        description = "Set voxels of the selected model, as one undo step. Coordinates are \
+            the model's own cells, z up; colour 0 erases.",
+        annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn set_voxels(&self, Parameters(a): Parameters<VoxelArgs>, ct: CancellationToken) -> Result<CallToolResult, ErrorData> {
         if a.voxels.is_empty() {
             return Ok(error("no voxels given"));
         }
@@ -237,33 +378,53 @@ impl Editor {
         for v in &a.voxels {
             line.push_str(&format!(" {} {} {} {}", v[0], v[1], v[2], v[3]));
         }
-        Ok(self.ask(Op::Command(line)).await)
+        Ok(self.ask(Op::Command(line), ct, None).await)
     }
 
-    #[tool(description = "Open a .vox file. With unsaved changes the editor asks the user first.")]
-    async fn open_file(&self, Parameters(a): Parameters<PathArgs>) -> Result<CallToolResult, ErrorData> {
-        Ok(self.ask(Op::Command(format!("open {}", a.path))).await)
+    #[tool(
+        title = "Open a file",
+        description = "Open a .vox file. With unsaved changes the editor asks the user first.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn open_file(&self, Parameters(a): Parameters<PathArgs>, ct: CancellationToken) -> Result<CallToolResult, ErrorData> {
+        Ok(self.ask(Op::Command(format!("open {}", a.path)), ct, None).await)
     }
 
-    #[tool(description = "Save the document as .vox. Writing over an existing file (including the \
-        file's own path) waits for the user to allow it in the editor.")]
-    async fn save_file(&self, Parameters(a): Parameters<SaveArgs>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        title = "Save the document",
+        description = "Save the document as .vox. Writing over an existing file (including the \
+            file's own path) waits for the user to allow it in the editor.",
+        annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn save_file(&self, Parameters(a): Parameters<SaveArgs>, ct: CancellationToken) -> Result<CallToolResult, ErrorData> {
         let line = match a.path {
             Some(p) => format!("save {p}"),
             None => "save".to_owned(),
         };
-        Ok(self.ask(Op::Command(line)).await)
+        Ok(self.ask(Op::Command(line), ct, None).await)
     }
 
-    #[tool(description = "Capture what the editor shows as a PNG: the editor view, or with \
-        render=true the path traced image after the given number of samples.")]
-    async fn capture_view(&self, Parameters(a): Parameters<CaptureArgs>) -> Result<CallToolResult, ErrorData> {
-        let op = Op::Capture {
-            render: a.render,
-            samples: a.samples.unwrap_or(64).clamp(1, 4096),
-            max_size: a.max_size.unwrap_or(1024).clamp(64, 4096),
+    #[tool(
+        title = "Capture the view",
+        description = "Capture what the editor shows as a PNG: the editor view, or with \
+            render=true the path traced image after the given number of samples. A render \
+            reports its samples as progress when the client asks for it.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn capture_view(
+        &self,
+        Parameters(a): Parameters<CaptureArgs>,
+        ct: CancellationToken,
+        meta: RequestMetaObject,
+        peer: Peer<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let samples = a.samples.unwrap_or(64).clamp(1, 4096);
+        let op = Op::Capture { render: a.render, samples, max_size: a.max_size.unwrap_or(1024).clamp(64, 4096) };
+        let progress = match meta.get_progress_token() {
+            Some(token) if a.render => Some((peer, token, samples)),
+            _ => None,
         };
-        Ok(self.ask(op).await)
+        Ok(self.ask(op, ct, progress).await)
     }
 }
 

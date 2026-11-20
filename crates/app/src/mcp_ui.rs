@@ -20,6 +20,8 @@ pub struct PendingCapture {
     samples: u32,
     max_size: u32,
     reply: Sender<Reply>,
+    /// The render's samples so far, for the client's progress.
+    progress: tokio::sync::watch::Sender<u32>,
 }
 
 impl App {
@@ -67,7 +69,10 @@ impl App {
                     let _ = request.reply.send(Reply::Text(self.palette_listing()));
                 }
                 Op::Describe => {
-                    let _ = request.reply.send(Reply::Text(self.describe()));
+                    let _ = request.reply.send(match self.describe() {
+                        Some(scene) => Reply::Scene(Box::new(scene)),
+                        None => Reply::Error("no document is open".to_owned()),
+                    });
                 }
                 Op::Capture { render, samples, max_size } => {
                     if let Some(old) = self.mcp_capture.take() {
@@ -77,7 +82,8 @@ impl App {
                         self.rendering = render;
                         self.path_tracer.reset();
                     }
-                    self.mcp_capture = Some(PendingCapture { render, samples, max_size, reply: request.reply });
+                    self.mcp_capture =
+                        Some(PendingCapture { render, samples, max_size, reply: request.reply, progress: request.progress });
                     ctx.request_repaint();
                 }
             }
@@ -132,7 +138,7 @@ impl App {
                     break;
                 }
                 Reply::Text(t) => out.push(format!("> {line}\n{t}")),
-                Reply::Png(_) => {}
+                Reply::Png(_) | Reply::Scene(_) => {}
             }
         }
         let steps = self.history.end_group();
@@ -179,6 +185,12 @@ impl App {
     /// Asks the user whether an agent may write over a file.
     pub fn mcp_confirm_ui(&mut self, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
         let Some(pending) = &self.mcp_write else { return };
+        // The agent cancelled or stopped waiting: nothing left to ask.
+        if pending.reply.is_closed() {
+            self.console_log.push(format!("mcp: write to {} withdrawn", pending.path.display()));
+            self.mcp_write = None;
+            return;
+        }
         let mut choice = None;
         egui::Modal::new(egui::Id::new("mcp write")).show(ctx, |ui| {
             ui.heading("An agent wants to write a file");
@@ -210,7 +222,15 @@ impl App {
     /// render.
     pub fn mcp_finish_capture(&mut self, ctx: &egui::Context, state: &egui_wgpu::RenderState) {
         let Some(capture) = &self.mcp_capture else { return };
+        if capture.reply.is_closed() {
+            eprintln!("[voxferro] mcp: capture cancelled");
+            self.console_log.push("mcp: capture cancelled".to_owned());
+            self.mcp_capture = None;
+            return;
+        }
         if capture.render && self.path_tracer.samples < capture.samples {
+            let so_far = self.path_tracer.samples;
+            capture.progress.send_if_modified(|v| std::mem::replace(v, so_far) != so_far);
             ctx.request_repaint();
             return;
         }
@@ -231,73 +251,67 @@ impl App {
         let _ = capture.reply.send(reply);
     }
 
-    /// The document as JSON, for `describe_scene`.
-    pub fn describe(&self) -> String {
-        let Some(loaded) = &self.scene else {
-            return serde_json::json!({ "document": null }).to_string();
-        };
+    /// The open document, for `describe_scene`.
+    pub fn describe(&self) -> Option<mcp::SceneDescription> {
+        let loaded = self.scene.as_ref()?;
         let doc = &loaded.doc;
         let mut colours = [0u64; 256];
-        let models: Vec<_> = doc
+        let models = doc
             .scene
             .models
             .iter()
             .enumerate()
-            .map(|(i, v)| {
+            .map(|(index, v)| {
                 let h = v.histogram();
                 for (c, n) in h.iter().enumerate().skip(1) {
                     colours[c] += n;
                 }
-                let filled: u64 = h[1..].iter().sum();
-                serde_json::json!({ "index": i, "size": v.size(), "voxels": filled })
+                mcp::ModelInfo { index, size: v.size(), voxels: h[1..].iter().sum() }
             })
             .collect();
-        let instances: Vec<_> = doc
+        let instances = doc
             .scene
             .instances
             .iter()
             .enumerate()
-            .map(|(i, inst)| {
-                serde_json::json!({
-                    "index": i,
-                    "model": inst.model_index,
-                    "position": inst.transform.translation.to_array(),
-                    "layer": inst.layer,
-                    "hidden": inst.hidden,
-                })
+            .map(|(index, inst)| mcp::InstanceInfo {
+                index,
+                model: inst.model_index,
+                position: inst.transform.translation.to_array(),
+                layer: inst.layer,
+                hidden: inst.hidden,
             })
             .collect();
-        let layers: Vec<_> = doc
+        let layers = doc
             .layers
             .iter()
-            .map(|l| serde_json::json!({ "id": l.id, "name": l.name(), "hidden": l.is_hidden() }))
+            .map(|l| mcp::LayerInfo { id: l.id, name: l.name().map(str::to_owned), hidden: l.is_hidden() })
             .collect();
-        let used: Vec<_> = colours
+        let colours_in_use = colours
             .iter()
             .enumerate()
             .filter(|(c, n)| *c > 0 && **n > 0)
             .map(|(c, n)| {
                 let k = doc.palette.color(c as u8);
-                serde_json::json!({ "index": c, "hex": format!("#{:02x}{:02x}{:02x}", k.r, k.g, k.b), "voxels": n })
+                mcp::ColourUse { index: c as u8, hex: format!("#{:02x}{:02x}{:02x}", k.r, k.g, k.b), voxels: *n }
             })
             .collect();
-        serde_json::json!({
-            "file": loaded.name,
-            "path": loaded.path,
-            "unsaved_changes": self.is_dirty(),
-            "models": models,
-            "instances": instances,
-            "selected_instance": self.selected,
-            "selected_model": self.selected_model(),
-            "layers": layers,
-            "colours_in_use": used,
-            "brush_colour": self.brush_color,
-            "animation_frame": doc.scene.frame,
-            "rendering": self.rendering,
-            "undo_steps": self.history.undo_depth(),
-            "axes": "z is up; voxel coordinates are each model's own cells",
+        Some(mcp::SceneDescription {
+            file: loaded.name.clone(),
+            path: loaded.path.clone(),
+            unsaved_changes: self.is_dirty(),
+            models,
+            instances,
+            selected_instance: self.selected,
+            selected_model: self.selected_model(),
+            layers,
+            colours_in_use,
+            brush_colour: self.brush_color,
+            animation_frame: doc.scene.frame,
+            rendering: self.rendering,
+            undo_steps: self.history.undo_depth(),
+            axes: "z is up; voxel coordinates are each model's own cells".to_owned(),
         })
-        .to_string()
     }
 
     /// The panel section that switches the server on and off.

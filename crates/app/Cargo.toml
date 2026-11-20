@@ -42,7 +42,7 @@ trash = { version = "5.2", default-features = false, features = ["coinit_apartme
 
 # Control by MCP (src/mcp.rs): the official Rust SDK, served over
 # streamable HTTP with axum on a tokio runtime of its own thread.
-rmcp = { version = "3.5.1", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { version = "3.11.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 tokio = { version = "1", features = ["rt", "net", "sync", "time"] }
 tokio-util = "0.7"
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
