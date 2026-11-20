@@ -182,24 +182,88 @@ cargo run -p voxferro -- --run "new 16" --run "brush attach box" --drag 0.3 0.7 
 `--make-ico` and `--make-icon-set` are packaging tooling, used by the icon
 and package scripts.
 
-To let an agent use the editor over MCP (only on `127.0.0.1`, off by
-default; it can also be turned on from the *Agents (MCP)* section of the panel):
+### Driving the editor from an agent (MCP)
+
+Voxferro can run a [Model Context Protocol](https://modelcontextprotocol.io)
+server, so an LLM agent can build, inspect and render through it. The
+server is off by default, and when on it listens only on `127.0.0.1`. Start
+it with `--mcp`, or tick *Let agents use the editor* in the *Agents (MCP)*
+section of the panel (which also shows the port and a ready-made command
+to copy):
 
 ```bash
-cargo run -p voxferro -- --mcp                          # listens on 127.0.0.1:47800
+cargo run -p voxferro -- --mcp          # listens on http://127.0.0.1:47800/mcp
+voxferro --mcp 47900                    # an installed build, on another port
+```
+
+It is a Streamable HTTP server and speaks every protocol version from
+2024-11-05 to 2026-07-28, so any current client connects to the URL as it
+is, with no authentication. Point your agent at it while Voxferro is
+running:
+
+**Claude Code**: one command (add `--scope user` to have it in every
+project):
+
+```bash
 claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp
 ```
+
+**Codex**: `codex mcp add voxferro --url http://127.0.0.1:47800/mcp`, or in
+`~/.codex/config.toml` (or a trusted project's `.codex/config.toml`):
+
+```toml
+[mcp_servers.voxferro]
+url = "http://127.0.0.1:47800/mcp"
+```
+
+**opencode**: `opencode mcp add voxferro --url http://127.0.0.1:47800/mcp`
+(add `--global` for every project), or in `opencode.json`. The server needs
+no sign-in, so turn OAuth off rather than letting opencode look for it:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "voxferro": {
+        "type": "remote",
+        "url": "http://127.0.0.1:47800/mcp",
+        "oauth": false
+      }
+    }
+  }
+}
+```
+
+Versions of opencode before its v2 configuration put the entry straight
+under `"mcp"`, without `"servers"`.
+
+With another port, change `47800` in the URL. Then ask the agent for
+something, for example *"build a small stone tower with a red roof in
+Voxferro and show me a render"*: it starts with `describe_scene` and
+`get_palette`, builds with `run_commands`, and looks at its work with
+`capture_view`.
 
 | Tool | What it does |
 |---|---|
 | `run_command` | Runs one console line; edits go into the undo history |
 | `run_commands` | Runs several lines in order as one undo step, stopping at the first failure |
 | `get_palette` | Lists indices 1–255 with their colours as hex, and non-diffuse materials |
-| `describe_scene` | The open document as JSON: models, instances, layers, colours in use, frame, unsaved changes |
+| `describe_scene` | The open document as structured JSON (with its schema): models, instances, layers, colours in use, frame, unsaved changes |
 | `set_voxels` | Sets voxels of the selected model (its own cells, z up; colour 0 erases), as one undo step |
 | `open_file` | Opens a `.vox`; with unsaved changes the editor asks first |
 | `save_file` | Saves as `.vox`; writing over an existing file waits for the user's permission |
-| `capture_view` | The editor view as a PNG, or the path traced image after some samples |
+| `capture_view` | The editor view as a PNG, or the path traced image after some samples, reporting them as progress |
+
+The tools carry annotations: `get_palette`, `describe_scene` and
+`capture_view` are marked read-only, so a client can let the agent use them
+without asking each time, while the ones that edit or save are marked as
+changing the document. Cancelling a call in the client also drops it in the
+editor, a long render included. Everything an agent does goes into the undo
+history like any edit, and writing over an existing file always waits for a
+yes in the editor's window.
+
+### Building the app
 
 As a macOS application, with its icon:
 
@@ -305,7 +369,7 @@ fractions of the viewport (see the flags above).
 | Dialogs | `rfd` 0.17 | Native open and save panels |
 | PNG | `miniz_oxide` 0.9 | DEFLATE for the exported frames |
 | Icons | `egui-phosphor` 0.14 | Phosphor's icons, built for egui 0.36 |
-| MCP | `rmcp` 3.5 | The official Rust MCP SDK, for the agent server |
+| MCP | `rmcp` 3.11 | The official Rust MCP SDK, for the agent server |
 
 `eframe` and `wgpu` resolve to a **single** `wgpu v30.0.1` in the graph. If
 two versions show up, the types stop being assignable to each other and the
