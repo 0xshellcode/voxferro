@@ -299,20 +299,48 @@ cargo test --workspace</code></pre>
 
     <section id="mcp">
       <h2>Controlado por un agente</h2>
-      <p>Voxferro incluye un servidor <strong>MCP</strong> (Model Context Protocol), el protocolo que usa un asistente como Claude para llamar a herramientas externas. Con <code>--mcp</code>, o desde el panel, escucha en <code>127.0.0.1:47800</code>.</p>
-      <pre><code>cargo run -p voxferro -- --mcp
-claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
+      <p>Voxferro incluye un servidor <strong>MCP</strong> (Model Context Protocol), el protocolo que usan los agentes de IA para llamar a herramientas externas. Con <code>--mcp</code>, o desde el panel, escucha en <code>127.0.0.1:47800</code>. Es un servidor Streamable HTTP que habla todas las versiones del protocolo, de la 2024-11-05 a la 2026-07-28, sin inicio de sesión, así que cualquier cliente actual se conecta a su URL tal cual.</p>
+      <pre><code>cargo run -p voxferro -- --mcp      <span class="c"># o bien: voxferro --mcp [puerto]</span></code></pre>
+      <p>Con Voxferro abierto, apunta el agente a él. Con otro puerto, cambia <code>47800</code> en la URL.</p>
+      <h3>Claude Code</h3>
+      <pre><code>claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
+      <h3>Codex</h3>
+      <p>Un comando, o una tabla en <code>~/.codex/config.toml</code> (o en el <code>.codex/config.toml</code> de un proyecto de confianza):</p>
+      <pre><code>codex mcp add voxferro --url http://127.0.0.1:47800/mcp
+
+<span class="c"># ~/.codex/config.toml</span>
+[mcp_servers.voxferro]
+url = "http://127.0.0.1:47800/mcp"</code></pre>
+      <h3>opencode</h3>
+      <p>Un comando (con <code>--global</code>, para todos los proyectos), o una entrada en <code>opencode.json</code>. El servidor no pide inicio de sesión, así que OAuth va desactivado; las versiones anteriores a la configuración v2 de opencode ponen la entrada directamente bajo <code>"mcp"</code>, sin <code>"servers"</code>.</p>
+      <pre><code>opencode mcp add voxferro --url http://127.0.0.1:47800/mcp
+
+<span class="c">// opencode.json</span>
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "voxferro": {
+        "type": "remote",
+        "url": "http://127.0.0.1:47800/mcp",
+        "oauth": false
+      }
+    }
+  }
+}</code></pre>
+      <p>Después pídele algo, por ejemplo <em>«construye en Voxferro una torre pequeña de piedra con el tejado rojo y enséñame un render»</em>: el agente empieza con <code>describe_scene</code> y <code>get_palette</code>, construye con <code>run_commands</code> y mira su trabajo con <code>capture_view</code>.</p>
       <p>El servidor corre en su propio hilo, con su propio runtime de <code>tokio</code>, y <strong>nunca toca el documento</strong>. Cada llamada se convierte en una petición al hilo de la interfaz, que la ejecuta entre fotogramas como si se hubiera tecleado en la consola: el mismo intérprete, el mismo historial de deshacer. La respuesta vuelve por un canal <em>oneshot</em>.</p>
       <div class="table wide"><table>
         <thead><tr><th>Herramienta</th><th>Qué hace</th></tr></thead>
         <tbody>
           <tr><td><code>run_command</code>, <code>run_commands</code></td><td>Ejecuta una línea de consola, o varias como un solo paso de deshacer.</td></tr>
-          <tr><td><code>describe_scene</code>, <code>get_palette</code></td><td>Describe el documento y la paleta en JSON.</td></tr>
+          <tr><td><code>describe_scene</code>, <code>get_palette</code></td><td>Describe el documento (en JSON estructurado, con su esquema) y la paleta.</td></tr>
           <tr><td><code>set_voxels</code></td><td>Escribe los vóxeles indicados en el modelo seleccionado.</td></tr>
-          <tr><td><code>capture_view</code></td><td>Devuelve la vista del editor o el render como PNG, para que el agente vea lo que hizo.</td></tr>
+          <tr><td><code>capture_view</code></td><td>Devuelve la vista del editor o el render como PNG, para que el agente vea lo que hizo; un render va informando de sus muestras.</td></tr>
           <tr><td><code>open_file</code>, <code>save_file</code></td><td>Abre y guarda; sobrescribir un archivo requiere el sí de la persona.</td></tr>
         </tbody>
       </table></div>
+      <p>Las herramientas llevan <strong>anotaciones</strong>: las que solo leen (<code>describe_scene</code>, <code>get_palette</code>, <code>capture_view</code>) van marcadas como tales, y un cliente puede dejar que el agente las use sin preguntar cada vez. Cancelar una llamada en el cliente también la suelta en el editor, incluido un render largo.</p>
       <p><strong>Seguridad:</strong> solo acepta conexiones locales, rechaza cualquier petición que un navegador marque con un <code>Origin</code> (contra ataques desde páginas web) y nunca sobrescribe un archivo sin una confirmación en la ventana.</p>
     </section>
 
@@ -324,7 +352,7 @@ claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
         <li><strong>Clippy</strong> con <code>-D warnings</code>: cualquier advertencia hace fallar la CI.</li>
       </ul>
       <h3>Integración continua</h3>
-      <p>Con cada push, GitHub Actions compila y prueba en Linux y Windows, y ejecuta tres pruebas de humo: abrir la vista del editor, renderizar una escena con el path tracer (y comprobar el brillo medio de la imagen) y una sesión MCP completa. Las máquinas de la CI no tienen GPU: Linux usa lavapipe (Vulkan por software) y Windows <strong>WARP</strong>, el rasterizador por software de DirectX, que encontró fallos reales:</p>
+      <p>Con cada push, GitHub Actions compila y prueba en Linux y Windows, y ejecuta tres pruebas de humo: abrir la vista del editor, renderizar una escena con el path tracer (y comprobar el brillo medio de la imagen) y una sesión MCP con los dos protocolos: con sesión, como antes, y sin ella, como en la 2026-07-28. Las máquinas de la CI no tienen GPU: Linux usa lavapipe (Vulkan por software) y Windows <strong>WARP</strong>, el rasterizador por software de DirectX, que encontró fallos reales:</p>
       <ul>
         <li>La pila del hilo principal (1 MB) se desbordaba al compilar el shader; <code>build.rs</code> la sube a 16 MB.</li>
         <li>El compilador FXC no puede escribir en un vector a través de un índice variable (<code>v[axis] = …</code>), así que se usan máscaras.</li>

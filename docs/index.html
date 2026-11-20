@@ -299,20 +299,48 @@ cargo test --workspace</code></pre>
 
     <section id="mcp">
       <h2>Driven by an agent</h2>
-      <p>Voxferro includes an <strong>MCP</strong> server (Model Context Protocol), the protocol an assistant such as Claude uses to call external tools. With <code>--mcp</code>, or from the panel, it listens on <code>127.0.0.1:47800</code>.</p>
-      <pre><code>cargo run -p voxferro -- --mcp
-claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
+      <p>Voxferro includes an <strong>MCP</strong> server (Model Context Protocol), the protocol AI agents use to call external tools. With <code>--mcp</code>, or from the panel, it listens on <code>127.0.0.1:47800</code>. It is a Streamable HTTP server that speaks every protocol version from 2024-11-05 to 2026-07-28, with no sign-in, so any current client connects to its URL as it is.</p>
+      <pre><code>cargo run -p voxferro -- --mcp      <span class="c"># or: voxferro --mcp [port]</span></code></pre>
+      <p>With Voxferro running, point the agent at it. With another port, change <code>47800</code> in the URL.</p>
+      <h3>Claude Code</h3>
+      <pre><code>claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
+      <h3>Codex</h3>
+      <p>One command, or a table in <code>~/.codex/config.toml</code> (or in a trusted project's <code>.codex/config.toml</code>):</p>
+      <pre><code>codex mcp add voxferro --url http://127.0.0.1:47800/mcp
+
+<span class="c"># ~/.codex/config.toml</span>
+[mcp_servers.voxferro]
+url = "http://127.0.0.1:47800/mcp"</code></pre>
+      <h3>opencode</h3>
+      <p>One command (add <code>--global</code> for every project), or an entry in <code>opencode.json</code>. The server needs no sign-in, so OAuth goes off; versions before opencode's v2 configuration put the entry straight under <code>"mcp"</code>, without <code>"servers"</code>.</p>
+      <pre><code>opencode mcp add voxferro --url http://127.0.0.1:47800/mcp
+
+<span class="c">// opencode.json</span>
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "voxferro": {
+        "type": "remote",
+        "url": "http://127.0.0.1:47800/mcp",
+        "oauth": false
+      }
+    }
+  }
+}</code></pre>
+      <p>Then ask for something, for example <em>“build a small stone tower with a red roof in Voxferro and show me a render”</em>: the agent starts with <code>describe_scene</code> and <code>get_palette</code>, builds with <code>run_commands</code> and looks at its work with <code>capture_view</code>.</p>
       <p>The server runs on its own thread, with its own <code>tokio</code> runtime, and <strong>never touches the document</strong>. Each call becomes a request to the UI thread, which runs it between frames as if it had been typed in the console: same interpreter, same undo history. The answer comes back on a <em>oneshot</em> channel.</p>
       <div class="table wide"><table>
         <thead><tr><th>Tool</th><th>What it does</th></tr></thead>
         <tbody>
           <tr><td><code>run_command</code>, <code>run_commands</code></td><td>Runs one console line, or several as one undo step.</td></tr>
-          <tr><td><code>describe_scene</code>, <code>get_palette</code></td><td>Describes the document and the palette as JSON.</td></tr>
+          <tr><td><code>describe_scene</code>, <code>get_palette</code></td><td>Describes the document (as structured JSON, with its schema) and the palette.</td></tr>
           <tr><td><code>set_voxels</code></td><td>Writes given voxels of the selected model.</td></tr>
-          <tr><td><code>capture_view</code></td><td>Returns the editor view or the render as a PNG, so the agent sees what it did.</td></tr>
+          <tr><td><code>capture_view</code></td><td>Returns the editor view or the render as a PNG, so the agent sees what it did; a render reports its samples as progress.</td></tr>
           <tr><td><code>open_file</code>, <code>save_file</code></td><td>Opens and saves; writing over a file needs the person's yes.</td></tr>
         </tbody>
       </table></div>
+      <p>The tools carry <strong>annotations</strong>: the ones that only read (<code>describe_scene</code>, <code>get_palette</code>, <code>capture_view</code>) are marked so, and a client can let the agent use them without asking each time. Cancelling a call in the client also drops it in the editor, a long render included.</p>
       <p><strong>Security:</strong> it accepts local connections only, refuses any request a browser marks with an <code>Origin</code> (against attacks from web pages) and never overwrites a file without confirmation in the window.</p>
     </section>
 
@@ -324,7 +352,7 @@ claude mcp add --transport http voxferro http://127.0.0.1:47800/mcp</code></pre>
         <li><strong>Clippy</strong> with <code>-D warnings</code>: any warning fails CI.</li>
       </ul>
       <h3>Continuous integration</h3>
-      <p>On every push, GitHub Actions builds and tests on Linux and Windows, and runs three smoke tests: opening the editor view, path tracing a scene (and checking the image's mean brightness) and a full MCP session. The runners have no GPU: Linux uses lavapipe (Vulkan in software) and Windows <strong>WARP</strong>, DirectX's software rasteriser, which found real bugs:</p>
+      <p>On every push, GitHub Actions builds and tests on Linux and Windows, and runs three smoke tests: opening the editor view, path tracing a scene (and checking the image's mean brightness) and an MCP session in both protocols, with a session as before and without one as in 2026-07-28. The runners have no GPU: Linux uses lavapipe (Vulkan in software) and Windows <strong>WARP</strong>, DirectX's software rasteriser, which found real bugs:</p>
       <ul>
         <li>The main thread's stack (1 MB) overflowed while compiling the shader; <code>build.rs</code> raises it to 16 MB.</li>
         <li>The FXC compiler cannot write to a vector through a variable index (<code>v[axis] = …</code>), so masks are used instead.</li>
